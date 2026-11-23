@@ -30,13 +30,17 @@ releases the final reference to an unlinked inode under that lock.
 
 ## Process ownership and lifetime
 
-`thistleProcessReap` checks the parent/root relationship and zombie state,
-locks all associated harts and releases descriptor and backing-frame resources.
-Contended locks return EAGAIN; invalid page metadata returns EFAULT before resources are released.
-Recycled frames are zeroed before reuse; free tail frames lower the physical
-high-water mark so later image reservations can use that memory.
+| Reaping result | Meaning |
+| --- | --- |
+| `0` | Zombie descriptors, group extensions and guest frames released. |
+| `-EAGAIN` | Process is running or a required lock is held. |
+| `-EFAULT` | Page metadata is invalid; resources retained. |
+
+`thistleProcessReap` requires parent/root authority. Recycled frames are zeroed
+before allocation. Free tail frames reduce the physical high-water mark.
 
 `thistleProcessRecord`, `thistleNextPid`, `thistleProcessIdentity`,
-`thistleProcessGroups` and `thistleProcessUmask` are re-exported from
+`thistleProcessGroups`, `thistleProcessSetGroup`, `thistleProcessReadGroups`
+and `thistleProcessUmask` are re-exported from
 [process-state](process-state.md). Host adapters use these canonical records
 and credential operations instead of maintaining their own authoritative copies.

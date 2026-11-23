@@ -5,7 +5,7 @@
 | `thistleProcessRecord` | Return the current native record address for a hart, or `0xffffffff`. The caller must not retain it across reaping/reuse. |
 | `thistleNextPid` | Allocate from the canonical PID counter. Return zero for invalid state, contention or exhaustion; never wrap to an existing identity. |
 | `thistleProcessIdentity` | Apply the UID/GID operation below under the credential lock. Return zero, the previous filesystem ID, or negative errno. |
-| `thistleProcessGroups` | Replace at most `THISTLE_GROUP_CAPACITY` supplementary groups as root, using a reserved input buffer. Validate every ID before changing the record. |
+| `thistleProcessGroups` | Replace supplementary groups within available arena and reserved-buffer capacity as root, using a reserved input buffer. Validate every ID before changing the record. |
 | `thistleProcessUmask` | Store the low nine mask bits in the native process record and return the previous mask. |
 
 Identity operations use `0xffffffff` for an unchanged res/re ID. Invalid
@@ -20,6 +20,11 @@ identity also resets the filesystem identity, matching the hosted contract.
 | single | 4 | 5 | requested ID; root changes all three, other callers change effective only |
 | filesystem | 6 | 7 | requested filesystem ID; return its previous value |
 
-The group capacity is the existing native ABI limit of 32. The hosted API
-previously accepted longer arrays; that compatibility gap must be resolved or
-explicitly approved before the old hosted implementation is removed.
+Groups retain the first 32 IDs inline and allocate extension frames from the
+canonical arena. Failed replacement retains the previous vector. Guest
+getgroups/setgroups accept up to 65,536 entries.
+
+| Additional export | Contract |
+| --- | --- |
+| `thistleProcessSetGroup` | Trusted initialisation of an existing group or append at the current count. Returns established positive native status codes. |
+| `thistleProcessReadGroups` | Capacity zero returns the count. Otherwise copies a coherent snapshot into a reserved output buffer; insufficient capacity returns ERANGE. |

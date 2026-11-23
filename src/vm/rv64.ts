@@ -59,6 +59,7 @@ import {
   thistleProcessMapEnd,
   thistleProcessMapProtection,
   thistleProcessSetGroup,
+  thistleProcessReadGroups,
   thistleResolvePath,
   thistleAccessInode,
   thistleOpenPath,
@@ -109,8 +110,6 @@ import {
   P_EUID,
   P_FSGID,
   P_FSUID,
-  P_GROUP_COUNT,
-  P_GROUPS,
   P_RGID,
   P_RUID,
   P_SGID,
@@ -131,7 +130,6 @@ import {
   THISTLE_HART_STRIDE,
   THISTLE_HOST_WRITE,
   THISTLE_CONTROL_BASE,
-  THISTLE_GROUP_CAPACITY,
   THISTLE_PROCESS_STRIDE,
   THISTLE_STARTUP_MAGIC,
   THISTLE_START_OK,
@@ -834,18 +832,17 @@ break; }
     const sgid = loadU32(memory, proc + P_SGID);
     const fsgid = loadU32(memory, proc + P_FSGID);
 
-    const count = Math.min(
-      loadU32(memory, proc + P_GROUP_COUNT),
-      THISTLE_GROUP_CAPACITY,
-    );
-
+    const count = thistleProcessReadGroups(memory, 0, 0, 0);
+    if (count < 0) bad("EAGAIN", "native credential snapshot unavailable");
     const groups: number[] = [];
-
-    for (let index = 0; index < count; index++) {
-      groups.push(
-        loadU32(memory, proc + P_GROUPS + index * 4),
-      );
+    const input = count === 0 ? 0 : thistleImageReserve(memory, count * 4);
+    if (input === 0xffffffff) bad("ENOMEM", "native credential snapshot buffer unavailable");
+    if (count !== 0 && thistleProcessReadGroups(memory, 0, input, count) !== count) {
+      thistleImageRelease(memory, input, count * 4);
+      bad("EAGAIN", "native credential vector changed during snapshot");
     }
+    for (let index = 0; index < count; index++) groups.push(loadU32(memory, input + index * 4));
+    if (count !== 0) thistleImageRelease(memory, input, count * 4);
 
     this.s.p.cred = {
       uid: euid,

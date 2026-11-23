@@ -93,8 +93,12 @@ kernel instance. The PID allocator, credential operations and umask use the
 canonical record; differential tests compare the existing hosted contract.
 The hosted process, filesystem and scheduler facades have not yet been switched.
 
-The audit identified two remaining compatibility constraints before that switch:
-`Lim.host()` allows a sparse host filesystem budget above the native in-memory
-arena's 128 MiB limit, and its supplementary group arrays are not bounded at
-32. Host storage capabilities and explicit resource-policy decisions must
-preserve the required contracts; silently clamping those values is not parity.
+Supplementary groups now use canonical extension frames beyond the 32 inline
+entries. RV64 syscalls, host operations and VFS permission checks share that
+storage; identity policy is shared between ABI callers. ABI 11 adds the
+extension pointer without changing process stride.
+
+The storage adapter remains unresolved: `Lim.host()` permits sparse filesystem
+budgets above the native in-memory arena's 128 MiB limit. Preserving lazy host
+payloads requires a backing-storage capability with canonical inode, path,
+permission and descriptor authority.

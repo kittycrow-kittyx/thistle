@@ -2,7 +2,7 @@ import type { I32, U32 } from "./types.js";
 
 // Retain the existing wire magic and ABI version so the binary memory layout does not change.
 export const THISTLE_MAGIC: U32 = 0x4f544554;
-export const THISTLE_ABI_VERSION: U32 = 10;
+export const THISTLE_ABI_VERSION: U32 = 11;
 
 export const THISTLE_CONTROL_BASE: U32 = 0;
 export const THISTLE_CONTROL_SIZE: U32 = 4096;
@@ -136,6 +136,7 @@ export const P_RGID: U32 = 40;
 export const P_EGID: U32 = 44;
 export const P_SGID: U32 = 48;
 export const P_FSGID: U32 = 52;
+export const P_GROUP_DATA: U32 = 344;
 export const P_GROUP_COUNT: U32 = 56;
 export const P_GROUPS: U32 = 64;
 export const P_PAGE_TABLE: U32 = 192;

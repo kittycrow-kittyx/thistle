@@ -130,6 +130,7 @@ Offsets in a process record; credentials, page/mapping tables and descriptors.
 - `P_EGID`
 - `P_SGID`
 - `P_FSGID`
+- `P_GROUP_DATA`
 - `P_GROUP_COUNT`
 - `P_GROUPS`
 - `P_PAGE_TABLE`
@@ -334,3 +335,7 @@ ABI identities, fixed region sizes, status/error values, flags and capacities us
 `THISTLE_MAP_BACKING_HOST_FILE` marks mappings whose bytes are backed by the hosted live VFS. These mappings delegate munmap so shared writes are flushed before frames are released.
 
 `C_PHYSICAL_FREE` points to the list of recycled guest frames in unused control-block space. Each free frame stores the next pointer in its first word. Allocation zeroes the frame before publishing a guest page.
+
+ABI 11 uses process offset 344 for `P_GROUP_DATA`, the extension-frame head.
+Process stride remains 352 bytes. The first 32 IDs retain their inline offsets.
+ABI 10 readers must reject ABI 11 memory instead of truncating group lists.

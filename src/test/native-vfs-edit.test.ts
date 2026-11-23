@@ -1,27 +1,11 @@
+import { mountedKernel as setup } from "./vfs-fixture.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { directMemory, loadU32, storeU32 } from "../native/memory.js";
-import { thistleCloseDescriptor, thistleHartInit, thistleImageRelease, thistleImageReserve, thistleKernelInitWithVfs, thistleOpenPath, thistleProcessInit, thistleReadDescriptor } from "../native/kernel.js";
+import { loadU32, storeU32 } from "../native/memory.js";
+import { thistleCloseDescriptor, thistleImageRelease, thistleImageReserve, thistleOpenPath, thistleReadDescriptor } from "../native/kernel.js";
 import { C_PROCESS_TABLE_BASE, C_VFS_DIRTY, C_VFS_GENERATION, P_FSUID, P_FSGID, THISTLE_VFS_KIND_DIRECTORY, THISTLE_VFS_KIND_FILE } from "../native/abi.js";
-import { thistleLoadVfs, thistleVfsFileSize, thistleVfsKind, thistleVfsLookup, thistleVfsNlink, thistleVfsReadData } from "../native/vfs.js";
+import { thistleVfsFileSize, thistleVfsKind, thistleVfsLookup, thistleVfsNlink, thistleVfsReadData } from "../native/vfs.js";
 import { thistleVfsCreate, thistleVfsWrite, thistleVfsLink, thistleVfsUnlink, thistleVfsCanMove, thistleVfsRename, thistleVfsChmod, thistleVfsChown, thistleVfsUtime } from "../native/vfs-edit.js";
-
-const setup = (): ReturnType<typeof directMemory> => {
-  const memory = directMemory(32 * 1024 * 1024);
-  assert.equal(thistleKernelInitWithVfs(memory, 1, false, 16, 32, 4096), 0);
-  const bytes = new Uint8Array(88), view = new DataView(bytes.buffer);
-  for (const [at, value] of [[0, 0x31534656], [4, 1], [8, 1], [16, 1], [20, 88], [32, 1], [36, 2], [40, 0o755], [52, 1]] as const) view.setUint32(at, value, true);
-  let hash = 0x811c9dc5;
-  for (const byte of bytes.subarray(32)) hash = Math.imul(hash ^ byte, 0x01000193) >>> 0;
-  view.setUint32(24, hash, true);
-  const image = thistleImageReserve(memory, bytes.length);
-  memory.bytes.set(bytes, image);
-  assert.equal(thistleLoadVfs(memory, image, bytes.length), 0);
-  assert.equal(thistleImageRelease(memory, image, bytes.length), 0);
-  assert.equal(thistleHartInit(memory, 0, 0x10000000n, 0n), 0);
-  assert.equal(thistleProcessInit(memory, 0, 1, 0, 0, 0, 0, 0, 0, 0), 0);
-  return memory;
-};
 
 test("canonical VFS mutations preserve hard links, atomic failure and permissions", () => {
   const memory = setup(), proc = loadU32(memory, C_PROCESS_TABLE_BASE);

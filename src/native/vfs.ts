@@ -1,6 +1,8 @@
-import { inputContains } from "./image-range.js";
+import { readGroup } from "./credentials.js";
+import { inputContains } from "./arena.js";
 import {
   C_PROCESS_CAPACITY,
+  FD_INODE, FD_KIND, P_DESCRIPTOR_CAPACITY, P_DESCRIPTOR_TABLE, THISTLE_DESCRIPTOR_STRIDE,
   C_PROCESS_TABLE_BASE,
   C_VFS_DATA_BASE,
   C_VFS_DATA_END,
@@ -42,7 +44,6 @@ import {
   P_FSUID,
   P_CWD_INODE,
   P_GROUP_COUNT,
-  P_GROUPS,
   P_STATE,
   THISTLE_PROCESS_EMPTY,
   THISTLE_PROCESS_STRIDE,
@@ -225,7 +226,7 @@ const inSupplementaryGroup = (memory: ThistleMemory, proc: Ptr, gid: U32): boole
   const count = loadU32(memory, proc + P_GROUP_COUNT);
   let index: U32 = 0;
   while (index < count) {
-    if (loadU32(memory, proc + P_GROUPS + index * 4) === gid) return true;
+    if (readGroup(memory, proc, index) === gid) return true;
     index += 1;
   }
   return false;
@@ -524,3 +525,27 @@ export const thistleLoadVfs = (memory: ThistleMemory, image: Ptr, imageLength: U
   publishVfs(memory, inodeCount, dentryCount, root);
   return THISTLE_VFS_OK;
 };
+
+export const thistleVfsRelease = (memory: ThistleMemory, inode: U32): void => {
+  if (thistleVfsKind(memory, inode) === 0) return;
+  const state = inodeAt(memory, inode);
+  if (loadU32(memory, state + V_NLINK) !== 0) return;
+  const base = loadU32(memory, C_PROCESS_TABLE_BASE);
+  const count = loadU32(memory, C_PROCESS_CAPACITY);
+  let index: U32 = 0;
+  while (index < count) {
+    const proc = base + index * THISTLE_PROCESS_STRIDE;
+    const descriptors = loadU32(memory, proc + P_DESCRIPTOR_TABLE);
+    const capacity = loadU32(memory, proc + P_DESCRIPTOR_CAPACITY);
+    let fd: U32 = 0;
+    while (loadU32(memory, proc + P_STATE) !== 0 && fd < capacity) {
+      const at = descriptors + fd * THISTLE_DESCRIPTOR_STRIDE;
+      if (loadU32(memory, at + FD_KIND) >= 2 && loadU32(memory, at + FD_INODE) === inode) return;
+      fd += 1;
+    }
+    index += 1;
+  }
+  fill(memory, state, THISTLE_VFS_INODE_STRIDE, 0);
+  storeU32(memory, C_VFS_INODE_COUNT, loadU32(memory, C_VFS_INODE_COUNT) - 1);
+};
+

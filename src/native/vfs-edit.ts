@@ -1,5 +1,4 @@
 import {
-  C_PROCESS_CAPACITY, C_PROCESS_TABLE_BASE, FD_INODE, FD_KIND, P_DESCRIPTOR_CAPACITY, P_DESCRIPTOR_TABLE, P_STATE, THISTLE_DESCRIPTOR_STRIDE, THISTLE_PROCESS_STRIDE,
   C_VFS_DENTRY_CAPACITY, C_VFS_DENTRY_COUNT, C_VFS_DIRTY, C_VFS_GENERATION,
   C_VFS_INODE_CAPACITY, C_VFS_INODE_COUNT, D_INODE, D_NAME, D_NAME_HASH,
   D_NAME_LENGTH, D_PARENT, P_FSGID, P_FSUID, THISTLE_CONTROL_BASE,
@@ -8,13 +7,13 @@ import {
   V_DATA, V_GID, V_KIND, V_MODE, V_MTIME, V_NLINK, V_SIZE, V_UID,
 } from "./abi.js";
 import { word, ux, wordToU32 } from "./word.js";
-import { inputContains } from "./image-range.js";
+import { inputContains } from "./arena.js";
 import { atomicLoadU64, atomicStoreU64, copyMemory, fill, loadU32, loadU64, storeU32, storeU64 } from "./memory.js";
 import type { ThistleMemory } from "./memory.js";
 import type { I32, Ptr, U32, U64 } from "./types.js";
 import {
   allocateData, allowed, growData, dentryAt, findChild, hashBytes, inodeAt, parentOf,
-  sameName, thistleVfsKind, validName,
+  sameName, thistleVfsKind, thistleVfsRelease, validName,
 } from "./vfs.js";
 
 // These operations run while the canonical kernel's VFS lock is held.
@@ -227,28 +226,7 @@ export const thistleVfsCanMove = (memory: ThistleMemory, inode: U32, parent: U32
 
 
 /** Reclaim only nameless inodes with no canonical descriptor reference. */
-export const thistleVfsRelease = (memory: ThistleMemory, inode: U32): void => {
-  if (thistleVfsKind(memory, inode) === 0) return;
-  const state = inodeAt(memory, inode);
-  if (loadU32(memory, state + V_NLINK) !== 0) return;
-  const base = loadU32(memory, C_PROCESS_TABLE_BASE);
-  const count = loadU32(memory, C_PROCESS_CAPACITY);
-  let index: U32 = 0;
-  while (index < count) {
-    const proc = base + index * THISTLE_PROCESS_STRIDE;
-    const descriptors = loadU32(memory, proc + P_DESCRIPTOR_TABLE);
-    const capacity = loadU32(memory, proc + P_DESCRIPTOR_CAPACITY);
-    let fd: U32 = 0;
-    while (loadU32(memory, proc + P_STATE) !== 0 && fd < capacity) {
-      const at = descriptors + fd * THISTLE_DESCRIPTOR_STRIDE;
-      if (loadU32(memory, at + FD_KIND) >= 2 && loadU32(memory, at + FD_INODE) === inode) return;
-      fd += 1;
-    }
-    index += 1;
-  }
-  fill(memory, state, THISTLE_VFS_INODE_STRIDE, 0);
-  storeU32(memory, C_VFS_INODE_COUNT, loadU32(memory, C_VFS_INODE_COUNT) - 1);
-};
+export { thistleVfsRelease } from "./vfs.js";
 
 /** Rename one entry atomically after validating both parents and destination. */
 // The native ABI passes scalar arguments without allocating an options record.

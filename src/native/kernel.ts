@@ -1,6 +1,6 @@
 import { INVALID_POINTER, hartAt, processAt, processForHart, processSlotByPid, validHart, validKernel } from "./state.js";
-import { thistleVfsRelease } from "./vfs-edit.js";
-import { inputContains } from "./image-range.js";
+import { inputContains, allocateFrame } from "./arena.js";
+import { updateIdentity, readGroup, replaceGroups } from "./credentials.js";
 import { rv64Branch, rv64RegisterWordValid, rv64RegisterWordValue, rv64ImmediateWordValid, rv64ImmediateWordValue, rv64ImmediateOpValid, rv64ImmediateOpValue, rv64RegisterValid, rv64RegisterValue, rv64FloatClass, rv64CompressedJump, rv64ImmediateB, rv64ImmediateI, rv64ImmediateJ, rv64ImmediateS, rv64ImmediateU } from "../core/rv64-decode.js";
 import {
   C_ABI,
@@ -121,7 +121,6 @@ import {
   THISTLE_FLAG_THREADED,
   THISTLE_FLAG_HOST_STDIN,
   THISTLE_GUEST_PAGE_SIZE,
-  THISTLE_GROUP_CAPACITY,
   THISTLE_HART_BASE,
   THISTLE_HART_EMPTY,
   THISTLE_HART_EXITED,
@@ -150,7 +149,6 @@ import {
   P_FSGID,
   P_FSUID,
   P_GROUP_COUNT,
-  P_GROUPS,
   P_PGID,
   P_PAGE_CAPACITY,
   P_PAGE_COUNT,
@@ -295,6 +293,7 @@ import {
 } from "./word.js";
 import {
   thistleVfsAccess,
+  thistleVfsRelease,
   thistleVfsFileSize,
   thistleVfsKind,
   thistleVfsReadData,
@@ -581,23 +580,6 @@ export const thistleProcessInit = (
   storeU32(memory, hartAt(hart) + H_PAGE_COUNT, 0);
   storeU32(memory, THISTLE_CONTROL_BASE + C_PROCESS_COUNT, loadU32(memory, THISTLE_CONTROL_BASE + C_PROCESS_COUNT) + 1);
   if (pid >= loadU32(memory, THISTLE_CONTROL_BASE + C_NEXT_PID)) storeU32(memory, THISTLE_CONTROL_BASE + C_NEXT_PID, pid + 1);
-  release(memory, lock);
-  return 0;
-};
-
-export const thistleProcessSetGroup = (memory: ThistleMemory, hart: U32, index: U32, gid: U32): I32 => {
-  if (!validHart(memory, hart) || index >= THISTLE_GROUP_CAPACITY) return THISTLE_FAULT_BAD_STATE;
-  const proc = processForHart(memory, hart);
-  if (proc === INVALID_POINTER) return THISTLE_FAULT_BAD_STATE;
-  const lock = THISTLE_CONTROL_BASE + C_CREDENTIAL_LOCK;
-  if (!acquire(memory, lock)) return THISTLE_BATCH_CONTENDED;
-  const count = loadU32(memory, proc + P_GROUP_COUNT);
-  if (index > count) {
-    release(memory, lock);
-    return THISTLE_FAULT_BAD_STATE;
-  }
-  atomicStoreI32(memory, proc + P_GROUPS + index * 4, wordToI32(word(gid)));
-  if (index === count) atomicStoreI32(memory, proc + P_GROUP_COUNT, wordToI32(word(count + 1)));
   release(memory, lock);
   return 0;
 };
@@ -1073,16 +1055,10 @@ const insertGuestPage = (memory: ThistleMemory, hart: U32, proc: Ptr, entry: Ptr
     return existing;
   }
   if (recheck !== 0n) { release(memory, lockAt); return UNMAPPED_POINTER; }
-  const recycled = loadU32(memory, THISTLE_CONTROL_BASE + C_PHYSICAL_FREE);
-  const frame = recycled !== 0 ? recycled : loadU32(memory, THISTLE_CONTROL_BASE + C_PHYSICAL_NEXT);
-  const end = loadU32(memory, THISTLE_CONTROL_BASE + C_IMAGE_TOP);
-  if (frame > end || THISTLE_GUEST_PAGE_SIZE > end - frame) { release(memory, lockAt); return INVALID_POINTER; }
-  const nextFree = recycled !== 0 ? loadU32(memory, frame) : 0;
-  fill(memory, frame, THISTLE_GUEST_PAGE_SIZE, 0);
+  const frame = allocateFrame(memory);
+  if (frame === INVALID_POINTER) { release(memory, lockAt); return INVALID_POINTER; }
   storeU32(memory, entry + 8, frame);
   storeU32(memory, entry + 12, 0);
-  if (recycled !== 0) storeU32(memory, THISTLE_CONTROL_BASE + C_PHYSICAL_FREE, nextFree);
-  else storeU32(memory, THISTLE_CONTROL_BASE + C_PHYSICAL_NEXT, frame + THISTLE_GUEST_PAGE_SIZE);
   const pageCount = wordToU32(word(atomicLoadI32(memory, proc + P_PAGE_COUNT))) + 1;
   atomicStoreI32(memory, proc + P_PAGE_COUNT, wordToI32(word(pageCount)));
   storeU32(memory, hartAt(hart) + H_PAGE_COUNT, pageCount);
@@ -2300,105 +2276,6 @@ const procId = (memory: ThistleMemory, proc: Ptr, field: U32): U64 =>
 const keepId = (value: I64): boolean => ux(value) === 0xffffffffn || ux(value) === 0xffffffffffffffffn;
 const validId = (value: I64): boolean => value >= 0n && ux(value) < 0xffffffffn;
 
-const canSetUid = (memory: ThistleMemory, proc: Ptr, value: U64): boolean =>
-  procId(memory, proc, P_EUID) === 0n || value === procId(memory, proc, P_RUID) ||
-  value === procId(memory, proc, P_EUID) || value === procId(memory, proc, P_SUID);
-
-const canSetGid = (memory: ThistleMemory, proc: Ptr, value: U64): boolean =>
-  procId(memory, proc, P_EUID) === 0n || value === procId(memory, proc, P_RGID) ||
-  value === procId(memory, proc, P_EGID) || value === procId(memory, proc, P_SGID);
-
-const storeProcId = (memory: ThistleMemory, proc: Ptr, field: U32, value: U64): void =>
-  atomicStoreI32(memory, proc + field, wordToI32(value));
-
-const setResUid = (memory: ThistleMemory, hart: U32, proc: Ptr): I64 => {
-  const r = x(memory, hart, 10), e = x(memory, hart, 11), s = x(memory, hart, 12);
-  if ((!keepId(r) && (!validId(r) || !canSetUid(memory, proc, ux(r)))) ||
-      (!keepId(e) && (!validId(e) || !canSetUid(memory, proc, ux(e)))) ||
-      (!keepId(s) && (!validId(s) || !canSetUid(memory, proc, ux(s))))) return -1n;
-  const nextR = keepId(r) ? procId(memory, proc, P_RUID) : ux(r);
-  const nextE = keepId(e) ? procId(memory, proc, P_EUID) : ux(e);
-  const nextS = keepId(s) ? procId(memory, proc, P_SUID) : ux(s);
-  storeProcId(memory, proc, P_RUID, nextR);
-  storeProcId(memory, proc, P_EUID, nextE);
-  storeProcId(memory, proc, P_SUID, nextS);
-  storeProcId(memory, proc, P_FSUID, nextE);
-  return 0n;
-};
-
-const setResGid = (memory: ThistleMemory, hart: U32, proc: Ptr): I64 => {
-  const r = x(memory, hart, 10), e = x(memory, hart, 11), s = x(memory, hart, 12);
-  if ((!keepId(r) && (!validId(r) || !canSetGid(memory, proc, ux(r)))) ||
-      (!keepId(e) && (!validId(e) || !canSetGid(memory, proc, ux(e)))) ||
-      (!keepId(s) && (!validId(s) || !canSetGid(memory, proc, ux(s))))) return -1n;
-  const nextR = keepId(r) ? procId(memory, proc, P_RGID) : ux(r);
-  const nextE = keepId(e) ? procId(memory, proc, P_EGID) : ux(e);
-  const nextS = keepId(s) ? procId(memory, proc, P_SGID) : ux(s);
-  storeProcId(memory, proc, P_RGID, nextR);
-  storeProcId(memory, proc, P_EGID, nextE);
-  storeProcId(memory, proc, P_SGID, nextS);
-  storeProcId(memory, proc, P_FSGID, nextE);
-  return 0n;
-};
-
-const setReUid = (memory: ThistleMemory, hart: U32, proc: Ptr): I64 => {
-  const r = x(memory, hart, 10), e = x(memory, hart, 11);
-  const oldR = procId(memory, proc, P_RUID);
-  if ((!keepId(r) && (!validId(r) || !canSetUid(memory, proc, ux(r)))) ||
-      (!keepId(e) && (!validId(e) || !canSetUid(memory, proc, ux(e))))) return -1n;
-  const nextR = keepId(r) ? oldR : ux(r);
-  const nextE = keepId(e) ? procId(memory, proc, P_EUID) : ux(e);
-  const nextS = !keepId(r) || (!keepId(e) && ux(e) !== oldR) ? nextE : procId(memory, proc, P_SUID);
-  storeProcId(memory, proc, P_RUID, nextR);
-  storeProcId(memory, proc, P_EUID, nextE);
-  storeProcId(memory, proc, P_SUID, nextS);
-  storeProcId(memory, proc, P_FSUID, nextE);
-  return 0n;
-};
-
-const setReGid = (memory: ThistleMemory, hart: U32, proc: Ptr): I64 => {
-  const r = x(memory, hart, 10), e = x(memory, hart, 11);
-  const oldR = procId(memory, proc, P_RGID);
-  if ((!keepId(r) && (!validId(r) || !canSetGid(memory, proc, ux(r)))) ||
-      (!keepId(e) && (!validId(e) || !canSetGid(memory, proc, ux(e))))) return -1n;
-  const nextR = keepId(r) ? oldR : ux(r);
-  const nextE = keepId(e) ? procId(memory, proc, P_EGID) : ux(e);
-  const nextS = !keepId(r) || (!keepId(e) && ux(e) !== oldR) ? nextE : procId(memory, proc, P_SGID);
-  storeProcId(memory, proc, P_RGID, nextR);
-  storeProcId(memory, proc, P_EGID, nextE);
-  storeProcId(memory, proc, P_SGID, nextS);
-  storeProcId(memory, proc, P_FSGID, nextE);
-  return 0n;
-};
-
-const setUid = (memory: ThistleMemory, hart: U32, proc: Ptr): I64 => {
-  const value = x(memory, hart, 10);
-  if (!validId(value)) return -22n;
-  const id = ux(value);
-  if (!canSetUid(memory, proc, id)) return -1n;
-  if (procId(memory, proc, P_EUID) === 0n) {
-    storeProcId(memory, proc, P_RUID, id);
-    storeProcId(memory, proc, P_SUID, id);
-  }
-  storeProcId(memory, proc, P_EUID, id);
-  storeProcId(memory, proc, P_FSUID, id);
-  return 0n;
-};
-
-const setGid = (memory: ThistleMemory, hart: U32, proc: Ptr): I64 => {
-  const value = x(memory, hart, 10);
-  if (!validId(value)) return -22n;
-  const id = ux(value);
-  if (!canSetGid(memory, proc, id)) return -1n;
-  if (procId(memory, proc, P_EUID) === 0n) {
-    storeProcId(memory, proc, P_RGID, id);
-    storeProcId(memory, proc, P_SGID, id);
-  }
-  storeProcId(memory, proc, P_EGID, id);
-  storeProcId(memory, proc, P_FSGID, id);
-  return 0n;
-};
-
 const getResId = (memory: ThistleMemory, hart: U32, proc: Ptr, group: boolean): I64 => {
   const a = ux(x(memory, hart, 10)), b = ux(x(memory, hart, 11)), c = ux(x(memory, hart, 12));
   if (a === 0n || b === 0n || c === 0n ||
@@ -2426,7 +2303,7 @@ const getGroups = (memory: ThistleMemory, hart: U32, proc: Ptr): I64 => {
       !guestWritable(memory, hart, address, count * 4)) return -14n;
   let index: U32 = 0;
   while (index < count) {
-    const gid = procId(memory, proc, P_GROUPS + index * 4);
+    const gid = word(readGroup(memory, proc, index));
     if (!guestStoreU64(memory, hart, address + ux(word(index * 4)), gid, 4)) return -12n;
     index += 1;
   }
@@ -2436,44 +2313,45 @@ const getGroups = (memory: ThistleMemory, hart: U32, proc: Ptr): I64 => {
 const setGroups = (memory: ThistleMemory, hart: U32, proc: Ptr): I64 => {
   if (procId(memory, proc, P_EUID) !== 0n) return -1n;
   const wideCount = ux(x(memory, hart, 10));
-  if (wideCount > ux(word(THISTLE_GROUP_CAPACITY))) return -22n;
+  if (wideCount > 65536n) return -22n;
   const count = wordToU32(wideCount);
   const address = ux(x(memory, hart, 11));
   if (count !== 0 && (address === 0n || !guestAllowed(memory, hart, address, count * 4, THISTLE_SEGMENT_READ))) return -14n;
+  if (count === 0) return word(replaceGroups(memory, proc, 0, 0));
+  const input = thistleImageReserve(memory, count * 4);
+  if (input === INVALID_POINTER) return -12n;
   let index: U32 = 0;
   while (index < count) {
     const value = guestLoadU64(memory, hart, address + ux(word(index * 4)), 4);
-    if (value >= 0xffffffffn) return -22n;
+    if (value >= 0xffffffffn) { thistleImageRelease(memory, input, count * 4); return -22n; }
+    storeU32(memory, input + index * 4, value);
     index += 1;
   }
-  index = 0;
-  while (index < count) {
-    storeProcId(memory, proc, P_GROUPS + index * 4, guestLoadU64(memory, hart, address + ux(word(index * 4)), 4));
-    index += 1;
-  }
-  atomicStoreI32(memory, proc + P_GROUP_COUNT, wordToI32(word(count)));
-  return 0n;
+  const result = replaceGroups(memory, proc, input, count);
+  thistleImageRelease(memory, input, count * 4);
+  return word(result);
 };
 
-const setFsIdentity = (memory: ThistleMemory, hart: U32, proc: Ptr, uid: boolean): I64 => {
-  const field = uid ? P_FSUID : P_FSGID;
-  const old = procId(memory, proc, field);
-  const value = x(memory, hart, 10);
-  if (!validId(value)) return -22n;
-  if (uid ? canSetUid(memory, proc, ux(value)) : canSetGid(memory, proc, ux(value))) storeProcId(memory, proc, field, ux(value));
-  return old;
+// RV64 argument validation retains the native syscall error contract.
+const setGuestIdentity = (memory: ThistleMemory, hart: U32, proc: Ptr, operation: U32): I64 => {
+  const a = x(memory, hart, 10), b = x(memory, hart, 11), c = x(memory, hart, 12);
+  if (operation >= 4 && !validId(a)) return -22n;
+  if (operation < 4 && ((!keepId(a) && !validId(a)) || (!keepId(b) && !validId(b)) ||
+      operation < 2 && !keepId(c) && !validId(c))) return -1n;
+  return updateIdentity(memory, proc, operation, keepId(a) ? 0xffffffff : wordToU32(a),
+    keepId(b) ? 0xffffffff : wordToU32(b), keepId(c) ? 0xffffffff : wordToU32(c));
 };
 
 const credentialSyscall = (memory: ThistleMemory, hart: U32, proc: Ptr, number: U32): I64 => {
-  if (number === 143) return setReGid(memory, hart, proc);
-  if (number === 144) return setGid(memory, hart, proc);
-  if (number === 145) return setReUid(memory, hart, proc);
-  if (number === 146) return setUid(memory, hart, proc);
-  if (number === 147) return setResUid(memory, hart, proc);
+  if (number === 143) return setGuestIdentity(memory, hart, proc, 3);
+  if (number === 144) return setGuestIdentity(memory, hart, proc, 5);
+  if (number === 145) return setGuestIdentity(memory, hart, proc, 2);
+  if (number === 146) return setGuestIdentity(memory, hart, proc, 4);
+  if (number === 147) return setGuestIdentity(memory, hart, proc, 0);
   if (number === 148) return getResId(memory, hart, proc, false);
-  if (number === 149) return setResGid(memory, hart, proc);
+  if (number === 149) return setGuestIdentity(memory, hart, proc, 1);
   if (number === 150) return getResId(memory, hart, proc, true);
-  if (number === 151 || number === 152) return setFsIdentity(memory, hart, proc, number === 151);
+  if (number === 151 || number === 152) return setGuestIdentity(memory, hart, proc, number === 151 ? 6 : 7);
   if (number === 158) return getGroups(memory, hart, proc);
   if (number === 159) return setGroups(memory, hart, proc);
   return -38n;
@@ -2741,7 +2619,14 @@ const lockedCredentialSyscall = (memory: ThistleMemory, hart: U32, proc: Ptr, nu
     setPc(memory, hart, loadU64(memory, at + H_PC) - 4n);
     return THISTLE_BATCH_CONTENDED;
   }
+  const changesIdentity = number >= 143 && number <= 152;
+  if (changesIdentity && !acquire(memory, C_VFS_LOCK)) {
+    release(memory, lock);
+    setPc(memory, hart, loadU64(memory, at + H_PC) - 4n);
+    return THISTLE_BATCH_CONTENDED;
+  }
   const result = credentialSyscall(memory, hart, proc, number);
+  if (changesIdentity) release(memory, C_VFS_LOCK);
   release(memory, lock);
   return internalSyscall(memory, hart, result);
 };
@@ -3179,153 +3064,5 @@ export const thistleExitHart = (memory: ThistleMemory, hart: U32, code: I32): I3
 export { thistleVfsCreate, thistleVfsWrite, thistleVfsLink, thistleVfsUnlink, thistleVfsCanMove, thistleVfsRename, thistleVfsChmod, thistleVfsChown, thistleVfsUtime } from "./vfs-edit.js";
 
 
-const unlockProcessHarts = (memory: ThistleMemory, slot: U32, end: U32): void => {
-  let hart: U32 = 0;
-  while (hart < end) {
-    if (loadU32(memory, hartAt(hart) + H_PROCESS_SLOT) === slot) release(memory, hartAt(hart) + H_LOCK);
-    hart += 1;
-  }
-};
-
-const lockProcessHarts = (memory: ThistleMemory, slot: U32): boolean => {
-  const count = loadU32(memory, C_MAX_HARTS);
-  let hart: U32 = 0;
-  while (hart < count) {
-    const owner = loadU32(memory, hartAt(hart) + H_PROCESS_SLOT);
-    if (owner === slot && !acquire(memory, hartAt(hart) + H_LOCK)) {
-      unlockProcessHarts(memory, slot, hart);
-      return false;
-    }
-    hart += 1;
-  }
-  return true;
-};
-
-const validProcessFrames = (memory: ThistleMemory, proc: Ptr): boolean => {
-  const table = loadU32(memory, proc + P_PAGE_TABLE);
-  const count = loadU32(memory, proc + P_PAGE_CAPACITY);
-  const first = pageAlign(loadU32(memory, C_VFS_DATA_END));
-  const top = loadU32(memory, C_PHYSICAL_NEXT);
-  let index: U32 = 0;
-  while (index < count) {
-    const entry = table + index * THISTLE_PAGE_ENTRY_SIZE;
-    const frame = loadU32(memory, entry + 8);
-    if (loadU64(memory, entry) !== 0n &&
-        (frame < first || frame % THISTLE_GUEST_PAGE_SIZE !== 0 || frame >= top)) return false;
-    index += 1;
-  }
-  return true;
-};
-
-const releaseProcessDescriptors = (memory: ThistleMemory, proc: Ptr): void => {
-  const table = loadU32(memory, proc + P_DESCRIPTOR_TABLE);
-  const count = loadU32(memory, proc + P_DESCRIPTOR_CAPACITY);
-  let index: U32 = 0;
-  while (index < count) {
-    const at = table + index * THISTLE_DESCRIPTOR_STRIDE;
-    const inode = loadU32(memory, at + FD_INODE);
-    fill(memory, at, THISTLE_DESCRIPTOR_STRIDE, 0);
-    thistleVfsRelease(memory, inode);
-    index += 1;
-  }
-};
-
-const releaseProcessFrames = (memory: ThistleMemory, proc: Ptr): void => {
-  const table = loadU32(memory, proc + P_PAGE_TABLE);
-  const count = loadU32(memory, proc + P_PAGE_CAPACITY);
-  let index: U32 = 0;
-  while (index < count) {
-    const entry = table + index * THISTLE_PAGE_ENTRY_SIZE;
-    if (loadU64(memory, entry) !== 0n) {
-      const frame = loadU32(memory, entry + 8);
-      storeU32(memory, frame, loadU32(memory, C_PHYSICAL_FREE));
-      storeU32(memory, C_PHYSICAL_FREE, frame);
-    }
-    index += 1;
-  }
-  fill(memory, table, count * THISTLE_PAGE_ENTRY_SIZE, 0);
-};
-
-// Remove a free frame from the linked list. Returns false for a live frame.
-const unlinkFreeFrame = (memory: ThistleMemory, wanted: Ptr): boolean => {
-  let link: Ptr = C_PHYSICAL_FREE;
-  let frame = loadU32(memory, link);
-  while (frame !== 0) {
-    if (frame === wanted) {
-      storeU32(memory, link, loadU32(memory, frame));
-      return true;
-    }
-    link = frame;
-    frame = loadU32(memory, frame);
-  }
-  return false;
-};
-
-const trimFreeFrames = (memory: ThistleMemory): void => {
-  const base = pageAlign(loadU32(memory, C_VFS_DATA_END));
-  let top = loadU32(memory, C_PHYSICAL_NEXT);
-  while (top > base) {
-    const frame = top - THISTLE_GUEST_PAGE_SIZE;
-    if (!unlinkFreeFrame(memory, frame)) return;
-    top = frame;
-    storeU32(memory, C_PHYSICAL_NEXT, top);
-  }
-};
-
-const clearProcessHarts = (memory: ThistleMemory, slot: U32): void => {
-  const count = loadU32(memory, C_MAX_HARTS);
-  let hart: U32 = 0;
-  while (hart < count) {
-    const at = hartAt(hart);
-    if (loadU32(memory, at + H_PROCESS_SLOT) === slot) {
-      fill(memory, at, THISTLE_HART_STRIDE, 0);
-      storeU32(memory, at + H_PROCESS_SLOT, INVALID_PROCESS);
-    }
-    hart += 1;
-  }
-};
-
-const reapResources = (memory: ThistleMemory, proc: Ptr, slot: U32): I32 => {
-  if (!acquire(memory, C_CREDENTIAL_LOCK)) return -11;
-  if (!acquire(memory, C_MEMORY_LOCK)) { release(memory, C_CREDENTIAL_LOCK); return -11; }
-  if (!acquire(memory, C_VFS_LOCK)) {
-    release(memory, C_MEMORY_LOCK); release(memory, C_CREDENTIAL_LOCK); return -11;
-  }
-  if (!validProcessFrames(memory, proc)) {
-    release(memory, C_VFS_LOCK); release(memory, C_MEMORY_LOCK); release(memory, C_CREDENTIAL_LOCK); return -14;
-  }
-  releaseProcessDescriptors(memory, proc);
-  releaseProcessFrames(memory, proc);
-  trimFreeFrames(memory);
-  clearProcessHarts(memory, slot);
-  fill(memory, proc, THISTLE_PROCESS_STRIDE, 0);
-  storeU32(memory, C_PROCESS_COUNT, loadU32(memory, C_PROCESS_COUNT) - 1);
-  release(memory, C_VFS_LOCK); release(memory, C_MEMORY_LOCK); release(memory, C_CREDENTIAL_LOCK);
-  return 0;
-};
-
-const reapProcess = (memory: ThistleMemory, parent: Ptr, pid: U32): I32 => {
-  const slot = processSlotByPid(memory, pid);
-  if (slot === INVALID_PROCESS) return -3;
-  const proc = processAt(memory, slot);
-  if (loadU32(memory, parent + P_EUID) !== 0 && loadU32(memory, proc + P_PPID) !== loadU32(memory, parent + P_PID)) return -10;
-  if (loadU32(memory, proc + P_STATE) !== wordToU32(word(THISTLE_PROCESS_ZOMBIE))) return -11;
-  if (!lockProcessHarts(memory, slot)) return -11;
-  const result = reapResources(memory, proc, slot);
-  unlockProcessHarts(memory, slot, loadU32(memory, C_MAX_HARTS));
-  return result;
-};
-
-/** Reap a zombie through the canonical owner and recycle its descriptors/frames. */
-export const thistleProcessReap = (memory: ThistleMemory, parentHart: U32, pid: U32): I32 => {
-  if (!thistleKernelValid(memory) || !validHart(memory, parentHart)) return -22;
-  if (pid <= 1) return -1;
-  const parent = processForHart(memory, parentHart);
-  if (parent === INVALID_POINTER) return -3;
-  if (!acquire(memory, C_PROCESS_LOCK)) return -11;
-  const result = reapProcess(memory, parent, pid);
-  release(memory, C_PROCESS_LOCK);
-  return result;
-};
-
-export { thistleProcessRecord, thistleNextPid, thistleProcessIdentity, thistleProcessGroups, thistleProcessUmask } from "./process-state.js";
+export { thistleProcessReap } from "./process-reap.js";
+export { thistleProcessSetGroup, thistleProcessReadGroups, thistleProcessRecord, thistleNextPid, thistleProcessIdentity, thistleProcessGroups, thistleProcessUmask } from "./process-state.js";

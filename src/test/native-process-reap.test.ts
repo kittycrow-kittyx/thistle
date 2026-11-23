@@ -4,7 +4,7 @@ import { directMemory, loadU8, loadU32, storeU32 } from "../native/memory.js";
 import { C_PHYSICAL_FREE, C_PHYSICAL_NEXT, H_LOCK, THISTLE_HART_BASE, THISTLE_HART_STRIDE } from "../native/abi.js";
 import {
   thistleExitHart, thistleGuestPage, thistleHartInit, thistleKernelInitWithVfs,
-  thistleProcessCount, thistleProcessInit, thistleProcessReap,
+  thistleProcessCount, thistleProcessInit, thistleProcessReap, thistleProcessSetGroup,
 } from "../native/kernel.js";
 
 test("canonical process reaping retains live frames and zeroes recycled storage", () => {
@@ -57,6 +57,7 @@ test("repeated guest processes reuse the one canonical table and memory arena", 
     assert.equal(page, initial);
     assert.equal(loadU8(memory, page), 0);
     memory.bytes[page] = 255;
+    for (let index = 0; index < 40; index++) assert.equal(thistleProcessSetGroup(memory, 1, index, index), 0);
     assert.equal(thistleExitHart(memory, 1, 0), 0);
     assert.equal(thistleProcessReap(memory, 0, pid), 0);
     assert.equal(loadU32(memory, C_PHYSICAL_NEXT), initial);

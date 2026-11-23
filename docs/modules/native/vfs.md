@@ -17,3 +17,5 @@ and supply validated canonical inode or dentry indices.
   and bytes; `findChild` returns the matching inode or zero.
 - `parentOf` locates the canonical parent directory. `allowed` checks every
   requested permission bit against the process filesystem identity/groups.
+
+`thistleVfsRelease` releases a nameless inode after its final canonical descriptor closes. `vfs-edit` re-exports the same function.
