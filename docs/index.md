@@ -84,7 +84,7 @@ bun run test
 - [wasm/host-wasi](modules/wasm/host-wasi.md)
 - [wasm/wasi](modules/wasm/wasi.md)
 - [vm/files](modules/vm/files.md)
-- [native/image-range](modules/native/image-range.md)
+- [native/arena](modules/native/arena.md)
 
 - [Guest execution](modules/core/guest.md)
 - [Host kernel options](modules/core/host-options.md)
@@ -103,3 +103,8 @@ bun run test
 
 - [test/native-process-reap.test](modules/test/native-process-reap.test.md)
 - [test/native-process-state.test](modules/test/native-process-state.test.md)
+
+- [native/credentials](modules/native/credentials.md)
+- [native/process-reap](modules/native/process-reap.md)
+- [test/vfs-fixture](modules/test/vfs-fixture.md)
+- [test/native-credentials.test](modules/test/native-credentials.test.md)

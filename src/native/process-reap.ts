@@ -27,7 +27,7 @@ const lockProcessHarts = (memory: ThistleMemory, slot: U32): boolean => {
   let hart: U32 = 0;
   while (hart < count) {
     const owner = loadU32(memory, hartAt(hart) + H_PROCESS_SLOT);
-    if (owner === slot && compareExchangeI32(memory, hartAt(hart, 0, 1) !== 0 + H_LOCK)) {
+    if (owner === slot && compareExchangeI32(memory, hartAt(hart) + H_LOCK, 0, 1) !== 0) {
       unlockProcessHarts(memory, slot, hart);
       return false;
     }

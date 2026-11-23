@@ -336,6 +336,9 @@ ABI identities, fixed region sizes, status/error values, flags and capacities us
 
 `C_PHYSICAL_FREE` points to the list of recycled guest frames in unused control-block space. Each free frame stores the next pointer in its first word. Allocation zeroes the frame before publishing a guest page.
 
-ABI 11 uses process offset 344 for `P_GROUP_DATA`, the extension-frame head.
-Process stride remains 352 bytes. The first 32 IDs retain their inline offsets.
-ABI 10 readers must reject ABI 11 memory instead of truncating group lists.
+| ABI 11 layout | Value |
+| --- | --- |
+| `P_GROUP_DATA` extension head | Offset 344 |
+| Process stride | 352 bytes |
+| Inline supplementary IDs | 32 |
+| Previous memory ABI | 10; rejected by ABI 11 validation |
