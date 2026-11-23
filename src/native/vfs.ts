@@ -85,15 +85,15 @@ const memoryContains = (memory: ThistleMemory, at: Ptr, size: U32): boolean => {
   return at <= total && size <= total - at;
 };
 
-const inodeAt = (memory: ThistleMemory, inode: U32): Ptr =>
+export const inodeAt = (memory: ThistleMemory, inode: U32): Ptr =>
   loadU32(memory, THISTLE_CONTROL_BASE + C_VFS_INODE_BASE) + inode * THISTLE_VFS_INODE_STRIDE;
 
-const dentryAt = (memory: ThistleMemory, index: U32): Ptr =>
+export const dentryAt = (memory: ThistleMemory, index: U32): Ptr =>
   loadU32(memory, THISTLE_CONTROL_BASE + C_VFS_DENTRY_BASE) + index * THISTLE_VFS_DENTRY_STRIDE;
 
 const align4 = (value: U32): U32 => (value + 3) & -4;
 
-const hashBytes = (memory: ThistleMemory, at: Ptr, size: U32): U32 => {
+export const hashBytes = (memory: ThistleMemory, at: Ptr, size: U32): U32 => {
   let hash: U32 = 0x811c9dc5;
   let index: U32 = 0;
   while (index < size) {
@@ -103,18 +103,73 @@ const hashBytes = (memory: ThistleMemory, at: Ptr, size: U32): U32 => {
   return hash;
 };
 
-const allocateData = (memory: ThistleMemory, size: U32): Ptr => {
+// The arena first extends its high-water mark, then reuses gaps left by
+// replaced payloads and removed entries. Live inode/entry references remain
+// the sole allocation authority, so an open unlinked file keeps its bytes.
+const nextPayloadEnd = (memory: ThistleMemory, at: Ptr, size: U32, excluded: Ptr): Ptr => {
+  let next = at;
+  const inodeCapacity = loadU32(memory, THISTLE_CONTROL_BASE + C_VFS_INODE_CAPACITY);
+  let index: U32 = 1;
+  while (index < inodeCapacity) {
+    const state = inodeAt(memory, index);
+    const start = loadU32(memory, state + V_DATA);
+    const length = loadU32(memory, state + V_CAPACITY);
+    if (state !== excluded && loadU32(memory, state + V_KIND) !== 0 && length !== 0 && at < start + length && start < at + size) {
+      const end = align4(start + length);
+      next = end > next ? end : next;
+    }
+    index += 1;
+  }
+  const count = loadU32(memory, THISTLE_CONTROL_BASE + C_VFS_DENTRY_COUNT);
+  index = 0;
+  while (index < count) {
+    const entry = dentryAt(memory, index);
+    const start = loadU32(memory, entry + D_NAME);
+    const length = loadU32(memory, entry + D_NAME_LENGTH);
+    if (loadU32(memory, entry + D_INODE) !== 0 && length !== 0 && at < start + length && start < at + size) {
+      const end = align4(start + length);
+      next = end > next ? end : next;
+    }
+    index += 1;
+  }
+  return next;
+};
+
+export const allocateData = (memory: ThistleMemory, size: U32): Ptr => {
   if (size === 0) return 0;
   const aligned = align4(size);
   if (aligned < size) return 0xffffffff;
   const next = loadU32(memory, THISTLE_CONTROL_BASE + C_VFS_DATA_NEXT);
   const end = loadU32(memory, THISTLE_CONTROL_BASE + C_VFS_DATA_END);
-  if (next > end || aligned > end - next) return 0xffffffff;
-  storeU32(memory, THISTLE_CONTROL_BASE + C_VFS_DATA_NEXT, next + aligned);
-  return next;
+  if (next <= end && aligned <= end - next) {
+    storeU32(memory, THISTLE_CONTROL_BASE + C_VFS_DATA_NEXT, next + aligned);
+    return next;
+  }
+  let at = loadU32(memory, THISTLE_CONTROL_BASE + C_VFS_DATA_BASE);
+  while (at <= end && aligned <= end - at) {
+    const free = nextPayloadEnd(memory, at, aligned, 0);
+    if (free === at) return at;
+    at = free;
+  }
+  return 0xffffffff;
 };
 
-const validName = (memory: ThistleMemory, at: Ptr, size: U32): boolean => {
+// Extend a payload in place when its following arena range is free. This
+// avoids requiring room for two copies when a file grows near the VFS budget.
+export const growData = (memory: ThistleMemory, inode: U32, size: U32): Ptr => {
+  const state = inodeAt(memory, inode);
+  const at = loadU32(memory, state + V_DATA);
+  const base = loadU32(memory, C_VFS_DATA_BASE);
+  const end = loadU32(memory, C_VFS_DATA_END);
+  const aligned = align4(size);
+  if (at < base || aligned < size || at > end || aligned > end - at) return allocateData(memory, size);
+  if (nextPayloadEnd(memory, at, aligned, state) !== at) return allocateData(memory, size);
+  const next = at + aligned;
+  if (next > loadU32(memory, C_VFS_DATA_NEXT)) storeU32(memory, C_VFS_DATA_NEXT, next);
+  return at;
+};
+
+export const validName = (memory: ThistleMemory, at: Ptr, size: U32): boolean => {
   if (size === 0 || size > 255) return false;
   let index: U32 = 0;
   while (index < size) {
@@ -127,7 +182,7 @@ const validName = (memory: ThistleMemory, at: Ptr, size: U32): boolean => {
   return true;
 };
 
-const sameName = (memory: ThistleMemory, dentry: Ptr, at: Ptr, size: U32, hash: U32): boolean => {
+export const sameName = (memory: ThistleMemory, dentry: Ptr, at: Ptr, size: U32, hash: U32): boolean => {
   if (loadU32(memory, dentry + D_NAME_LENGTH) !== size || loadU32(memory, dentry + D_NAME_HASH) !== hash) return false;
   const stored = loadU32(memory, dentry + D_NAME);
   let index: U32 = 0;
@@ -138,7 +193,7 @@ const sameName = (memory: ThistleMemory, dentry: Ptr, at: Ptr, size: U32, hash: 
   return true;
 };
 
-const findChild = (memory: ThistleMemory, parent: U32, name: Ptr, nameLength: U32): U32 => {
+export const findChild = (memory: ThistleMemory, parent: U32, name: Ptr, nameLength: U32): U32 => {
   if (!validName(memory, name, nameLength)) return 0;
   const hash = hashBytes(memory, name, nameLength);
   const count = loadU32(memory, THISTLE_CONTROL_BASE + C_VFS_DENTRY_COUNT);
@@ -153,7 +208,7 @@ const findChild = (memory: ThistleMemory, parent: U32, name: Ptr, nameLength: U3
   return 0;
 };
 
-const parentOf = (memory: ThistleMemory, inode: U32): U32 => {
+export const parentOf = (memory: ThistleMemory, inode: U32): U32 => {
   const root = loadU32(memory, THISTLE_CONTROL_BASE + C_VFS_ROOT);
   if (inode === root) return root;
   const count = loadU32(memory, THISTLE_CONTROL_BASE + C_VFS_DENTRY_COUNT);
@@ -176,7 +231,7 @@ const inSupplementaryGroup = (memory: ThistleMemory, proc: Ptr, gid: U32): boole
   return false;
 };
 
-const allowed = (memory: ThistleMemory, proc: Ptr, inode: U32, bits: U32): boolean => {
+export const allowed = (memory: ThistleMemory, proc: Ptr, inode: U32, bits: U32): boolean => {
   const state = inodeAt(memory, inode);
   const uid = loadU32(memory, proc + P_FSUID);
   if (uid === 0) return true;

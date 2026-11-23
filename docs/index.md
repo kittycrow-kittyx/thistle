@@ -1,6 +1,7 @@
 # Thistle documentation
 
 - [Kernel architecture](architecture.md)
+- [Single-kernel consolidation](consolidation.md)
 - [Native kernel](native-kernel.md)
 - [Filesystem](filesystem.md)
 - [Programme execution](execution.md)
@@ -65,6 +66,7 @@ bun run test
 - [native/thx](modules/native/thx.md)
 - [native/types](modules/native/types.md)
 - [native/vfs](modules/native/vfs.md)
+- [native/vfs-edit](modules/native/vfs-edit.md)
 - [native/word](modules/native/word.md)
 - [net/host-fetch](modules/net/host-fetch.md)
 - [net/net](modules/net/net.md)
@@ -94,3 +96,5 @@ bun run test
 - [native/host-exports](modules/native/host-exports.md)
 - [native/vfs-image](modules/native/vfs-image.md)
 - [test/host-rv64.test](modules/test/host-rv64.test.md)
+
+- [test/native-vfs-edit.test](modules/test/native-vfs-edit.test.md)

@@ -1,3 +1,4 @@
+import { thistleVfsRelease } from "./vfs-edit.js";
 import { inputContains } from "./image-range.js";
 import { rv64Branch, rv64RegisterWordValid, rv64RegisterWordValue, rv64ImmediateWordValid, rv64ImmediateWordValue, rv64ImmediateOpValid, rv64ImmediateOpValue, rv64RegisterValid, rv64RegisterValue, rv64FloatClass, rv64CompressedJump, rv64ImmediateB, rv64ImmediateI, rv64ImmediateJ, rv64ImmediateS, rv64ImmediateU } from "../core/rv64-decode.js";
 import {
@@ -800,7 +801,15 @@ export const thistleCloseDescriptor = (memory: ThistleMemory, hart: U32, descrip
     release(memory, proc + P_LOCK);
     return -9;
   }
+  const lock = THISTLE_CONTROL_BASE + C_VFS_LOCK;
+  if (!acquire(memory, lock)) {
+    release(memory, proc + P_LOCK);
+    return -11;
+  }
+  const inode = loadU32(memory, state + FD_INODE);
   fill(memory, state, THISTLE_DESCRIPTOR_STRIDE, 0);
+  thistleVfsRelease(memory, inode);
+  release(memory, lock);
   release(memory, proc + P_LOCK);
   return 0;
 };
@@ -3181,3 +3190,5 @@ export const thistleExitHart = (memory: ThistleMemory, hart: U32, code: I32): I3
   release(memory, at + H_LOCK);
   return 0;
 };
+
+export { thistleVfsCreate, thistleVfsWrite, thistleVfsLink, thistleVfsUnlink, thistleVfsCanMove, thistleVfsRename, thistleVfsChmod, thistleVfsChown, thistleVfsUtime } from "./vfs-edit.js";
