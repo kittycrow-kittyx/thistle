@@ -7,6 +7,7 @@ import {
   THISTLE_VFS_KIND_FILE, THISTLE_VFS_KIND_LINK, V_ATIME, V_CAPACITY, V_CTIME,
   V_DATA, V_GID, V_KIND, V_MODE, V_MTIME, V_NLINK, V_SIZE, V_UID,
 } from "./abi.js";
+import { word, ux, wordToU32 } from "./word.js";
 import { inputContains } from "./image-range.js";
 import { atomicLoadU64, atomicStoreU64, copyMemory, fill, loadU32, loadU64, storeU32, storeU64 } from "./memory.js";
 import type { ThistleMemory } from "./memory.js";
@@ -151,18 +152,18 @@ export const thistleVfsWrite = (
   const oldSize = loadU64(memory, state + V_SIZE);
   if (oldSize > 0xffffffffn || offset > 0x7fffffff || length > 0x7fffffff - offset) return -27;
   const required = offset + length;
-  const size: U32 = replace || oldSize < BigInt(required) ? required : Number(oldSize);
+  const size: U32 = replace || oldSize < ux(word(required)) ? required : wordToU32(oldSize);
   const capacity = loadU32(memory, state + V_CAPACITY);
   const previous = loadU32(memory, state + V_DATA);
   const data = size > capacity ? growData(memory, inode, size) : previous;
   if (data === 0xffffffff) return -28;
-  if (size > capacity && !replace && oldSize !== 0n && data !== previous) copyMemory(memory, data, previous, Number(oldSize));
-  const kept: U32 = replace ? 0 : Number(oldSize);
+  if (size > capacity && !replace && oldSize !== 0n && data !== previous) copyMemory(memory, data, previous, wordToU32(oldSize));
+  const kept: U32 = replace ? 0 : wordToU32(oldSize);
   if (offset > kept) fill(memory, data + kept, offset - kept, 0);
   if (length !== 0) copyMemory(memory, data + offset, input, length);
   storeU32(memory, state + V_DATA, data);
   storeU32(memory, state + V_CAPACITY, size > capacity ? size : capacity);
-  storeU64(memory, state + V_SIZE, BigInt(size));
+  storeU64(memory, state + V_SIZE, ux(word(size)));
   storeU32(memory, state + V_MODE, loadU32(memory, state + V_MODE) & ~0o6000);
   touch(memory, inode, now, true);
   changed(memory);

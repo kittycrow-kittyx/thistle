@@ -1,8 +1,5 @@
 # Canonical VFS mutations
 
-`src/native/vfs-edit.ts` mutates the inode, dentry and payload tables defined
-in `abi.ts`. Lookup and allocation helpers come from `vfs.ts`.
-
 The caller holds the canonical VFS lock. Buffers must belong to the current
 input reservation. Creation, writes, hard links, unlink, rename and metadata
 changes return numeric errno values. Rename checks directory ancestry before

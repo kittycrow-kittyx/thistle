@@ -4,7 +4,7 @@ import { directMemory, loadU32, storeU32 } from "../native/memory.js";
 import { thistleCloseDescriptor, thistleHartInit, thistleImageRelease, thistleImageReserve, thistleKernelInitWithVfs, thistleOpenPath, thistleProcessInit, thistleReadDescriptor } from "../native/kernel.js";
 import { C_PROCESS_TABLE_BASE, C_VFS_DIRTY, C_VFS_GENERATION, P_FSUID, P_FSGID, THISTLE_VFS_KIND_DIRECTORY, THISTLE_VFS_KIND_FILE } from "../native/abi.js";
 import { thistleLoadVfs, thistleVfsFileSize, thistleVfsKind, thistleVfsLookup, thistleVfsNlink, thistleVfsReadData } from "../native/vfs.js";
-import { thistleVfsCreate, thistleVfsWrite, thistleVfsLink, thistleVfsUnlink, thistleVfsCanMove, thistleVfsRename } from "../native/vfs-edit.js";
+import { thistleVfsCreate, thistleVfsWrite, thistleVfsLink, thistleVfsUnlink, thistleVfsCanMove, thistleVfsRename, thistleVfsChmod, thistleVfsChown, thistleVfsUtime } from "../native/vfs-edit.js";
 
 const setup = (): ReturnType<typeof directMemory> => {
   const memory = directMemory(32 * 1024 * 1024);
@@ -45,6 +45,9 @@ test("canonical VFS mutations preserve hard links, atomic failure and permission
   assert.deepEqual([...memory.bytes.slice(input + 256, input + 259)], [65, 66, 67]);
   storeU32(memory, proc + P_FSUID, 1000); storeU32(memory, proc + P_FSGID, 1000);
   assert.equal(thistleVfsWrite(memory, proc, file, input + 256, 1, 0, true, 6n), -13);
+  assert.equal(thistleVfsChmod(memory, proc, file, 0o777, 6n), -1);
+  assert.equal(thistleVfsChown(memory, proc, file, 1000, 1000, 6n), -1);
+  assert.equal(thistleVfsUtime(memory, proc, file, 6n, 6n, 6n), -1);
   assert.equal(thistleVfsCreate(memory, proc, 1, input, name("denied"), THISTLE_VFS_KIND_FILE, 0o644, 6n), -13);
   storeU32(memory, proc + P_FSUID, 0); storeU32(memory, proc + P_FSGID, 0);
   const dir = thistleVfsCreate(memory, proc, 1, input, name("dir"), THISTLE_VFS_KIND_DIRECTORY, 0o755, 7n);
@@ -55,6 +58,20 @@ test("canonical VFS mutations preserve hard links, atomic failure and permission
   assert.equal(thistleVfsUnlink(memory, proc, 1, input, name("dir"), true, 9n), -39);
   assert.equal(loadU32(memory, C_VFS_DIRTY), 1);
   assert.ok(memory.view.getBigUint64(C_VFS_GENERATION, true) > 1n);
+  assert.equal(thistleImageRelease(memory, input, 8192), 0);
+});
+
+test("a file can grow in place up to the available arena budget", () => {
+  const memory = setup(), proc = loadU32(memory, C_PROCESS_TABLE_BASE);
+  const input = thistleImageReserve(memory, 8192);
+  memory.bytes.set(new TextEncoder().encode("file"), input);
+  const inode = thistleVfsCreate(memory, proc, 1, input, 4, THISTLE_VFS_KIND_FILE, 0o644, 1n);
+  memory.bytes.fill(42, input + 16, input + 16 + 4090);
+  assert.equal(thistleVfsWrite(memory, proc, inode, input + 16, 3, 0, true, 1n), 3);
+  assert.equal(thistleVfsWrite(memory, proc, inode, input + 16, 4090, 0, true, 2n), 4090);
+  assert.equal(thistleVfsFileSize(memory, inode), 4090n);
+  assert.equal(thistleVfsReadData(memory, inode, 0n, input + 16, 4090), 4090);
+  assert.ok(memory.bytes.subarray(input + 16, input + 16 + 4090).every(byte => byte === 42));
   assert.equal(thistleImageRelease(memory, input, 8192), 0);
 });
 
