@@ -268,15 +268,7 @@ import {
 import type { ThistleMemory } from "./memory.js";
 import type { F64, I32, I64, Ptr, U32, U64 } from "./types.js";
 import {
-  rv64DivideSigned as divSigned,
-  rv64DivideUnsigned as divUnsigned,
-  rv64MulHighSigned as mulHighSigned,
-  rv64MulHighSignedUnsigned as mulHighSignedUnsigned,
-  rv64MulHighUnsigned as mulHighUnsigned,
-  rv64RemainderSigned as remSigned,
-  rv64RemainderUnsigned as remUnsigned,
-} from "../core/rv64-arithmetic.js";
-import {
+  divSigned, divUnsigned, mulHighSigned, mulHighSignedUnsigned, mulHighUnsigned, remSigned, remUnsigned,
   bitsToF32,
   bitsToF64,
   f32ToBits,

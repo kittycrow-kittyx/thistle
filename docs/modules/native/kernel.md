@@ -32,7 +32,7 @@ releases the final reference to an unlinked inode under that lock.
 
 `thistleProcessReap` checks the parent/root relationship and zombie state,
 locks all associated harts and releases descriptor and backing-frame resources.
-It refuses contention or invalid page metadata without dropping live data.
+Contended locks return EAGAIN; invalid page metadata returns EFAULT before resources are released.
 Recycled frames are zeroed before reuse; free tail frames lower the physical
 high-water mark so later image reservations can use that memory.
 
