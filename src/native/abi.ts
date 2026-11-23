@@ -23,6 +23,7 @@ export const C_MEMORY_LOCK: U32 = 40;
 export const C_PAGE_TABLE_BASE: U32 = 44;
 export const C_PAGE_CAPACITY: U32 = 48;
 export const C_PHYSICAL_NEXT: U32 = 52;
+export const C_PHYSICAL_FREE: U32 = 3360;
 export const C_PHYSICAL_END: U32 = 56;
 export const C_PROCESS_TABLE_BASE: U32 = 60;
 export const C_PROCESS_CAPACITY: U32 = 64;

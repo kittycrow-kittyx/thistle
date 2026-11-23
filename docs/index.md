@@ -63,6 +63,8 @@ bun run test
 - [native/kernel](modules/native/kernel.md)
 - [native/memory](modules/native/memory.md)
 - [native/start](modules/native/start.md)
+- [native/state](modules/native/state.md)
+- [native/process-state](modules/native/process-state.md)
 - [native/thx](modules/native/thx.md)
 - [native/types](modules/native/types.md)
 - [native/vfs](modules/native/vfs.md)
@@ -98,3 +100,6 @@ bun run test
 - [test/host-rv64.test](modules/test/host-rv64.test.md)
 
 - [test/native-vfs-edit.test](modules/test/native-vfs-edit.test.md)
+
+- [test/native-process-reap.test](modules/test/native-process-reap.test.md)
+- [test/native-process-state.test](modules/test/native-process-state.test.md)

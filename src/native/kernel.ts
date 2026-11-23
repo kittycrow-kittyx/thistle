@@ -1,3 +1,4 @@
+import { INVALID_POINTER, hartAt, processAt, processForHart, processSlotByPid, validHart, validKernel } from "./state.js";
 import { thistleVfsRelease } from "./vfs-edit.js";
 import { inputContains } from "./image-range.js";
 import { rv64Branch, rv64RegisterWordValid, rv64RegisterWordValue, rv64ImmediateWordValid, rv64ImmediateWordValue, rv64ImmediateOpValid, rv64ImmediateOpValue, rv64RegisterValid, rv64RegisterValue, rv64FloatClass, rv64CompressedJump, rv64ImmediateB, rv64ImmediateI, rv64ImmediateJ, rv64ImmediateS, rv64ImmediateU } from "../core/rv64-decode.js";
@@ -36,6 +37,7 @@ import {
   C_PAGE_TABLE_BASE,
   C_PHYSICAL_END,
   C_PHYSICAL_NEXT,
+  C_PHYSICAL_FREE,
   C_PROCESS_CAPACITY,
   C_PROCESS_COUNT,
   C_PROCESS_LOCK,
@@ -311,7 +313,6 @@ import {
 } from "./vfs.js";
 
 const NO_RESERVATION: I64 = -1n;
-const INVALID_POINTER: Ptr = 0xffffffff;
 const UNMAPPED_POINTER: Ptr = 0xfffffffe;
 const INVALID_PROCESS: U32 = 0xffffffff;
 const MAP_NOT_OWNED: I64 = -4096n;
@@ -378,16 +379,9 @@ const traceNodePointerWrite = (
 const OPEN_DIRECTORY: U32 = 0x10000;
 const OPEN_CLOEXEC: U32 = 0x80000;
 
-const hartAt = (hart: U32): Ptr => THISTLE_HART_BASE + hart * THISTLE_HART_STRIDE;
 const regAt = (hart: U32, register: U32): Ptr => hartAt(hart) + H_X + register * 8;
 const floatRegAt = (hart: U32, register: U32): Ptr => hartAt(hart) + H_F + register * 8;
 const pageAlign = (value: U32): U32 => (value + THISTLE_GUEST_PAGE_SIZE - 1) & -THISTLE_GUEST_PAGE_SIZE;
-const processAt = (memory: ThistleMemory, slot: U32): Ptr =>
-  loadU32(memory, THISTLE_CONTROL_BASE + C_PROCESS_TABLE_BASE) + slot * THISTLE_PROCESS_STRIDE;
-const processForHart = (memory: ThistleMemory, hart: U32): Ptr => {
-  const slot = loadU32(memory, hartAt(hart) + H_PROCESS_SLOT);
-  return slot < loadU32(memory, THISTLE_CONTROL_BASE + C_PROCESS_CAPACITY) ? processAt(memory, slot) : INVALID_POINTER;
-};
 /** A cloned thread shares the same process slot as hart zero; other harts may
  * represent entirely independent processes. */
 const sharedProcessThread = (memory: ThistleMemory, hart: U32): boolean => {
@@ -401,8 +395,6 @@ const descriptorAt = (memory: ThistleMemory, proc: Ptr, descriptor: U32): Ptr =>
   loadU32(memory, proc + P_DESCRIPTOR_TABLE) + descriptor * THISTLE_DESCRIPTOR_STRIDE;
 const workerAt = (worker: U32): Ptr => C_WORKER_BASE + worker * THISTLE_WORKER_STRIDE;
 
-const validHart = (memory: ThistleMemory, hart: U32): boolean =>
-  hart < loadU32(memory, THISTLE_CONTROL_BASE + C_MAX_HARTS);
 
 const bump = (memory: ThistleMemory, at: Ptr): void => {
   atomicAddU64(memory, at, 1n);
@@ -485,9 +477,7 @@ export const thistleKernelInitWithVfs = (
   return 0;
 };
 
-export const thistleKernelValid = (memory: ThistleMemory): boolean =>
-  loadU32(memory, THISTLE_CONTROL_BASE + C_MAGIC) === THISTLE_MAGIC &&
-  loadU32(memory, THISTLE_CONTROL_BASE + C_ABI) === THISTLE_ABI_VERSION;
+export const thistleKernelValid = (memory: ThistleMemory): boolean => validKernel(memory);
 
 export const thistleHartInit = (
   memory: ThistleMemory,
@@ -1091,13 +1081,16 @@ const insertGuestPage = (memory: ThistleMemory, hart: U32, proc: Ptr, entry: Ptr
     return existing;
   }
   if (recheck !== 0n) { release(memory, lockAt); return UNMAPPED_POINTER; }
-  const frame = loadU32(memory, THISTLE_CONTROL_BASE + C_PHYSICAL_NEXT);
+  const recycled = loadU32(memory, THISTLE_CONTROL_BASE + C_PHYSICAL_FREE);
+  const frame = recycled !== 0 ? recycled : loadU32(memory, THISTLE_CONTROL_BASE + C_PHYSICAL_NEXT);
   const end = loadU32(memory, THISTLE_CONTROL_BASE + C_IMAGE_TOP);
   if (frame > end || THISTLE_GUEST_PAGE_SIZE > end - frame) { release(memory, lockAt); return INVALID_POINTER; }
+  const nextFree = recycled !== 0 ? loadU32(memory, frame) : 0;
   fill(memory, frame, THISTLE_GUEST_PAGE_SIZE, 0);
   storeU32(memory, entry + 8, frame);
   storeU32(memory, entry + 12, 0);
-  storeU32(memory, THISTLE_CONTROL_BASE + C_PHYSICAL_NEXT, frame + THISTLE_GUEST_PAGE_SIZE);
+  if (recycled !== 0) storeU32(memory, THISTLE_CONTROL_BASE + C_PHYSICAL_FREE, nextFree);
+  else storeU32(memory, THISTLE_CONTROL_BASE + C_PHYSICAL_NEXT, frame + THISTLE_GUEST_PAGE_SIZE);
   const pageCount = wordToU32(word(atomicLoadI32(memory, proc + P_PAGE_COUNT))) + 1;
   atomicStoreI32(memory, proc + P_PAGE_COUNT, wordToI32(word(pageCount)));
   storeU32(memory, hartAt(hart) + H_PAGE_COUNT, pageCount);
@@ -3192,3 +3185,155 @@ export const thistleExitHart = (memory: ThistleMemory, hart: U32, code: I32): I3
 };
 
 export { thistleVfsCreate, thistleVfsWrite, thistleVfsLink, thistleVfsUnlink, thistleVfsCanMove, thistleVfsRename, thistleVfsChmod, thistleVfsChown, thistleVfsUtime } from "./vfs-edit.js";
+
+
+const unlockProcessHarts = (memory: ThistleMemory, slot: U32, end: U32): void => {
+  let hart: U32 = 0;
+  while (hart < end) {
+    if (loadU32(memory, hartAt(hart) + H_PROCESS_SLOT) === slot) release(memory, hartAt(hart) + H_LOCK);
+    hart += 1;
+  }
+};
+
+const lockProcessHarts = (memory: ThistleMemory, slot: U32): boolean => {
+  const count = loadU32(memory, C_MAX_HARTS);
+  let hart: U32 = 0;
+  while (hart < count) {
+    const owner = loadU32(memory, hartAt(hart) + H_PROCESS_SLOT);
+    if (owner === slot && !acquire(memory, hartAt(hart) + H_LOCK)) {
+      unlockProcessHarts(memory, slot, hart);
+      return false;
+    }
+    hart += 1;
+  }
+  return true;
+};
+
+const validProcessFrames = (memory: ThistleMemory, proc: Ptr): boolean => {
+  const table = loadU32(memory, proc + P_PAGE_TABLE);
+  const count = loadU32(memory, proc + P_PAGE_CAPACITY);
+  const first = pageAlign(loadU32(memory, C_VFS_DATA_END));
+  const top = loadU32(memory, C_PHYSICAL_NEXT);
+  let index: U32 = 0;
+  while (index < count) {
+    const entry = table + index * THISTLE_PAGE_ENTRY_SIZE;
+    const frame = loadU32(memory, entry + 8);
+    if (loadU64(memory, entry) !== 0n &&
+        (frame < first || frame % THISTLE_GUEST_PAGE_SIZE !== 0 || frame >= top)) return false;
+    index += 1;
+  }
+  return true;
+};
+
+const releaseProcessDescriptors = (memory: ThistleMemory, proc: Ptr): void => {
+  const table = loadU32(memory, proc + P_DESCRIPTOR_TABLE);
+  const count = loadU32(memory, proc + P_DESCRIPTOR_CAPACITY);
+  let index: U32 = 0;
+  while (index < count) {
+    const at = table + index * THISTLE_DESCRIPTOR_STRIDE;
+    const inode = loadU32(memory, at + FD_INODE);
+    fill(memory, at, THISTLE_DESCRIPTOR_STRIDE, 0);
+    thistleVfsRelease(memory, inode);
+    index += 1;
+  }
+};
+
+const releaseProcessFrames = (memory: ThistleMemory, proc: Ptr): void => {
+  const table = loadU32(memory, proc + P_PAGE_TABLE);
+  const count = loadU32(memory, proc + P_PAGE_CAPACITY);
+  let index: U32 = 0;
+  while (index < count) {
+    const entry = table + index * THISTLE_PAGE_ENTRY_SIZE;
+    if (loadU64(memory, entry) !== 0n) {
+      const frame = loadU32(memory, entry + 8);
+      storeU32(memory, frame, loadU32(memory, C_PHYSICAL_FREE));
+      storeU32(memory, C_PHYSICAL_FREE, frame);
+    }
+    index += 1;
+  }
+  fill(memory, table, count * THISTLE_PAGE_ENTRY_SIZE, 0);
+};
+
+// Remove a free frame from the linked list. Returns false for a live frame.
+const unlinkFreeFrame = (memory: ThistleMemory, wanted: Ptr): boolean => {
+  let link: Ptr = C_PHYSICAL_FREE;
+  let frame = loadU32(memory, link);
+  while (frame !== 0) {
+    if (frame === wanted) {
+      storeU32(memory, link, loadU32(memory, frame));
+      return true;
+    }
+    link = frame;
+    frame = loadU32(memory, frame);
+  }
+  return false;
+};
+
+const trimFreeFrames = (memory: ThistleMemory): void => {
+  const base = pageAlign(loadU32(memory, C_VFS_DATA_END));
+  let top = loadU32(memory, C_PHYSICAL_NEXT);
+  while (top > base) {
+    const frame = top - THISTLE_GUEST_PAGE_SIZE;
+    if (!unlinkFreeFrame(memory, frame)) return;
+    top = frame;
+    storeU32(memory, C_PHYSICAL_NEXT, top);
+  }
+};
+
+const clearProcessHarts = (memory: ThistleMemory, slot: U32): void => {
+  const count = loadU32(memory, C_MAX_HARTS);
+  let hart: U32 = 0;
+  while (hart < count) {
+    const at = hartAt(hart);
+    if (loadU32(memory, at + H_PROCESS_SLOT) === slot) {
+      fill(memory, at, THISTLE_HART_STRIDE, 0);
+      storeU32(memory, at + H_PROCESS_SLOT, INVALID_PROCESS);
+    }
+    hart += 1;
+  }
+};
+
+const reapResources = (memory: ThistleMemory, proc: Ptr, slot: U32): I32 => {
+  if (!acquire(memory, C_CREDENTIAL_LOCK)) return -11;
+  if (!acquire(memory, C_MEMORY_LOCK)) { release(memory, C_CREDENTIAL_LOCK); return -11; }
+  if (!acquire(memory, C_VFS_LOCK)) {
+    release(memory, C_MEMORY_LOCK); release(memory, C_CREDENTIAL_LOCK); return -11;
+  }
+  if (!validProcessFrames(memory, proc)) {
+    release(memory, C_VFS_LOCK); release(memory, C_MEMORY_LOCK); release(memory, C_CREDENTIAL_LOCK); return -14;
+  }
+  releaseProcessDescriptors(memory, proc);
+  releaseProcessFrames(memory, proc);
+  trimFreeFrames(memory);
+  clearProcessHarts(memory, slot);
+  fill(memory, proc, THISTLE_PROCESS_STRIDE, 0);
+  storeU32(memory, C_PROCESS_COUNT, loadU32(memory, C_PROCESS_COUNT) - 1);
+  release(memory, C_VFS_LOCK); release(memory, C_MEMORY_LOCK); release(memory, C_CREDENTIAL_LOCK);
+  return 0;
+};
+
+const reapProcess = (memory: ThistleMemory, parent: Ptr, pid: U32): I32 => {
+  const slot = processSlotByPid(memory, pid);
+  if (slot === INVALID_PROCESS) return -3;
+  const proc = processAt(memory, slot);
+  if (loadU32(memory, parent + P_EUID) !== 0 && loadU32(memory, proc + P_PPID) !== loadU32(memory, parent + P_PID)) return -10;
+  if (loadU32(memory, proc + P_STATE) !== wordToU32(word(THISTLE_PROCESS_ZOMBIE))) return -11;
+  if (!lockProcessHarts(memory, slot)) return -11;
+  const result = reapResources(memory, proc, slot);
+  unlockProcessHarts(memory, slot, loadU32(memory, C_MAX_HARTS));
+  return result;
+};
+
+/** Reap a zombie through the canonical owner and recycle its descriptors/frames. */
+export const thistleProcessReap = (memory: ThistleMemory, parentHart: U32, pid: U32): I32 => {
+  if (!thistleKernelValid(memory) || !validHart(memory, parentHart)) return -22;
+  if (pid <= 1) return -1;
+  const parent = processForHart(memory, parentHart);
+  if (parent === INVALID_POINTER) return -3;
+  if (!acquire(memory, C_PROCESS_LOCK)) return -11;
+  const result = reapProcess(memory, parent, pid);
+  release(memory, C_PROCESS_LOCK);
+  return result;
+};
+
+export { thistleProcessRecord, thistleNextPid, thistleProcessIdentity, thistleProcessGroups, thistleProcessUmask } from "./process-state.js";

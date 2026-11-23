@@ -26,3 +26,17 @@ The three wide scalar entry points `thistleProcessInit`, `thistleImageBegin` and
 and `thistleVfsUtime` are re-exported from [vfs-edit](vfs-edit.md). Their caller
 holds the VFS lock and marshals reserved input buffers. Descriptor close also
 releases the final reference to an unlinked inode under that lock.
+
+
+## Process ownership and lifetime
+
+`thistleProcessReap` checks the parent/root relationship and zombie state,
+locks all associated harts and releases descriptor and backing-frame resources.
+It refuses contention or invalid page metadata without dropping live data.
+Recycled frames are zeroed before reuse; free tail frames lower the physical
+high-water mark so later image reservations can use that memory.
+
+`thistleProcessRecord`, `thistleNextPid`, `thistleProcessIdentity`,
+`thistleProcessGroups` and `thistleProcessUmask` are re-exported from
+[process-state](process-state.md). Host adapters use these canonical records
+and credential operations instead of maintaining their own authoritative copies.

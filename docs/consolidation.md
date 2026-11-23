@@ -83,3 +83,18 @@ behavioural parity, single-owner import checks and clean backend validation.
 The Pages repository, unrelated toolchains, branding and machine configuration
 remain outside this work. No release or completed consolidation is claimed by
 this document.
+
+
+## Process consolidation increment
+
+Native reaping now releases descriptor references and guest frames, preserving
+other live processes. Frame reuse and tail trimming support a long-lived
+kernel instance. The PID allocator, credential operations and umask use the
+canonical record; differential tests compare the existing hosted contract.
+The hosted process, filesystem and scheduler facades have not yet been switched.
+
+The audit identified two remaining compatibility constraints before that switch:
+`Lim.host()` allows a sparse host filesystem budget above the native in-memory
+arena's 128 MiB limit, and its supplementary group arrays are not bounded at
+32. Host storage capabilities and explicit resource-policy decisions must
+preserve the required contracts; silently clamping those values is not parity.

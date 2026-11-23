@@ -19,6 +19,7 @@ Offsets in the global control block, including locks and backing-store layout.
 - `C_MEMORY_LOCK`
 - `C_PAGE_TABLE_BASE`
 - `C_PAGE_CAPACITY`
+- `C_PHYSICAL_FREE`
 - `C_PHYSICAL_NEXT`
 - `C_PHYSICAL_END`
 - `C_PROCESS_TABLE_BASE`
@@ -331,3 +332,5 @@ ABI identities, fixed region sizes, status/error values, flags and capacities us
 - `THISTLE_START_MEMORY`
 
 `THISTLE_MAP_BACKING_HOST_FILE` marks mappings whose bytes are backed by the hosted live VFS. These mappings delegate munmap so shared writes are flushed before frames are released.
+
+`C_PHYSICAL_FREE` points to the list of recycled guest frames in unused control-block space. Each free frame stores the next pointer in its first word. Allocation zeroes the frame before publishing a guest page.
