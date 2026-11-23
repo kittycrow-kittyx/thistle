@@ -5,7 +5,7 @@ Baguette, Croissant and Crust v1.0.1 commits. Each compiler's nested Bake pin
 must equal v1.0.1 commit 30f7c767584737bf001d2f99b7d303b809bb4f0f.
 
 `scripts/validate-compiler.ts` records source, backend and Bake commits plus
-source SHA-256 hashes. The C and Rust Bake calls reject every diagnostic.
+source SHA-256 hashes. The C and Rust Bake CLI calls use fail-on-warnings.
 Baguette's released Bake stage uses fail-on-warnings. Generated source and
 diagnostic receipts are uploaded as commit-labelled workflow artefacts.
 

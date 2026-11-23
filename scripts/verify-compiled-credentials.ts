@@ -11,9 +11,9 @@ for (const threaded of [false, true]) {
   const { instance } = await WebAssembly.instantiate(bytes, { env: { memory } });
   const exports = instance.exports as Record<string, NativeCall>;
   const invoke = (name: string, ...args: (number | bigint)[]): number | bigint => {
-    const fn = exports["teto" + name];
-    assert.equal(typeof fn, "function", name);
-    return fn!(...args);
+    const fn = exports["teto" + name] ?? null;
+    if (fn === null) throw new Error("Missing compiled ABI export " + name);
+    return fn(...args);
   };
   const view = new DataView(memory.buffer), data = new Uint8Array(memory.buffer);
   assert.equal(invoke("KernelInitWithVfs", 0, 2, threaded ? 1 : 0, 16, 32, 4096), 0);
