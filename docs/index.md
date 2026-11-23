@@ -108,3 +108,5 @@ bun run test
 - [native/process-reap](modules/native/process-reap.md)
 - [test/vfs-fixture](modules/test/vfs-fixture.md)
 - [test/native-credentials.test](modules/test/native-credentials.test.md)
+
+- [Compiler validation](compiler-validation.md)

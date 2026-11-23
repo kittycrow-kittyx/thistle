@@ -1,0 +1,126 @@
+name: Canonical compiler validation
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    name: Lower and generate (${{ matrix.backend }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - backend: baguette
+            target: wasm
+            revision: 6358889e2f63cbfc29b161b23454ce6e6301da9a
+          - backend: croissant
+            target: clang
+            revision: 7625aeb83dddfb9ce3a0afeb7be67378c48ed66e
+          - backend: crust
+            target: rust
+            revision: 02b88890398adf47bce3e012bf1d9755acbb7770
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          submodules: recursive
+      - uses: actions/checkout@v5
+        with:
+          repository: kittycrow-kittyx/${{ matrix.backend }}
+          ref: ${{ matrix.revision }}
+          path: .compiler/${{ matrix.backend }}
+          submodules: recursive
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.5
+      - name: Install exact compiler dependencies
+        env:
+          BACKEND: ${{ matrix.backend }}
+        run: |
+          bun install --frozen-lockfile
+          bun install --cwd ".compiler/$BACKEND" --frozen-lockfile
+          bun install --cwd ".compiler/$BACKEND/bake" --frozen-lockfile
+          test "$(git -C ".compiler/$BACKEND/bake" rev-parse HEAD)" = 30f7c767584737bf001d2f99b7d303b809bb4f0f
+      - name: Lower canonical checkout and generate target source
+        env:
+          BACKEND: ${{ matrix.backend }}
+          TARGET: ${{ matrix.target }}
+        run: bun scripts/validate-compiler.ts
+      - name: Check compiled WASM ABI
+        if: matrix.target == 'wasm'
+        run: bun scripts/verify-compiled-credentials.ts
+      - name: Upload exact-source compiler evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: canonical-${{ matrix.target }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: build/compiler-validation
+          if-no-files-found: error
+
+  compile:
+    name: Compile ${{ matrix.backend }} (${{ matrix.target }})
+    needs: generate
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { backend: clang, target: x86_64-unknown-none-elf, flags: "-mno-red-zone" }
+          - { backend: clang, target: aarch64-none-elf, flags: "" }
+          - { backend: clang, target: riscv64-unknown-none-elf, flags: "-march=rv64gc -mabi=lp64d" }
+          - { backend: clang, target: riscv32-unknown-none-elf, flags: "-march=rv32gc -mabi=ilp32d" }
+          - { backend: clang, target: armv7a-none-eabi, flags: "-mfloat-abi=soft" }
+          - { backend: clang, target: i686-unknown-none-elf, flags: "" }
+          - { backend: rust, target: x86_64-unknown-none }
+          - { backend: rust, target: aarch64-unknown-none }
+          - { backend: rust, target: riscv64gc-unknown-none-elf }
+          - { backend: rust, target: riscv32imafc-unknown-none-elf }
+          - { backend: rust, target: armv7a-none-eabi }
+          - { backend: rust, target: i686-unknown-none }
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: canonical-${{ matrix.backend }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: build/compiler-validation
+      - name: Compile C with warnings as errors
+        if: matrix.backend == 'clang'
+        env:
+          TARGET: ${{ matrix.target }}
+          TARGET_FLAGS: ${{ matrix.flags }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          read -r -a flags <<< "$TARGET_FLAGS"
+          mapfile -d '' sources < <(find build/compiler-validation/clang/generated/src -type f -name '*.c' -print0 | sort -z)
+          test "${#sources[@]}" -gt 0
+          for source in "${sources[@]}"; do
+            output="build/objects/$TARGET/${source#build/compiler-validation/clang/generated/src/}.o"
+            mkdir -p "$(dirname "$output")"
+            clang --target="$TARGET" "${flags[@]}" -std=c11 -O1 -ffreestanding -fno-builtin -fno-stack-protector -Werror -Ibuild/compiler-validation/clang/generated/include -c "$source" -o "$output"
+          done
+      - name: Install Rust target
+        if: matrix.backend == 'rust'
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          rustup toolchain install nightly-2026-11-23 --profile minimal
+          if [[ "$TARGET" == i686-unknown-none ]]; then
+            rustup component add rust-src --toolchain nightly-2026-11-23
+          else
+            rustup target add "$TARGET" --toolchain nightly-2026-11-23
+          fi
+      - name: Compile Rust with warnings as errors
+        if: matrix.backend == 'rust'
+        env:
+          TARGET: ${{ matrix.target }}
+          RUSTFLAGS: "-D warnings -C panic=abort"
+        working-directory: build/compiler-validation/rust/generated
+        run: |
+          args=()
+          if [[ "$TARGET" == i686-unknown-none ]]; then args+=(-Z build-std=core,compiler_builtins); fi
+          cargo +nightly-2026-11-23 build "${args[@]}" --release --lib --target "$TARGET"
