@@ -17,3 +17,12 @@ Reserve an image before loading it; release the reservation after the load. Init
 The three wide scalar entry points `thistleProcessInit`, `thistleImageBegin` and `thistleImageSegment` retain their positional ABI argument lists. `//@cg-expect-error` requires a finding on each declaration line. The implementations remain checked. Compiled targets own their exported symbol mapping.
 
 `thistleMapHostFile` reserves a hosted file mapping in the canonical address space. `thistleUnmapHostFile` releases it after shared data is flushed. Guest munmap delegates overlapping hosted file mappings before reclaiming frames.
+
+
+## Filesystem mutation exports
+
+`thistleVfsCreate`, `thistleVfsWrite`, `thistleVfsLink`, `thistleVfsUnlink`,
+`thistleVfsCanMove`, `thistleVfsRename`, `thistleVfsChmod`, `thistleVfsChown`
+and `thistleVfsUtime` are re-exported from [vfs-edit](vfs-edit.md). Their caller
+holds the VFS lock and marshals reserved input buffers. Descriptor close also
+releases the final reference to an unlinked inode under that lock.

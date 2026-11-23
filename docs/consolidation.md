@@ -23,9 +23,11 @@ Unmodified `v2.2.3` was tested separately before changing its implementation:
   `-Werror` for all six declared targets: amd64, arm64, riscv64, riscv32,
   armv7 and i686.
 - Crust `v1.0.1` emitted the Rust graph. Rust 1.85.1 compiled it with
-  `-D warnings` for amd64, arm64, riscv64, riscv32 and armv7. The declared
-  i686 target requires a newer nightly compiler; that check remains pending
-  in this checkpoint. This is a toolchain limitation, not a kernel failure.
+  `-D warnings` for amd64, arm64, riscv64, riscv32 and armv7. Nightly 1.102.0
+  (commit `137d1d494`, 22 November 2026) also compiled those five targets and
+  the declared i686 target using `build-std=core,compiler_builtins`. Generated
+  kernel crates used `-D warnings`; Cargo emitted a future-compatibility notice
+  originating in its nightly core library.
 - The unmodified `v2.2.1` C and Rust graphs were also generated successfully
   with zero Bake errors and warnings, using the same backend revisions.
 
