@@ -38,7 +38,7 @@ test("host mappings reuse canonical resize policy and preserve moved bytes", () 
   assert.equal(thistleGuestAccess(memory, 0, 1, original, 1, 1), -14);
   assert.equal(thistleGuestAccess(memory, 0, 1, moved + 4096n, 1, 2), 0);
   const movedPage = thistleGuestPage(memory, 0, moved, false);
-  assert.equal(memory.bytes[movedPage + Number(moved & 0xffffn)], 42);
+  assert.equal(memory.view.getUint8(movedPage + Number(moved & 0xffffn)), 42);
   assert.equal(resize(moved, 8192n, 4096n), moved);
   assert.equal(thistleGuestAccess(memory, 0, 1, moved + 4096n, 1, 1), -14);
   storeU32(memory, hartAt(0) + H_LOCK, 1);
