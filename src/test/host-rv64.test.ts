@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Kern } from "../core/kernel.js";
+import { emptyStart } from "../core/kernel.js";
 import { Sys } from "../core/sys.js";
 import { defaultKernelOptions } from "../core/host-options.js";
 import { MemIn, MemOut } from "../io/stream.js";
@@ -81,4 +82,43 @@ test("hosted identity operations reuse native permission policy", () => {
   snapshot.groups.push(999);
   assert.equal(sys.euid, 0);
   assert.deepEqual(sys.groups, [42, 43]);
+});
+
+test("concurrent guests retain independent pages in one kernel instance", async () => {
+  const kernel = new Kern(defaultKernelOptions()), errors = new MemOut();
+  const parent = kernel.session({ sin: new MemIn(), sout: errors, serr: errors });
+  const sys = new Sys(kernel, parent), firstOutput = new MemOut(), secondOutput = new MemOut();
+  const words = [0x00100513, 0x000205b7, 0x00100613, 0x04000893, 0x73,
+    0x00000513, 0x05d00893, 0x73];
+  sys.mkfile("/first.thx", executable(words, Uint8Array.of(65)), 0o755);
+  sys.mkfile("/second.thx", executable(words, Uint8Array.of(66)), 0o755);
+  const first = sys.start("/first.thx", [], { ...emptyStart(), io: { sin: null, sout: firstOutput, serr: errors } });
+  const second = sys.start("/second.thx", [], { ...emptyStart(), io: { sin: null, sout: secondOutput, serr: errors } });
+  assert.equal(first.native.memory, second.native.memory);
+  assert.notEqual(first.native.hart, second.native.hart);
+  assert.deepEqual(await Promise.all([first.done, second.done]), [0, 0], errors.text());
+  assert.equal(firstOutput.text(), "A");
+  assert.equal(secondOutput.text(), "B");
+  assert.equal(await sys.wait(first.pid), 0);
+  assert.equal(await sys.wait(second.pid), 0);
+  assert.equal(thistleProcessCount(kernel.canonical.memory), 2);
+});
+
+test("exec replaces an image in the existing canonical process", async () => {
+  const kernel = new Kern(defaultKernelOptions()), output = new MemOut();
+  const parent = kernel.session({ sin: new MemIn(), sout: output, serr: output });
+  const sys = new Sys(kernel, parent), memory = kernel.canonical.memory;
+  const initial = loadU32(memory, C_PHYSICAL_NEXT);
+  sys.mkfile("/replacement.thx", executable([0x00700513, 0x05d00893, 0x73]), 0o755);
+  sys.mkfile("/exec.thx", executable([
+    0x00020537, 0x00000593, 0x00000613, 0x0dd00893, 0x73,
+    0x06300513, 0x05d00893, 0x73,
+  ], new TextEncoder().encode("/replacement.thx\0")), 0o755);
+  const child = sys.start("/exec.thx", []), pid = child.pid;
+  assert.equal(await child.done, 7, output.text());
+  assert.equal(child.pid, pid);
+  assert.equal(child.cmd, "/replacement.thx");
+  assert.equal(thistleProcessCount(memory), 3);
+  assert.equal(await sys.wait(pid), 7);
+  assert.equal(loadU32(memory, C_PHYSICAL_NEXT), initial);
 });

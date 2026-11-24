@@ -19,7 +19,7 @@ import type { StartIo } from "../core/kernel.js";
 import { loadI32, loadU32 } from "../native/memory.js";
 import type { ThistleMemory } from "../native/memory.js";
 import { thistleProcessPrepareImage, thistleProcessRunImage } from "../native/process-host.js";
-import { checkNative } from "../host/native-access.js";
+import { checkNative, withImage } from "../host/native-access.js";
 import { ThistleMem64 } from "../native/host-memory.js";
 import type { ThistleExports } from "../native/host-exports.js";
 import {
@@ -358,27 +358,33 @@ export class Rv64 {
     checkNative(thistleProcessPrepareImage(memory, this.s.p.native.hart));
     // Hosted guests use the live canonical VFS through Sys. A read-only native
     // snapshot would hide writes and allocate a second, stale descriptor table.
-    const imageAt = exports.thistleImageReserve(0, raw.length) >>> 0;
-    if (imageAt === 0xffffffff || imageAt + raw.length > memory.bytes.length) bad("ENOMEM", `${core.label} image reservation failed`);
-    memory.bytes.set(raw, imageAt);
-    const loaded = exports.thistleLoadThx(0, this.s.p.native.hart, imageAt, raw.length);
-    const released = exports.thistleImageRelease(0, imageAt, raw.length);
-    if (released !== THISTLE_THX_OK) bad("EPROTO", `${core.label} image release failed (${released})`);
-    if (loaded !== THISTLE_THX_OK) bad("ENOEXEC", `${core.label} rejected THX image (${loaded})`);
-    const startup = this.startup(argv);
-    const startupAt = exports.thistleImageReserve(0, startup.length) >>> 0;
-    if (startupAt === 0xffffffff || startupAt + startup.length > memory.bytes.length) bad("ENOMEM", `${core.label} startup reservation failed`);
-    memory.bytes.set(startup, startupAt);
-    const stackLimit = this.s.k.lim.stack;
+    withImage(memory, raw.length, imageAt => {
+      memory.bytes.set(raw, imageAt);
+      const loaded = exports.thistleLoadThx(0, this.s.p.native.hart, imageAt, raw.length);
+      if (loaded !== THISTLE_THX_OK) bad("ENOEXEC", `${core.label} rejected THX image (${loaded})`);
+    });
+    const startup = this.startup(argv), stackLimit = this.s.k.lim.stack;
     if (!Number.isSafeInteger(stackLimit) || stackLimit < 0 || stackLimit > 0xffffffff) bad("EINVAL", "invalid RV64 stack limit");
-    const started = exports.thistleBuildInitialStack(0, this.s.p.native.hart, startupAt, startup.length, stackLimit);
-    const startupReleased = exports.thistleImageRelease(0, startupAt, startup.length);
-    if (startupReleased !== THISTLE_THX_OK) bad("EPROTO", `${core.label} startup release failed (${startupReleased})`);
-    if (started !== THISTLE_START_OK) bad("ENOEXEC", `${core.label} rejected startup block (${started})`);
+    withImage(memory, startup.length, startupAt => {
+      memory.bytes.set(startup, startupAt);
+      const started = exports.thistleBuildInitialStack(0, this.s.p.native.hart, startupAt, startup.length, stackLimit);
+      if (started !== THISTLE_START_OK) bad("ENOEXEC", `${core.label} rejected startup block (${started})`);
+    });
     this.xState = new BigInt64Array(memory.buffer, THISTLE_HART_BASE + this.s.p.native.hart * THISTLE_HART_STRIDE + H_X, 32);
     this.fState = new BigUint64Array(memory.buffer, THISTLE_HART_BASE + this.s.p.native.hart * THISTLE_HART_STRIDE + H_F, 32);
     this.m = new ThistleMem64(memory, this.s.p.native.hart, exports.thistleHartVirtualTop(0, this.s.p.native.hart), physicalBytes,
       (hart, address, create) => exports.thistleGuestPage(0, hart, address, create ? 1 : 0));
+    this.thistleDescribeImage(exe);
+    checkNative(thistleProcessRunImage(memory, this.s.p.native.hart));
+    this.floor = exports.thistleHartImageFloor(0, this.s.p.native.hart);
+    this.brk = al(this.floor);
+    this.mapAt = 0x4000000000n;
+    this.pc = exports.thistleHartPc(0, this.s.p.native.hart);
+    this.stackAt = exports.thistleHartStackBottom(0, this.s.p.native.hart);
+    return this.runThistleCooperative(core);
+  }
+
+  private thistleDescribeImage(exe: Exe): void {
     this.seg.length = 0;
     const seen: Array<[bigint, bigint]> = [];
     for (const section of exe.sec) {
@@ -390,13 +396,6 @@ export class Rv64 {
       seen.push([at, end]);
       this.seg.push({ name: section.name, at, end, flg: section.flg });
     }
-    checkNative(thistleProcessRunImage(memory, this.s.p.native.hart));
-    this.floor = exports.thistleHartImageFloor(0, this.s.p.native.hart);
-    this.brk = al(this.floor);
-    this.mapAt = 0x4000000000n;
-    this.pc = exports.thistleHartPc(0, this.s.p.native.hart);
-    this.stackAt = exports.thistleHartStackBottom(0, this.s.p.native.hart);
-    return this.runThistleCooperative(core);
   }
 
   /** Schedule RV64 harts cooperatively with shared guest memory and individual registers. */
