@@ -15,7 +15,7 @@
     "test:host": "bun test --timeout 60000 src/test/net-boundary.test.ts src/test/host-rv64.test.ts"
   },
   "devDependencies": {
-    "@kitty-crow/code-guards": "git+https://github.com/kitty-crow/code-guards.git#d1ce06c6b4a71e5f94ca97ba4b0f6780408aa3f6",
+    "@kitty-crow/code-guards": "git+https://github.com/kitty-crow/code-guards.git#a790861394c7312ff512ec9b03346e1fc8268188",
     "@types/node": "^26.1.1",
     "typescript": "^5.9.2"
   },
