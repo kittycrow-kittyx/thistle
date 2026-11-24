@@ -113,3 +113,6 @@ bun run test
 
 - [native/vfs-backing](modules/native/vfs-backing.md)
 - [test/native-vfs-backing.test](modules/test/native-vfs-backing.test.md)
+
+- [host/backing](modules/host/backing.md)
+- [test/host-backing.test](modules/test/host-backing.test.md)

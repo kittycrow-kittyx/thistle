@@ -16,8 +16,9 @@ size, timestamps and set-ID bits. Write one replaces content and clears set-ID
 bits. Logical size may exceed resident storage. Quota includes 128 bytes per
 live inode and regular-file resident bytes; open unlinked inodes remain charged
 until final close. Byte transport and immutable payload carriers belong to the
-host adapter. No host payload adapter has been connected yet.
+host adapter. The host adapter supplies byte transport.
 
-Arena read/write functions return EXDEV for a host-backed inode. Callers must
-use the explicit backing boundary and cannot interpret a handle as an arena
-address. Stale completions return EAGAIN, including after inode reuse.
+| Boundary result | Meaning |
+| --- | --- |
+| EXDEV | Arena read/write requested for a host-backed inode. |
+| EAGAIN | Payload revision changed, including after inode reuse. |

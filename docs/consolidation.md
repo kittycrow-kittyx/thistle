@@ -116,8 +116,8 @@ These are candidate compilation checks, not releases or mikuOS boot evidence.
 Canonical inode records can reference an opaque host byte carrier with separate
 logical size, resident bytes and payload revision. A reserved descriptor commits
 storage metadata only after permission, version and resident-quota checks.
-Native arena access returns EXDEV for these inodes. The Bun carrier and filesystem
-facade are not connected yet. Filesystem ownership remains a migration gate.
+Native arena access returns EXDEV for these inodes. `host/backing.ts` supplies lazy and resident byte carriers. The object filesystem
+facade still owns its original nodes and requires migration.
 
 The untagged ABI 11 inode stride changes to 80 bytes for resident accounting and
 payload versions. The VFS image format and process stride remain unchanged.
