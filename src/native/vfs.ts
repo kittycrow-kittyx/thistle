@@ -583,7 +583,7 @@ export const thistleVfsRelease = (memory: ThistleMemory, inode: U32): void => {
     let fd: U32 = 0;
     while (loadU32(memory, proc + P_STATE) !== 0 && fd < capacity) {
       const at = descriptors + fd * THISTLE_DESCRIPTOR_STRIDE;
-      if (loadU32(memory, at + FD_KIND) >= 2 && loadU32(memory, at + FD_INODE) === inode) return;
+      if (loadU32(memory, at + FD_KIND) !== 0 && loadU32(memory, at + FD_INODE) === inode) return;
       fd += 1;
     }
     index += 1;

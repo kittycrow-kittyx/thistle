@@ -753,6 +753,13 @@ export const thistleSeekDescriptor = (
   return next;
 };
 
+// Shared by the exported host ABI and the mounted guest close syscall under descriptor/VFS locks.
+const closeDescriptorLocked = (memory: ThistleMemory, state: Ptr): void => {
+  const inode = loadU32(memory, state + FD_INODE);
+  fill(memory, state, THISTLE_DESCRIPTOR_STRIDE, 0);
+  thistleVfsRelease(memory, inode);
+};
+
 export const thistleCloseDescriptor = (memory: ThistleMemory, hart: U32, descriptor: U32): I32 => {
   if (!thistleKernelValid(memory) || !validHart(memory, hart)) return -22;
   const proc = processForHart(memory, hart);
@@ -768,9 +775,7 @@ export const thistleCloseDescriptor = (memory: ThistleMemory, hart: U32, descrip
     release(memory, proc + P_LOCK);
     return -11;
   }
-  const inode = loadU32(memory, state + FD_INODE);
-  fill(memory, state, THISTLE_DESCRIPTOR_STRIDE, 0);
-  thistleVfsRelease(memory, inode);
+  closeDescriptorLocked(memory, state);
   release(memory, lock);
   release(memory, proc + P_LOCK);
   return 0;
@@ -2536,10 +2541,7 @@ const mountedFileLocked = (memory: ThistleMemory, hart: U32, proc: Ptr, number: 
   const state = descriptorAt(memory, proc, wordToU32(word(descriptor)));
   const kind = loadU32(memory, state + FD_KIND);
   if (kind === THISTLE_FD_EMPTY) return -9n;
-  if (number === 57) {
-    fill(memory, state, THISTLE_DESCRIPTOR_STRIDE, 0);
-    return 0n;
-  }
+  if (number === 57) { closeDescriptorLocked(memory, state); return 0n; }
   if (number === 63) return mountedRead(memory, hart, state, kind, scratch);
   return -38n;
 };

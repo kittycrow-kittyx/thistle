@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { loadU32, storeU32 } from "../native/memory.js";
 import { thistleCloseDescriptor, thistleImageRelease, thistleImageReserve, thistleOpenPath, thistleReadDescriptor } from "../native/kernel.js";
-import { C_PROCESS_TABLE_BASE, C_VFS_DIRTY, C_VFS_GENERATION, P_FSUID, P_FSGID, THISTLE_VFS_KIND_DIRECTORY, THISTLE_VFS_KIND_FILE } from "../native/abi.js";
+import { C_PROCESS_TABLE_BASE, C_VFS_DIRTY, C_VFS_GENERATION, P_FSUID, P_FSGID, P_DESCRIPTOR_TABLE, THISTLE_DESCRIPTOR_STRIDE, FD_KIND, THISTLE_VFS_KIND_DIRECTORY, THISTLE_VFS_KIND_FILE } from "../native/abi.js";
 import { thistleVfsFileSize, thistleVfsKind, thistleVfsLookup, thistleVfsNlink, thistleVfsReadData } from "../native/vfs.js";
 import { thistleVfsCreate, thistleVfsWrite, thistleVfsLink, thistleVfsUnlink, thistleVfsCanMove, thistleVfsRename, thistleVfsChmod, thistleVfsChown, thistleVfsUtime } from "../native/vfs-edit.js";
 
@@ -100,4 +100,21 @@ test("rename preserves inode identity and rejects directory cycles without mutat
   assert.equal(thistleVfsRename(memory, proc, 1, input, 3, child, input + 16, 3, 4n), -22);
   assert.equal(thistleVfsLookup(memory, 1, input, 3), parent);
   assert.equal(thistleImageRelease(memory, input, 512), 0);
+});
+
+
+test("host descriptors retain unlinked inode storage until close", () => {
+  const memory = setup(), proc = loadU32(memory, C_PROCESS_TABLE_BASE);
+  const input = thistleImageReserve(memory, 1);
+  memory.bytes[input] = 102;
+  const inode = thistleVfsCreate(memory, proc, 1, input, 1, THISTLE_VFS_KIND_FILE, 0o644, 1n);
+  const fd = thistleOpenPath(memory, 0, 1, input, 1, 0);
+  assert.ok(fd >= 3);
+  const descriptor = loadU32(memory, proc + P_DESCRIPTOR_TABLE) + fd * THISTLE_DESCRIPTOR_STRIDE;
+  storeU32(memory, descriptor + FD_KIND, 1);
+  assert.equal(thistleVfsUnlink(memory, proc, 1, input, 1, false, 2n), 0);
+  assert.equal(thistleVfsKind(memory, inode), THISTLE_VFS_KIND_FILE);
+  assert.equal(thistleCloseDescriptor(memory, 0, fd), 0);
+  assert.equal(thistleVfsKind(memory, inode), 0);
+  assert.equal(thistleImageRelease(memory, input, 1), 0);
 });

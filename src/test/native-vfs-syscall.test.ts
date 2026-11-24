@@ -5,8 +5,8 @@ import { directMemory, storeU8, storeU32, loadU8 } from "../native/memory.js";
 import { THISTLE_BATCH_BUDGET, THISTLE_BATCH_SYSCALL, THISTLE_SEGMENT_READ, THISTLE_SEGMENT_WRITE, THISTLE_SEGMENT_EXECUTE } from "../native/abi.js";
 import { thistleKernelInit, thistleKernelInitWithVfs, thistleHartInit, thistleProcessInit, thistleImageReserve, thistleImageRelease, thistleImageBegin,
   thistleImageSegment, thistleImageFinish, thistleHartSetPc, thistleHartSetX, thistleHartGetX, thistleRunRv64Batch,
-  thistleStackPrepare, thistleResumeSyscall, thistleGuestPage, thistleMapHostFile, thistleUnmapHostFile, thistleProcessMapCount } from "../native/kernel.js";
-import { thistleLoadVfs } from "../native/vfs.js";
+  thistleProcessRecord, thistleVfsUnlink, thistleStackPrepare, thistleResumeSyscall, thistleGuestPage, thistleMapHostFile, thistleUnmapHostFile, thistleProcessMapCount } from "../native/kernel.js";
+import { thistleLoadVfs, thistleVfsKind } from "../native/vfs.js";
 
 for (const mounted of [true, false]) test(`guest file syscalls ${mounted ? "use the mounted VFS" : "delegate without a mount"}`, () => {
   const memory = directMemory(64 * 1024 * 1024);
@@ -78,6 +78,12 @@ for (const mounted of [true, false]) test(`guest file syscalls ${mounted ? "use 
   assert.equal(call(62, fd, -1n, 2n), 2n);
   assert.equal(call(63, fd, 0x210100n, 3n), 1n);
   assert.equal(loadU8(memory, page + 0x100), 67);
+  const name = thistleImageReserve(memory, 1);
+  storeU8(memory, name, 102n);
+  assert.equal(thistleVfsUnlink(memory, thistleProcessRecord(memory, 0), 1, name, 1, false, 1n), 0);
+  assert.equal(thistleImageRelease(memory, name, 1), 0);
+  assert.equal(thistleVfsKind(memory, 2), 1);
   assert.equal(call(57, fd), 0n);
+  assert.equal(thistleVfsKind(memory, 2), 0);
   assert.equal(call(63, fd, 0x210100n, 3n), -9n);
 });

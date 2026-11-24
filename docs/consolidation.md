@@ -194,4 +194,12 @@ Payload restoration reuses the native backing commit operation with a root-only 
 
 ## Root image restoration
 
-The host root loader reuses the existing native image serializer and backing commit operation. It restores static metadata, hard links, symlinks and lazy providers into canonical tables. Resident-quota and table checks precede mounting. Native remount checks reject retained file descriptors and non-root working directories. Existing public object VFS and persistence callers still require migration to this loader.
+The host root loader reuses the existing native image serializer and backing commit operation. It restores metadata, hard links, symlinks and lazy providers into canonical tables. Public object VFS and persistence callers still require migration to this loader.
+
+| Root restoration condition | Result |
+| --- | --- |
+| Resident quota or inode/dentry capacity exceeded | `ENOSPC` before mounting |
+| An open descriptor retains an inode | `EBUSY` |
+| A process working directory differs from the old root | `EBUSY` |
+
+The exported close operation and mounted RV64 close syscall share descriptor teardown. Both release the final unlinked inode reference, including descriptors whose payload is serviced by a host capability.

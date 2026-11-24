@@ -96,3 +96,5 @@ and ready snapshots.
 `thistleProcessQueueSignal` and `thistleProcessSignalMask` re-export canonical
 signal metadata operations from process-host. Host adapters marshal delivery
 through their abort capabilities.
+
+Mounted guest close and `thistleCloseDescriptor` use the same descriptor teardown and final-inode release.
