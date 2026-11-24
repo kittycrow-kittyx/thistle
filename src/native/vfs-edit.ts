@@ -12,7 +12,7 @@ import { atomicLoadU64, atomicStoreU64, copyMemory, fill, loadU32, loadU64, stor
 import type { ThistleMemory } from "./memory.js";
 import type { I32, Ptr, U32, U64 } from "./types.js";
 import {
-  allocateData, allowed, residentFits, growData, dentryAt, findChild, hashBytes, inodeAt, parentOf,
+  allocateData, allowed, arenaInodeStatus, residentFits, growData, dentryAt, findChild, hashBytes, inodeAt, parentOf,
   sameName, thistleVfsKind, thistleVfsRelease, thistleVfsCwdHeld, thistleVfsFileSize, validName,
 } from "./vfs.js";
 
@@ -159,10 +159,10 @@ export const thistleVfsWrite = (
 const writeInodeData = (
   memory: ThistleMemory, inode: U32, input: Ptr, length: U32, offset: U32, replace: boolean, now: U64,
 ): I32 => {
+  const status = arenaInodeStatus(memory, inode);
+  if (status !== 0) return status;
   const kind = thistleVfsKind(memory, inode);
-  if (kind !== THISTLE_VFS_KIND_FILE && kind !== THISTLE_VFS_KIND_LINK) return -22;
   const state = inodeAt(memory, inode);
-  if ((loadU32(memory, state + V_FLAGS) & THISTLE_VFS_HOST_BACKING) !== 0) return -18;
   const oldSize = loadU64(memory, state + V_SIZE);
   if (oldSize > 0xffffffffn || offset > 0x7fffffff || length > 0x7fffffff - offset) return -27;
   const required = offset + length;

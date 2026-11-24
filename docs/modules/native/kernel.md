@@ -98,3 +98,7 @@ signal metadata operations from process-host. Host adapters marshal delivery
 through their abort capabilities.
 
 Mounted guest close and `thistleCloseDescriptor` use the same descriptor teardown and final-inode release.
+
+`thistleVfsWriteDescriptor` is the VFS-lock-protected arena write primitive for an
+already validated descriptor record. It uses the open flags and offset, returns
+a byte count or negative errno, and does not resolve the pathname again.

@@ -477,11 +477,17 @@ export const thistleVfsCwdPath = (memory: ThistleMemory, proc: Ptr, output: Ptr,
   return wordToI32(word(length));
 };
 
-const readData = (memory: ThistleMemory, inode: U32, offset: U64, output: Ptr, length: U32): I32 => {
+/** Validate a regular or link inode for arena-backed payload access. */
+export const arenaInodeStatus = (memory: ThistleMemory, inode: U32): I32 => {
   const kind = thistleVfsKind(memory, inode);
   if (kind !== THISTLE_VFS_KIND_FILE && kind !== THISTLE_VFS_KIND_LINK) return -22;
+  return (loadU32(memory, inodeAt(memory, inode) + V_FLAGS) & THISTLE_VFS_HOST_BACKING) !== 0 ? -18 : 0;
+};
+
+const readData = (memory: ThistleMemory, inode: U32, offset: U64, output: Ptr, length: U32): I32 => {
+  const status = arenaInodeStatus(memory, inode);
+  if (status !== 0) return status;
   const state = inodeAt(memory, inode);
-  if ((loadU32(memory, state + V_FLAGS) & THISTLE_VFS_HOST_BACKING) !== 0) return -18;
   const size = loadU64(memory, state + V_SIZE);
   if (offset >= size) return 0;
   const available = size - offset;

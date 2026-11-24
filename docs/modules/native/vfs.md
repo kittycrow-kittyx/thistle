@@ -46,3 +46,6 @@ Path resolution checks that the current component is a searchable directory befo
 `thistleVfsOpenInode` validates file or directory access, finds a descriptor and binds its inode. Append opens start at the current file size. Native read-only path opens use this same allocator and permission check.
 
 `descriptorReadStatus` checks file kind and read flags. `thistleVfsReadDescriptor` copies arena bytes to a reserved image and advances the canonical offset. `thistleVfsSeekDescriptor` implements signed, checked seek and publishes the new offset only on success.
+
+`arenaInodeStatus` checks payload inode kind and rejects host-backed storage
+with `-EXDEV`; native arena reads and writes share this check.

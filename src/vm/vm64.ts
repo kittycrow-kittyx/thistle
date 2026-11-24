@@ -1,6 +1,6 @@
 import { VmFiles } from "./files.js";
 import { bad, KErr, requireValue } from "../core/err.js";
-import type { Errno } from "../core/err.js";
+import { wasiErrnoNumbers as eno } from "../core/errno.js";
 import type { Sig } from "../core/proc.js";
 import type { Sys } from "../core/sys.js";
 import { enc } from "../io/stream.js";
@@ -9,13 +9,7 @@ import { BY64_OP, I64_SZ, Op64 } from "../../thistle-asm/isa64.js";
 import { Sc } from "./vm.js";
 import { Mem64 } from "./mem64.js";
 
-const eno: Record<Errno, number> = {
-  EACCES: 2, EAGAIN: 6, EBADF: 8, EBUSY: 10, ECHILD: 12, EEXIST: 20,
-  EFAULT: 21, EFBIG: 22, EINTR: 27, EINVAL: 28, EIO: 29, EISDIR: 31, ELOOP: 32, EMFILE: 33,
-  ENAMETOOLONG: 37, ENFILE: 41, ENOENT: 44, ENOEXEC: 45, ENOMEM: 48,
-  ENETUNREACH: 46, ENOSPC: 51, ENOSYS: 52, ENOTDIR: 54, ENOTEMPTY: 55, ENOTSUP: 58,
-  EPERM: 63, EPIPE: 64, EPROTO: 65, ERANGE: 68, EROFS: 69, ESRCH: 71, ETIMEDOUT: 73,
-};
+
 
 const MASK = (1n << 64n) - 1n;
 const MAX_IO = 64 * 1024 * 1024;

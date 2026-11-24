@@ -9,3 +9,11 @@ export const errnoNumbers: Record<Errno, number> = {
   ETIMEDOUT: 110, EROFS: 30,
 };
 
+/** WASI Preview 1 numbering, also used by legacy guest interpreters. */
+export const wasiErrnoNumbers: Record<Errno, number> = {
+  EACCES: 2, EAGAIN: 6, EBADF: 8, EBUSY: 10, ECHILD: 12, EEXIST: 20,
+  EFAULT: 21, EFBIG: 22, EINTR: 27, EINVAL: 28, EIO: 29, EISDIR: 31, ELOOP: 32, EMFILE: 33,
+  ENAMETOOLONG: 37, ENFILE: 41, ENOENT: 44, ENOEXEC: 45, ENOMEM: 48,
+  ENETUNREACH: 46, ENOSPC: 51, ENOSYS: 52, ENOTDIR: 54, ENOTEMPTY: 55, ENOTSUP: 58,
+  EPERM: 63, EPIPE: 64, EPROTO: 65, ERANGE: 68, EROFS: 69, ESRCH: 71, ETIMEDOUT: 73, EXDEV: 75,
+};
