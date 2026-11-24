@@ -159,10 +159,13 @@ Hosted `Proc.state` and live exit status read the native process record.
 closures and dispatch counts. Native hart events determine per-thread CPU
 readiness.
 
-Host completion follows I/O cleanup. A process may be a native zombie before
-its host completion promise resolves; the hosted reaper waits for completion
-before releasing its canonical record. A terminal completion receipt survives
-reaping without retaining a live process-state owner.
+Ordinary callback completion follows I/O cleanup. A process may be a native
+zombie before its host completion promise resolves; the hosted reaper waits
+for that completion before releasing its canonical record. Forced termination
+can resolve completion earlier: RV64 execution views are expired immediately,
+and cancellable host transports remove pending reads. Custom host callbacks
+must honour cancellation. Completed status and signal values are retained as
+terminal receipts after reaping.
 
 ## Signal metadata and aborted host operations
 
@@ -172,7 +175,9 @@ The supported signal set and one-slot pending semantics match the hosted API.
 Full Linux signal-action and rt_sigprocmask syscall coverage remains a separate
 integration requirement; the existing RV64 compatibility stubs need review.
 
-Aborting a hosted RV64 guest immediately expires its execution view and wakes
-its pending-operation loop. Late host I/O cannot resume a hart after reaping and
-reuse. Host transport cancellation still requires review for outstanding reads
-on shared input endpoints.
+An RV64 abort marks the execution view inactive and wakes its pending-operation
+loop. Host completion callbacks check that view before accessing registers or
+resuming execution. The regression fixture releases an old write after the hart
+has been reassigned and checks the new guest's waiting state.
+
+Host pipe and terminal readers now use a shared cancellation queue. Aborting a process removes its pending read without closing inherited stdin; Sys, RV64 and legacy guest adapters pass the process signal. Regression fixtures kill and reap a reader, reuse its hart and verify that the next child and parent retain their input. Custom input providers must implement cancellation for pending reads.

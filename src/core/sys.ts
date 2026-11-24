@@ -54,7 +54,7 @@ export class Sys {
     const q: Uint8Array[] = [];
     let n = 0;
     for (;;) {
-      const b = await input.rd();
+      const b = await input.rd(this.p.ac.signal);
       if (!b.length) break;
       q.push(b);
       n += b.length;
@@ -67,7 +67,7 @@ export class Sys {
 
   async chunkb(): Promise<Uint8Array> {
     const input = this.p.input(0) ?? bad("EBADF", "stdin");
-    return input.rd();
+    return input.rd(this.p.ac.signal);
   }
 
   async chunk(): Promise<string> { return dec(await this.chunkb()); }

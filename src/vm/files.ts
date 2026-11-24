@@ -12,7 +12,7 @@ export class VmFiles {
 
   async read(fd: number, n: number): Promise<Uint8Array> {
     if (fd !== 0) return this.s.fdr(fd, n);
-    if (this.ip >= this.sin.length) { this.sin = await (this.s.p.input(0) ?? bad("EBADF", "stdin")).rd(); this.ip = 0; }
+    if (this.ip >= this.sin.length) { this.sin = await (this.s.p.input(0) ?? bad("EBADF", "stdin")).rd(this.s.p.ac.signal); this.ip = 0; }
     const b = this.sin.slice(this.ip, this.ip + n); this.ip += b.length; return b;
   }
 

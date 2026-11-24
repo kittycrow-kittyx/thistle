@@ -5,3 +5,7 @@
 `StartIo` identifies explicit stream overrides; `emptyStart` provides a launch configuration with all overrides absent.
 
 `KernelOptions` names the host dependencies and system configuration required at kernel construction.
+
+Signal delivery consults the canonical mask before completing a sleeping callback. Deferred signals leave that callback alive.
+
+Sessions retain standard-stream references so child exit leaves the parent's inherited input open.

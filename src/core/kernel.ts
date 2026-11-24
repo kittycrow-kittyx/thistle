@@ -142,6 +142,7 @@ export class Kern {
     env.set("USER", name);
     env.set("PWD", home);
     const p = new Proc({ pgid: pid, cmd: "thsh", argv: ["thsh"], cwd: home, env, io }, this.canonical.create(pid, 1, cred));
+    holdStandardIo(io);
     p.state = "run";
     this.procs.set(pid, p);
     this.log(`tty: session pid=${pid} uid=${credUid(cred)}`);
@@ -350,8 +351,8 @@ export class Kern {
     for (const p of q) {
       if (p.pid === 1) continue;
       if (by.native.id("euid") !== 0 && by.native.id("ruid") !== p.native.id("ruid")) bad("EPERM", String(p.pid));
-      if (sig !== 0) p.signal(sig);
-      if (sig !== 0 && (sig === 9 || p.state === "sleep")) p.end(128 + sig);
+      const delivered = p.signal(sig);
+      if (delivered && sig !== 0 && (sig === 9 || p.state === "sleep")) p.end(128 + sig);
       n++;
     }
     this.log(`signal: sig=${sig} target=${id} sender=${by.pid}`);

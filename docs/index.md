@@ -145,3 +145,6 @@ bun run test
 - [test/host-lifecycle.test](modules/test/host-lifecycle.test.md)
 
 - [test/native-signals.test](modules/test/native-signals.test.md)
+
+- [io/read-queue](modules/io/read-queue.md)
+- [test/host-input.test](modules/test/host-input.test.md)

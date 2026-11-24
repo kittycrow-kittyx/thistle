@@ -4,20 +4,20 @@ import { Kern } from "../core/kernel.js";
 import { emptyStart } from "../core/kernel.js";
 import { Sys } from "../core/sys.js";
 import { defaultKernelOptions } from "../core/host-options.js";
-import { MemIn, MemOut, FnOut } from "../io/stream.js";
+import { MemIn, MemOut, FnOut, Pipe, enc } from "../io/stream.js";
 import { Exe, codec } from "../../thistle-asm/fmt.js";
 import { thistleProcessCount, thistleProcessIdentity, thistleHartStatus } from "../native/kernel.js";
 import { loadU32 } from "../native/memory.js";
 import { C_PHYSICAL_NEXT, THISTLE_HART_WAITING } from "../native/abi.js";
 
-const executable = (words: number[], data = new Uint8Array()): Uint8Array => {
+const executable = (words: number[], data = new Uint8Array(), dataFlags = "r"): Uint8Array => {
   const code = new Uint8Array(words.length * 4), view = new DataView(code.buffer);
   words.forEach((word, index) => view.setUint32(index * 4, word, true));
   const exe = new Exe("thistle64");
   exe.isa = "rv64gc";
   exe.entry = 0x10000;
   exe.sec.push({ name: ".text", flg: "rx", align: 4096, addr: 0x10000, size: code.length, data: code });
-  if (data.length !== 0) exe.sec.push({ name: ".rodata", flg: "r", align: 4096, addr: 0x20000, size: data.length, data });
+  if (data.length !== 0) exe.sec.push({ name: ".rodata", flg: dataFlags, align: 4096, addr: 0x20000, size: data.length, data });
   return codec.pack(exe);
 };
 
@@ -158,4 +158,29 @@ test("delayed I/O from a killed guest cannot resume a reused hart", async () => 
   assert.equal(await second.done, 7, errors.text());
   assert.equal(await sys.wait(second.pid), 7);
   assert.equal(thistleProcessCount(memory), 2);
+});
+
+
+test("killing a blocked RV64 reader preserves inherited input", async () => {
+  const kernel = new Kern(), input = new Pipe(), errors = new MemOut();
+  const parent = kernel.session({ sin: input, sout: errors, serr: errors }), sys = new Sys(kernel, parent);
+  const memory = kernel.canonical.memory;
+  sys.mkfile("/read.thx", executable([
+    0x00000513, 0x000205b7, 0x00100613, 0x03f00893, 0x73,
+    0x0005c503, 0x05d00893, 0x73,
+  ], Uint8Array.of(0), "rw"), 0o755);
+  const first = sys.start("/read.thx", []);
+  // Materialisation and host read dispatch settle before this event-loop turn.
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(thistleHartStatus(memory, first.native.hart), THISTLE_HART_WAITING);
+  assert.equal(sys.kill(first.pid, 9), 1);
+  assert.equal(await sys.wait(first.pid), 137);
+  const second = sys.start("/read.thx", []);
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(second.native.hart, first.native.hart);
+  assert.equal(thistleHartStatus(memory, second.native.hart), THISTLE_HART_WAITING);
+  await input.wr(enc("B"));
+  assert.equal(await sys.wait(second.pid), 66, errors.text());
+  await input.wr(enc("parent"));
+  assert.deepEqual(await sys.chunkb(), enc("parent"));
 });
