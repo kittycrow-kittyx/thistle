@@ -5,14 +5,12 @@ import { MemIn, MemOut, enc } from "../io/stream.js";
 import type { In, Out } from "../io/stream.js";
 import { Reg, Vfs } from "../fs/vfs.js";
 import { credGid, credUid, fullCred } from "../fs/vfs.js";
-import type { Cred, ProcCred, SessionCred } from "../fs/vfs.js";
+import type { Cred, ProcCred } from "../fs/vfs.js";
 import { ExecReplace, Fd, Proc } from "./proc.js";
 import type { Io, Sig } from "./proc.js";
 import { Sched } from "./sched.js";
-import { rootCred } from "./config.js";
-import type { AccountConfig } from "./config.js";
-import { defaultKernelOptions } from "./host-options.js";
-import type { KernelOptions } from "./host-options.js";
+import { accountIdentity, defaultKernelOptions } from "./host-options.js";
+import type { HostAccount, KernelOptions } from "./host-options.js";
 import { executeImage, validateExecutable } from "./guest.js";
 export type { KernelOptions } from "./host-options.js";
 
@@ -44,23 +42,7 @@ export interface PInfo {
 
 export interface Mnt { src: string; at: string; kind: string; opt: string; }
 
-const root = rootCred();
-
-const accountCred = (account: AccountConfig | SessionCred): { cred: ProcCred; name: string; home: string } => {
-  if ("cred" in account) {
-    return {
-      cred: fullCred(account.cred),
-      name: account.name,
-      home: account.home,
-    };
-  }
-  const cred = fullCred(account);
-  return {
-    cred,
-    name: credUid(cred) === 0 ? "root" : "guest",
-    home: credUid(cred) === 0 ? "/root" : "/home/guest",
-  };
-};
+const root = accountIdentity().cred;
 
 const procFsCred = (p: Proc): Cred => ({
   uid: p.fsuid,
@@ -151,9 +133,9 @@ export class Kern {
     return p;
   }
 
-  session(io: Io, account: AccountConfig | SessionCred = root): Proc {
+  session(io: Io, account: HostAccount | null = null): Proc {
     this.init();
-    const { cred, name, home } = accountCred(account);
+    const { cred, name, home } = accountIdentity(account);
     const pid = this.canonical.nextPid();
     const env = this.baseEnv();
     env.set("HOME", home);
@@ -356,11 +338,12 @@ export class Kern {
     if (pid <= 2) return;
     const p = this.procs.get(pid) ?? null;
     if (!p || p.code === null) return;
-    const parent = par ?? (this.procs.get(p.ppid) ?? this.procs.get(1) ?? null);
-    if (parent === null) bad("ESRCH", "canonical reaper");
+    const owner = this.procs.get(p.ppid) ?? null;
+    const init = this.procs.get(1) ?? null;
+    const parent = requireValue(par ?? owner ?? init, "canonical reaper");
     this.canonical.reap(parent.native, pid);
     this.procs.delete(pid);
-    if (parent !== null) parent.kids.delete(pid);
+    parent.kids.delete(pid);
   }
 
   kill(id: number, sig: Sig, by: Proc): number {

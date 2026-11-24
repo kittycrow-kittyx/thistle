@@ -50,7 +50,7 @@ export class HostContext {
     } catch (error) {
       thistleExitHart(this.memory, hart, 126);
       if (pid !== 1) checkNative(thistleProcessReap(this.memory, 0, pid));
-      throw error;
+      throw error instanceof Error ? error : new Error(typeof error === "string" ? error : "non-Error process allocation failure");
     }
   }
 }

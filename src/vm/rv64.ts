@@ -355,7 +355,6 @@ export class Rv64 {
     if (exe.machine !== "thistle64" || exe.isa !== "rv64gc") bad("ENOEXEC", "RV64 VM received another instruction profile");
     const raw = image ?? bad("ENOEXEC", `${core.label} needs the original THX image`);
     const { memory, exports } = core;
-    const maxHarts = THISTLE_GUEST_THREADS;
     checkNative(thistleProcessPrepareImage(memory, this.s.p.native.hart));
     // Hosted guests use the live canonical VFS through Sys. A read-only native
     // snapshot would hide writes and allocate a second, stale descriptor table.
@@ -397,82 +396,16 @@ export class Rv64 {
     this.mapAt = 0x4000000000n;
     this.pc = exports.thistleHartPc(0, this.s.p.native.hart);
     this.stackAt = exports.thistleHartStackBottom(0, this.s.p.native.hart);
-    if (maxHarts > 1) return this.runThistleCooperative(core);
-    let fuel = this.s.k.lim.fuel;
-    selectionExit1: while (!this.done) {
-      this.s.chk();
-      const before = exports.thistleHartMetric(0, this.s.p.native.hart, H_INSTRUCTIONS);
-      const result = exports.thistleRunRv64Batch(0, this.s.p.native.hart, 16384, BigInt(Date.now()) * 1000n, 0);
-      const after = exports.thistleHartMetric(0, this.s.p.native.hart, H_INSTRUCTIONS);
-      if (fuel) {
-        fuel -= Number(after - before);
-        ensure(!(fuel < 0), () => bad("ELOOP", "RV64 instruction limit reached"));
-      }
-      this.pc = exports.thistleHartPc(0, this.s.p.native.hart);
-      this.brk = exports.thistleHartBreak(0, this.s.p.native.hart);
-      switch (true) {
-case !!(result === THISTLE_BATCH_SYSCALL): {
-        // A guest syscall is an explicit Thistle-to-host service boundary, not a
-        // return to the direct TypeScript RV64 interpreter. Guest instructions
-        // continue exclusively in the selected generated Thistle execution core.
-        // Thistle owns credentials, brk and anonymous mmap state.
-        // Synchronise the host syscall adapter before servicing the request.
-        this.syncThistleMemoryState(exports);
-
-        await this.sys();
-        if (this.done) break selectionExit1;
-        ensure(!(exports.thistleHartSetPc(0, this.s.p.native.hart, ux(this.pc)) !== 0 || exports.thistleResumeSyscall(0, this.s.p.native.hart, requireValue(this.x[10] ?? null, "src/vm/rv64.ts:562")) !== 0), () => bad("EPROTO", `${core.label} syscall resume failed`));
-
-break; }
-case !!(result === THISTLE_BATCH_HOST): {
-        const operation = exports.thistleHostOperation(0, this.s.p.native.hart);
-        ensure(!(operation !== THISTLE_HOST_WRITE), () => bad("ENOSYS", `${core.label} requested unsupported host operation ${operation}`));
-        const descriptor = exports.thistleHostDescriptor(0, this.s.p.native.hart);
-        const address = exports.thistleHostAddress(0, this.s.p.native.hart);
-        const length = exports.thistleHostLength(0, this.s.p.native.hart);
-        let hostResult: bigint;
-        try {
-          hostResult = BigInt(await this.write(descriptor, this.m.read(address, length)));
-        } catch (caughtValue) { const error = caughtValue instanceof Error ? caughtValue : new Error(typeof caughtValue === "undefined" ? "undefined" : String(caughtValue));
-          if (!(error instanceof KErr)) throw error;
-          hostResult = -BigInt(eno[error.code] ?? 5);
-        }
-        ensure(!(exports.thistleResumeHost(0, this.s.p.native.hart, hostResult) !== 0), () => bad("EPROTO", `${core.label} host-operation resume failed`));
-
-break; }
-case !!(result === THISTLE_BATCH_EXITED): {
-        this.exit(BigInt(exports.thistleHartExitCode(0, this.s.p.native.hart)));
-        break selectionExit1;
-       }
-default: { switch (true) {
-case !!(result === THISTLE_BATCH_FAULT): {
-        const fault = loadI32(memory, THISTLE_HART_BASE + this.s.p.native.hart * THISTLE_HART_STRIDE + H_FAULT);
-        const instruction = loadU32(memory, THISTLE_HART_BASE + this.s.p.native.hart * THISTLE_HART_STRIDE + H_LAST_INSTRUCTION);
-        if (fault === THISTLE_FAULT_BREAKPOINT) bad("EINTR", `RV64 breakpoint at 0x${this.pc.toString(16)}`);
-        bad("ENOEXEC", `${core.label} fault ${fault} on instruction 0x${instruction.toString(16).padStart(8, "0")} at 0x${this.pc.toString(16)}`);
-
-break; }
-case !!(result === THISTLE_BATCH_BUSY || result === THISTLE_BATCH_CONTENDED): {
-        await this.s.yield();
-        continue;
-       }
-} }
-}
-      await this.s.yield();
-    }
-    return this.code & 0xff;
+    return this.runThistleCooperative(core);
   }
 
   /** Schedule RV64 harts cooperatively with shared guest memory and individual registers. */
   private async runThistleCooperative(core: ThistleCore): Promise<number> {
-    const { memory, exports } = core;
-    const session: ThistleThreadRuntime = {"failure": null,
-      core,
-      active: new Set([this.s.p.native.hart]),
+    const session: ThistleThreadRuntime = { failure: null,
+      core, active: new Set([this.s.p.native.hart]),
       pending: new Map<number, Promise<void>>(),
       tids: new Map([[this.s.p.native.hart, this.s.pid]]),
-      clearTid: new Map<number, bigint>(),
-      nextTid: this.s.pid + 100000,
+      clearTid: new Map<number, bigint>(), nextTid: this.s.pid + 100000,
     };
     this.thistleThreads = session;
     let fuel = this.s.k.lim.fuel;
@@ -483,64 +416,53 @@ case !!(result === THISTLE_BATCH_BUSY || result === THISTLE_BATCH_CONTENDED): {
         let progressed = false;
         for (const hart of [...session.active]) {
           if (session.pending.has(hart)) continue;
-          const status = exports.thistleHartStatus(0, hart);
-          if (status === THISTLE_HART_EXITED) {
-            // Guest state updates stay inside the selected instruction or syscall path.
-            //@cg-expect-warning
-            if (hart === this.s.p.native.hart) this.exit(BigInt(exports.thistleHartExitCode(0, this.s.p.native.hart)));
-            else session.active.delete(hart);
-            continue;
-          }
-          if (status === THISTLE_HART_FAULTED) {
-            const base = THISTLE_HART_BASE + hart * THISTLE_HART_STRIDE;
-            const fault = loadI32(memory, base + H_FAULT);
-            const instruction = loadU32(memory, base + H_LAST_INSTRUCTION);
-            this.thistleReportFault(session, hart, fault, instruction);
-          }
-          if (status !== THISTLE_HART_RUNNABLE) continue;
-          const before = exports.thistleHartMetric(0, hart, H_INSTRUCTIONS);
-          const result = exports.thistleRunRv64Batch(0, hart, 16384, BigInt(Date.now()) * 1000n, 0);
-          const executed = exports.thistleHartMetric(0, hart, H_INSTRUCTIONS) - before;
+          const executed = this.thistleStepHart(session, hart);
+          if (executed === null) continue;
           progressed = true;
           if (fuel) {
             fuel -= Number(executed);
             ensure(!(fuel < 0), () => bad("ELOOP", "RV64 instruction limit reached"));
           }
-          switch (true) {
-case !!(result === THISTLE_BATCH_SYSCALL): { this.thistleScheduleSyscall(session, hart);
-break; }
-case !!(result === THISTLE_BATCH_HOST): { this.thistleScheduleHost(session, hart);
-break; }
-case !!(result === THISTLE_BATCH_EXITED): {
-            if (hart === this.s.p.native.hart) this.exit(BigInt(exports.thistleHartExitCode(0, this.s.p.native.hart)));
-            else this.thistleThreadExit(hart, exports.thistleHartExitCode(0, hart));
-
-break; }
-case !!(result === THISTLE_BATCH_FAULT): {
-            const base = THISTLE_HART_BASE + hart * THISTLE_HART_STRIDE;
-            const fault = loadI32(memory, base + H_FAULT);
-            const instruction = loadU32(memory, base + H_LAST_INSTRUCTION);
-            this.thistleReportFault(session, hart, fault, instruction);
-
-break; }
-}
         }
         if (this.done) break;
         if (session.failure) throw session.failure;
-        if (progressed) {
-          await this.s.yield();
-          continue;
-        }
-        if (session.pending.size) {
-          await Promise.race(session.pending.values());
-          continue;
-        }
+        if (progressed) { await this.s.yield(); continue; }
+        if (session.pending.size) { await Promise.race(session.pending.values()); continue; }
         bad("EPROTO", "Thistle has no runnable harts or pending syscalls");
       }
       return this.code & 255;
     } finally {
       this.thistleThreads = null;
     }
+  }
+
+  private thistleObserveExit(session: ThistleThreadRuntime, hart: number): void {
+    const code = session.core.exports.thistleHartExitCode(0, hart);
+    if (hart === this.s.p.native.hart) this.exit(BigInt(code));
+    else this.thistleThreadExit(hart, code);
+  }
+
+  private thistleFault(session: ThistleThreadRuntime, hart: number): never {
+    const { memory } = session.core, base = THISTLE_HART_BASE + hart * THISTLE_HART_STRIDE;
+    return this.thistleReportFault(session, hart, loadI32(memory, base + H_FAULT), loadU32(memory, base + H_LAST_INSTRUCTION));
+  }
+
+  private thistleStepHart(session: ThistleThreadRuntime, hart: number): bigint | null {
+    const { exports } = session.core;
+    const status = exports.thistleHartStatus(0, hart);
+    if (status === THISTLE_HART_EXITED) { this.thistleObserveExit(session, hart); return null; }
+    if (status === THISTLE_HART_FAULTED) this.thistleFault(session, hart);
+    if (status !== THISTLE_HART_RUNNABLE) return null;
+    const before = exports.thistleHartMetric(0, hart, H_INSTRUCTIONS);
+    const result = exports.thistleRunRv64Batch(0, hart, 16384, BigInt(Date.now()) * 1000n, 0);
+    const executed = exports.thistleHartMetric(0, hart, H_INSTRUCTIONS) - before;
+    switch (result) {
+      case THISTLE_BATCH_SYSCALL: this.thistleScheduleSyscall(session, hart); break;
+      case THISTLE_BATCH_HOST: this.thistleScheduleHost(session, hart); break;
+      case THISTLE_BATCH_EXITED: this.thistleObserveExit(session, hart); break;
+      case THISTLE_BATCH_FAULT: this.thistleFault(session, hart);
+    }
+    return executed;
   }
 
   /** Include the guest mapping and execution registers when a hart faults. */

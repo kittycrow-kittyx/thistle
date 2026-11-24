@@ -91,7 +91,8 @@ Native reaping now releases descriptor references and guest frames, preserving
 other live processes. Frame reuse and tail trimming support a long-lived
 kernel instance. The PID allocator, credential operations and umask use the
 canonical record; differential tests compare the existing hosted contract.
-The hosted process, filesystem and scheduler facades have not yet been switched.
+Hosted identity and RV64 instance ownership are migrated below. Filesystem,
+descriptor, signal and scheduler ownership remain pending.
 
 Supplementary groups now use canonical extension frames beyond the 32 inline
 entries. RV64 syscalls, host operations and VFS permission checks share that
@@ -127,3 +128,26 @@ The host directory reader now consumes canonical dentry cursor records. It has
 no name-to-node map. Shared host access helpers own synchronous lock/lease
 callbacks, with contended lease release retried by the event loop. Existing
 `Dir.ent` consumers still require migration to these canonical snapshots.
+
+## Shared hosted instance and identity
+
+`Kern.canonical` now owns one native memory instance. `Proc` reads PID, parent,
+process group, credentials, filesystem IDs and umask through its native view.
+`Sys` credential setters call native policy. The hosted PID counter and
+credential-policy implementation are removed.
+
+RV64 guests load into that same process record and memory. The adapter uses
+physical leader harts, allocates secondary harts from canonical status, fences
+expired image callbacks and no longer copies guest credentials into host fields.
+Host completion retires all bound harts; waiting reaps native resources.
+
+The strict/compiler checkpoint before this migration is
+`355b4bbfaf83e1adbf1ceb7a318bad08336e3ce6`: Kernel validation 45334388740 and
+Canonical compiler validation 45334388778. The shared-instance candidate
+`138f0a0a7bab48e788f6868ef1c0102291bdb700` passed all behavioural tests and
+compiler targets; subsequent edits resolve strict guard and type findings.
+No final promotion or release is implied.
+
+`Proc` credential getters now return snapshots. Direct field or group-array
+mutation is a source compatibility change for the planned major release.
+Consumers must use checked syscall operations or trusted loader metadata.
