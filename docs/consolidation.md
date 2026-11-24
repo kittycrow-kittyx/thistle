@@ -236,3 +236,5 @@ RV64 file mappings use retained native inode records for byte transport. The hos
 Shared mapping write-back uses a canonical byte bitmap allocated with guest pages. Clean bytes are not copied back over newer inode contents. Native stores, atomic writes and host syscall output share the marking path. Immediate cross-process mapping visibility remains a parity gate.
 
 Shared-file view revisions now live in native mapping records. The cooperative bridge refreshes stale views before execution, publishes dirty batches before dispatch, and uses a native batch boundary for shared aliases. Parallel host transports are not validated by this cooperative test.
+
+The native vfork lease exchanges page, segment and map table ownership between a parked parent and a fresh child process, retaining the parent's native register file. The lease returns the original tables before reaping or image preparation. Production RV64 clone dispatch still needs to create and run the native child; the old snapshot path is not yet removed.

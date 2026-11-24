@@ -26,8 +26,8 @@ export const mountedKernel = (harts = 1): ThistleMemory => {
   return memory;
 };
 
-export const mappingKernel = () => {
-  const memory = mountedKernel();
+export const mappingKernel = (harts = 1) => {
+  const memory = mountedKernel(harts);
   withImage(memory, 4, input => {
     storeU32(memory, input, 0x73);
     assert.equal(thistleImageBegin(memory, 0, 0x10000000n, 0x200000n, 0n, 0, 0), 0);

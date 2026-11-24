@@ -41,3 +41,5 @@ The mask operation uses a reserved 16-byte request.
 
 Supported signals are 0, 1, 2, 9, 13 and 15. The pending slot retains the hosted
 single-deferred-signal contract.
+
+Image preparation and runnable publication reject an active vfork lease; finish may mark a process zombie while the lease remains held.

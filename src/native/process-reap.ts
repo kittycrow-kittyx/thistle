@@ -2,7 +2,7 @@ import {
   C_CREDENTIAL_LOCK, C_MAX_HARTS, C_MEMORY_LOCK, C_PROCESS_COUNT, C_PROCESS_LOCK,
   C_VFS_LOCK, H_LOCK, H_PROCESS_SLOT, P_DESCRIPTOR_CAPACITY,
   P_EUID, P_PID, P_PPID,
-  P_STATE, P_LOCK, THISTLE_HART_STRIDE,
+  P_STATE, P_LOCK, P_VFORK_CHILD, P_VFORK_PARENT, THISTLE_HART_STRIDE,
   THISTLE_PROCESS_STRIDE, THISTLE_PROCESS_ZOMBIE,
 } from "./abi.js";
 import { validProcessFrames, releaseProcessFrames, trimFreeFrames } from "./arena.js";
@@ -63,6 +63,7 @@ const reapProcess = (memory: ThistleMemory, parent: Ptr, pid: U32): I32 => {
   const proc = processAt(memory, slot);
   if (loadU32(memory, parent + P_EUID) !== 0 && loadU32(memory, proc + P_PPID) !== loadU32(memory, parent + P_PID)) return -10;
   if (loadU32(memory, proc + P_STATE) !== wordToU32(word(THISTLE_PROCESS_ZOMBIE))) return -11;
+  if (loadU32(memory, proc + P_VFORK_CHILD) !== 0 || loadU32(memory, proc + P_VFORK_PARENT) !== 0) return -16;
   if (!lockProcessHarts(memory, slot)) return -11;
   if (compareExchangeI32(memory, proc + P_LOCK, 0, 1) !== 0) {
     unlockProcessHarts(memory, slot, loadU32(memory, C_MAX_HARTS), INVALID_POINTER);

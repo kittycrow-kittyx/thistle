@@ -1,7 +1,7 @@
 import {
   C_MAX_HARTS, C_PROCESS_LOCK, H_EVENT, H_FAULT, H_FCSR, H_HOST_OPERATION,
   H_PROCESS_SLOT, H_RESERVATION, H_STATUS, H_X, H_F, H_EXIT_CODE,
-  P_LEADER_HART, P_STATE, P_PID, P_EXIT_CODE, P_SEGMENT_COUNT, P_IMAGE_ENTRY,
+  P_LEADER_HART, P_STATE, P_PID, P_EXIT_CODE, P_SEGMENT_COUNT, P_IMAGE_ENTRY, P_VFORK_CHILD, P_VFORK_PARENT,
   P_SIGNAL_PENDING, P_SIGNAL_LAST, P_SIGNAL_MASK,
   THISTLE_HART_EMPTY, THISTLE_HART_EXITED, THISTLE_HART_RUNNABLE,
   THISTLE_HART_WAITING, THISTLE_PROCESS_RUNNABLE, THISTLE_PROCESS_WAITING,
@@ -122,6 +122,7 @@ const changeLocked = (memory: ThistleMemory, hart: U32, proc: Ptr, operation: U3
   if (operation === 5) return queueSignalLocked(memory, proc, code);
   if (operation === 6) return loadU32(memory, proc + P_STATE) === THISTLE_PROCESS_ZOMBIE
     ? -22 : maskSignalsLocked(memory, proc, code, input);
+  if (operation !== 3 && (loadU32(memory, proc + P_VFORK_CHILD) !== 0 || loadU32(memory, proc + P_VFORK_PARENT) !== 0)) return -16;
   if (loadU32(memory, proc + P_LEADER_HART) !== hart ||
       operation !== 3 && loadU32(memory, proc + P_STATE) === THISTLE_PROCESS_ZOMBIE) return -22;
   const slot = loadU32(memory, hartAt(hart) + H_PROCESS_SLOT);

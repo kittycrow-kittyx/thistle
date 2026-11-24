@@ -141,6 +141,7 @@ bun run test
 - [test/native-image-lifetime.test](modules/test/native-image-lifetime.test.md)
 
 - [native/process-host](modules/native/process-host.md)
+- [native/vfork](modules/native/vfork.md)
 - [test/native-process-host.test](modules/test/native-process-host.test.md)
 
 - [host/context](modules/host/context.md)
@@ -149,6 +150,7 @@ bun run test
 - [test/native-guest-access.test](modules/test/native-guest-access.test.md)
 
 - [test/native-host-map.test](modules/test/native-host-map.test.md)
+- [test/native-vfork.test](modules/test/native-vfork.test.md)
 
 - [test/host-lifecycle.test](modules/test/host-lifecycle.test.md)
 - [test/host-descriptor.test](modules/test/host-descriptor.test.md)

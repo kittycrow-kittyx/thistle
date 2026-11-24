@@ -120,3 +120,5 @@ The dispatcher imports the filesystem surface from [vfs-api](vfs-api.md), which 
 The shared-file mapping flag avoids scanning the map table for ordinary guest stores. It tracks retained shared write authority, including mappings temporarily protected against writes.
 
 Guest batches with multiple shared views yield after a mapped write, allowing the byte transport to publish the change before another guest instruction. `thistleMarkGuestWrite` returns one when shared bytes were marked, zero for other writes, and a negative errno on failure.
+
+`thistleVforkBegin` and `thistleVforkRelease` manage the native address-space lease. A parked parent cannot resume its clone syscall until release.

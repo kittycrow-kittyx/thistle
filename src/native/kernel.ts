@@ -155,6 +155,7 @@ import {
   P_PGID,
   P_PAGE_CAPACITY,
   P_PAGE_COUNT,
+  P_VFORK_CHILD,
   P_PAGE_TABLE,
   P_PID,
   P_PPID,
@@ -3181,7 +3182,9 @@ export const thistleResumeSyscall = (memory: ThistleMemory, hart: U32, result: I
   if (!validHart(memory, hart)) return THISTLE_FAULT_BAD_STATE;
   const at = hartAt(hart);
   if (!acquire(memory, at + H_LOCK)) return THISTLE_BATCH_BUSY;
-  if (atomicLoadI32(memory, at + H_STATUS) !== THISTLE_HART_WAITING || loadI32(memory, at + H_EVENT) !== THISTLE_EVENT_SYSCALL) {
+  const owner = processForHart(memory, hart);
+  if (atomicLoadI32(memory, at + H_STATUS) !== THISTLE_HART_WAITING || loadI32(memory, at + H_EVENT) !== THISTLE_EVENT_SYSCALL ||
+      owner !== INVALID_POINTER && loadU32(memory, owner + P_VFORK_CHILD) !== 0) {
     release(memory, at + H_LOCK);
     return THISTLE_FAULT_BAD_STATE;
   }
@@ -3282,3 +3285,5 @@ export { thistleProcessInstallCredentials, thistleProcessAttach, thistleProcessS
 export { thistleVfsBacking, thistleVfsBackingVersion, thistleVfsCommitBacking, thistleVfsCommitDescriptorBacking, thistleVfsSetQuota } from "./vfs-backing.js";
 
 export { thistleProcessSignalMask, thistleProcessQueueSignal, thistleProcessSetHostState, thistleProcessFinish, thistleProcessPark, thistleProcessPrepareImage, thistleProcessRunImage } from "./process-host.js";
+
+export { thistleVforkBegin, thistleVforkRelease } from "./vfork.js";
