@@ -102,3 +102,5 @@ Mounted guest close and `thistleCloseDescriptor` use the same descriptor teardow
 `thistleVfsWriteDescriptor` is the VFS-lock-protected arena write primitive for an
 already validated descriptor record. It uses the open flags and offset, returns
 a byte count or negative errno, and does not resolve the pathname again.
+
+`thistleVfsCommitDescriptorBacking` re-exports the open-file carrier publication primitive from [vfs-backing](vfs-backing.md).

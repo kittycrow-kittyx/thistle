@@ -148,6 +148,7 @@ bun run test
 - [test/host-lifecycle.test](modules/test/host-lifecycle.test.md)
 - [test/host-descriptor.test](modules/test/host-descriptor.test.md)
 - [test/host-file-descriptor.test](modules/test/host-file-descriptor.test.md)
+- [test/host-carrier-descriptor.test](modules/test/host-carrier-descriptor.test.md)
 
 - [test/native-signals.test](modules/test/native-signals.test.md)
 

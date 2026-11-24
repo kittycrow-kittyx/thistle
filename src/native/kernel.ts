@@ -290,7 +290,6 @@ import {
 import {
   descriptorAt, releaseDescriptor, installDescriptor, thistleVfsOpenInode, descriptorReadStatus, descriptorReadCount, thistleVfsReadDescriptor, thistleVfsSeekDescriptor,
   thistleVfsAccess,
-  thistleVfsFileSize,
   thistleVfsKind,
   thistleVfsReadScratch,
   thistleVfsLoaded,
@@ -3073,6 +3072,6 @@ export { thistleVfsCreate, thistleVfsWrite, thistleVfsWriteDescriptor, thistleVf
 
 export { thistleProcessReap } from "./process-reap.js";
 export { thistleProcessInstallCredentials, thistleProcessAttach, thistleProcessSetGroup, thistleProcessReadGroups, thistleProcessRecord, thistleNextPid, thistleProcessIdentity, thistleProcessGroups, thistleProcessUmask } from "./process-state.js";
-export { thistleVfsBacking, thistleVfsBackingVersion, thistleVfsCommitBacking, thistleVfsSetQuota } from "./vfs-backing.js";
+export { thistleVfsBacking, thistleVfsBackingVersion, thistleVfsCommitBacking, thistleVfsCommitDescriptorBacking, thistleVfsSetQuota } from "./vfs-backing.js";
 
 export { thistleProcessSignalMask, thistleProcessQueueSignal, thistleProcessSetHostState, thistleProcessFinish, thistleProcessPark, thistleProcessPrepareImage, thistleProcessRunImage } from "./process-host.js";
