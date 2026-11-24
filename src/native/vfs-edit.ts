@@ -6,7 +6,7 @@ import {
   THISTLE_VFS_KIND_FILE, THISTLE_VFS_KIND_LINK, V_ATIME, V_CAPACITY, V_CTIME,
   V_DATA, V_FLAGS, V_VERSION, V_IDENTITY, THISTLE_VFS_HOST_BACKING, V_GID, V_KIND, V_MODE, V_MTIME, V_NLINK, V_SIZE, V_UID,
 } from "./abi.js";
-import { word, ux, wordToU32 } from "./word.js";
+import { word, ux, wordToI32, wordToU32 } from "./word.js";
 import { inputContains } from "./arena.js";
 import { atomicLoadU64, atomicStoreU64, copyMemory, fill, loadU8, loadU32, loadU64, storeU32, storeU64 } from "./memory.js";
 import type { ThistleMemory } from "./memory.js";
@@ -173,7 +173,7 @@ const createMissingFile = (
   if (loadU8(memory, path + length - 1) === 47) return -21;
   let name = path + length;
   while (name > path && loadU8(memory, name - 1) !== 47) name -= 1;
-  const parentResult = name === path ? wordToI32(word(base)) :
+  const parentResult: I32 = name === path ? wordToI32(word(base)) :
     thistleVfsResolve(memory, proc, base, path, name - path, true);
   if (parentResult < 0) return parentResult;
   const parent = wordToU32(word(parentResult)), nameLength = path + length - name;
@@ -203,6 +203,19 @@ const truncateInode = (memory: ThistleMemory, inode: U32, now: U64): void => {
   changed(memory);
 };
 
+/** Reserve a descriptor slot before creating a new file. */
+// The native ABI passes the original path, mode, rights and timestamp.
+//@cg-expect-warning
+const createOpenedFile = (
+  memory: ThistleMemory, proc: Ptr, base: U32, path: Ptr, length: U32,
+  mode: U32, rights: U32, now: U64,
+): I32 => {
+  if (freeDescriptor(memory, proc, 3) < 0) return -24;
+  const made = createMissingFile(memory, proc, base, path, length, mode & ~loadU32(memory, proc + P_UMASK), now, 0);
+  if (made < 0) return made;
+  return allocateInodeDescriptor(memory, proc, wordToU32(word(made)), rights, 3);
+};
+
 /** Common Linux-style path open; caller holds descriptor, credential and VFS locks. */
 // The native ABI passes scalar path, flags, mode and time without a host record.
 //@cg-expect-warning
@@ -220,12 +233,7 @@ export const thistleVfsOpenPath = (
   const rights: U32 = access === 0 ? THISTLE_FD_READ : access === 1 ? THISTLE_FD_WRITE : THISTLE_FD_READ | THISTLE_FD_WRITE;
   const extra: U32 = ((flags & OPEN_CLOEXEC) !== 0 ? THISTLE_FD_CLOEXEC : 0) |
     ((flags & OPEN_APPEND) !== 0 && access !== 0 ? THISTLE_FD_APPEND : 0);
-  if (resolved === -2 && create) {
-    if (freeDescriptor(memory, proc, 3) < 0) return -24;
-    const made = createMissingFile(memory, proc, base, path, length, mode & ~loadU32(memory, proc + P_UMASK), now, 0);
-    if (made < 0) return made;
-    return allocateInodeDescriptor(memory, proc, wordToU32(word(made)), rights | extra, 3);
-  }
+  if (resolved === -2 && create) return createOpenedFile(memory, proc, base, path, length, mode, rights | extra, now);
   if (resolved < 0) return resolved;
   if (exclusive) return -17;
   const inode = wordToU32(word(resolved)), kind = thistleVfsKind(memory, inode);

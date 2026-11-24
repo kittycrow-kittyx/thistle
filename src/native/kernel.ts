@@ -2505,15 +2505,15 @@ const mountedFileSyscall = (memory: ThistleMemory, hart: U32, proc: Ptr, number:
   const vfsLock = THISTLE_CONTROL_BASE + C_VFS_LOCK;
   if (!acquire(memory, lock)) return internalSyscall(memory, hart, -11n);
   const credentials = THISTLE_CONTROL_BASE + C_CREDENTIAL_LOCK;
-  if (number === 56 && !acquire(memory, credentials)) { release(memory, lock); return internalSyscall(memory, hart, -11n); }
+  if (!acquire(memory, credentials)) { release(memory, lock); return internalSyscall(memory, hart, -11n); }
   if (!acquire(memory, vfsLock)) {
-    if (number === 56) release(memory, credentials);
+    release(memory, credentials);
     release(memory, lock);
     return internalSyscall(memory, hart, -11n);
   }
   const result = mountedFileLocked(memory, hart, proc, number, now);
   release(memory, vfsLock);
-  if (number === 56) release(memory, credentials);
+  release(memory, credentials);
   release(memory, lock);
   if (result === -18n && hostTransport(memory)) return fallbackSyscall(memory, hart);
   return internalSyscall(memory, hart, result);
