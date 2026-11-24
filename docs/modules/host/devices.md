@@ -1,3 +1,3 @@
-# host/devices
+# Character device transports
 
-`CharacterDevice` describes only host byte callbacks and repeat behaviour. `registerDevice` binds these callbacks to an existing canonical character inode as root. `readDevice` and `writeDevice` consume the native open rights and descriptor incarnation, release locks before invoking callbacks and revalidate the offset before committing completion. Stale inode incarnations cannot reuse a device registration. The registry does not own names, inode metadata, permissions or descriptor lifetimes.
+`CharacterDevice`: host read/write callbacks and repeat-read policy. `registerDevice`: root-only registration for a canonical character inode. `readDevice` and `writeDevice`: check open rights, invoke the transport outside native locks, then verify the descriptor and cursor before recording the transfer. Registration keys are inode numbers with incarnation tokens; a recycled inode without a new registration returns `EIO`.

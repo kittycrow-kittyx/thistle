@@ -153,6 +153,7 @@ bun run test
 - [test/host-file-descriptor.test](modules/test/host-file-descriptor.test.md)
 - [test/host-carrier-descriptor.test](modules/test/host-carrier-descriptor.test.md)
 - [test/host-path-open.test](modules/test/host-path-open.test.md)
+- [test/host-device.test](modules/test/host-device.test.md)
 
 - [test/native-signals.test](modules/test/native-signals.test.md)
 
