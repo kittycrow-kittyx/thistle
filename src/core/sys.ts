@@ -187,6 +187,7 @@ export class Sys {
 
   fdr(fd: number, len = 65536): Uint8Array {
     const f = this.p.fds.get(fd) ?? bad("EBADF", String(fd));
+    if (f.inode !== 0) return f.readFile(len);
     const path = f.path ?? bad("EBADF", String(fd));
     if (!f.rd) bad("EBADF", String(fd));
     const h = this.k.fs.at(path, this.cwd, this.fcred);
@@ -203,6 +204,7 @@ export class Sys {
 
   fdw(fd: number, b: Uint8Array): number {
     const f = this.p.fds.get(fd) ?? bad("EBADF", String(fd));
+    if (f.inode !== 0) return f.writeFile(b);
     const path = f.path ?? bad("EBADF", String(fd));
     if (!f.wr) bad("EBADF", String(fd));
     const h = this.k.fs.at(path, this.cwd, this.fcred);
@@ -223,6 +225,7 @@ export class Sys {
 
   seek(fd: number, off: number, whence = 0): number {
     const f = this.p.fds.get(fd) ?? bad("EBADF", String(fd));
+    if (f.inode !== 0) return f.seekFile(off, whence);
     const path = f.path ?? bad("EBADF", String(fd));
     const base = whence === 0 ? 0 : whence === 1 ? f.pos : this.stat(path).size;
     const n = base + off;

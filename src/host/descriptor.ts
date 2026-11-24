@@ -1,10 +1,11 @@
 import { bad } from "../core/err.js";
 import { C_CREDENTIAL_LOCK, FD_FLAGS, FD_IDENTITY, FD_INODE, FD_KIND, FD_OFFSET, P_DESCRIPTOR_CAPACITY, THISTLE_FD_EMPTY, THISTLE_FD_HOST } from "../native/abi.js";
 import { loadU32, loadU64, storeU32, storeU64 } from "../native/memory.js";
-import { descriptorAt, freeDescriptor, installDescriptor, releaseDescriptor, thistleVfsIdentity, thistleVfsOpenInode } from "../native/vfs.js";
-import { checkNative, withVfsLock, withNativeLock } from "./native-access.js";
+import { descriptorAt, freeDescriptor, installDescriptor, releaseDescriptor, thistleVfsIdentity, thistleVfsOpenInode, thistleVfsReadDescriptor, thistleVfsSeekDescriptor } from "../native/vfs.js";
+import { checkNative, withVfsLock, withNativeLock, withImage } from "./native-access.js";
 import type { HostProcess } from "./process.js";
 import type { HostInode } from "./inode.js";
+import { thistleVfsWriteDescriptor } from "../native/vfs-edit.js";
 
 const slot = (process: HostProcess, record: number, number: number): number => {
   if (!Number.isInteger(number) || number < 0 || number >= loadU32(process.memory, record + P_DESCRIPTOR_CAPACITY)) bad("EBADF", "descriptor outside canonical table");
@@ -112,6 +113,35 @@ export class HostDescriptor {
   set offset(value: number) {
     validOffset(value);
     this.access(state => storeU64(this.process.memory, state + FD_OFFSET, BigInt(value)));
+  }
+
+  readFile(length: number): Uint8Array {
+    if (!Number.isSafeInteger(length) || length < 0) bad("EINVAL", "invalid descriptor read length");
+    const memory = this.process.memory, amount = Math.min(length, 1048576);
+    return withImage(memory, Math.max(1, amount), input => this.access(state => withVfsLock(memory, () => {
+      const count = thistleVfsReadDescriptor(memory, state, input, amount);
+      checkNative(count);
+      return memory.bytes.slice(input, input + count);
+    })));
+  }
+
+  writeFile(bytes: Uint8Array): number {
+    const memory = this.process.memory, amount = Math.min(bytes.length, 1048576);
+    return withImage(memory, Math.max(1, amount), input => this.access(state => withVfsLock(memory, () => {
+      memory.bytes.set(bytes.subarray(0, amount), input);
+      const count = thistleVfsWriteDescriptor(memory, state, input, amount, BigInt(Date.now()));
+      checkNative(count);
+      return count;
+    })));
+  }
+
+  seekFile(offset: number, whence: number): number {
+    if (!Number.isSafeInteger(offset) || !Number.isInteger(whence) || whence < 0 || whence > 2) bad("EINVAL", "invalid descriptor seek");
+    const memory = this.process.memory;
+    const result = this.access(state => withVfsLock(memory, () => thistleVfsSeekDescriptor(memory, state, BigInt(offset), whence)));
+    if (result < 0n) checkNative(Number(result));
+    if (result > BigInt(Number.MAX_SAFE_INTEGER)) bad("EFBIG", "descriptor offset exceeds host integer range");
+    return Number(result);
   }
 
   close(): void {

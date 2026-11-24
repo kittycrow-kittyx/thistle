@@ -1,6 +1,6 @@
 export type Errno =
   | "EACCES" | "EAGAIN" | "EBADF" | "EBUSY" | "ECHILD" | "EEXIST"
-  | "EFAULT" | "EFBIG" | "EINTR" | "EINVAL" | "EIO" | "EISDIR" | "ELOOP" | "EMFILE"
+  | "EXDEV" | "EFAULT" | "EFBIG" | "EINTR" | "EINVAL" | "EIO" | "EISDIR" | "ELOOP" | "EMFILE"
   | "ENAMETOOLONG" | "ENFILE" | "ENOENT" | "ENOEXEC" | "ENOMEM"
   | "ENETUNREACH" | "ENOSPC" | "ENOSYS" | "ENOTDIR" | "ENOTEMPTY" | "ENOTSUP"
   | "EPERM" | "EPIPE" | "EPROTO" | "ERANGE" | "EROFS" | "ESRCH" | "ETIMEDOUT";

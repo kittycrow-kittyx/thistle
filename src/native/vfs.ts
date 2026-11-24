@@ -75,7 +75,7 @@ import {
 } from "./memory.js";
 import type { ThistleMemory } from "./memory.js";
 import type { I32, I64, Ptr, U32, U64 } from "./types.js";
-import { mulU32, ux, word, wordToI32, wordToU32 } from "./word.js";
+import { mulU32, sx, ux, word, wordToI32, wordToU32 } from "./word.js";
 
 const VFS_HEADER_SIZE: U32 = 32;
 const VFS_INODE_IMAGE_SIZE: U32 = 56;
@@ -493,6 +493,36 @@ const readData = (memory: ThistleMemory, inode: U32, offset: U64, output: Ptr, l
 export const thistleVfsReadData = (memory: ThistleMemory, inode: U32, offset: U64, output: Ptr, length: U32): I32 => {
   if (!inputContains(memory, output, length)) return -22;
   return readData(memory, inode, offset, output, length);
+};
+
+/** Descriptor read policy is independent of the output transport. */
+export const descriptorReadStatus = (memory: ThistleMemory, state: Ptr): I32 => {
+  const kind = loadU32(memory, state + FD_KIND);
+  if (kind === THISTLE_FD_DIRECTORY) return -21;
+  if (kind !== THISTLE_FD_FILE || (loadU32(memory, state + FD_FLAGS) & THISTLE_FD_READ) === 0) return -9;
+  return 0;
+};
+
+/** Read arena bytes through a live descriptor and advance only on success. */
+export const thistleVfsReadDescriptor = (memory: ThistleMemory, state: Ptr, output: Ptr, length: U32): I32 => {
+  const status = descriptorReadStatus(memory, state);
+  if (status !== 0 || length === 0) return status;
+  const offset = loadU64(memory, state + FD_OFFSET);
+  const amount = thistleVfsReadData(memory, loadU32(memory, state + FD_INODE), offset, output, length);
+  if (amount > 0) storeU64(memory, state + FD_OFFSET, offset + ux(word(amount)));
+  return amount;
+};
+
+export const thistleVfsSeekDescriptor = (memory: ThistleMemory, state: Ptr, offset: I64, whence: U32): I64 => {
+  const kind = loadU32(memory, state + FD_KIND);
+  if (kind !== THISTLE_FD_FILE && kind !== THISTLE_FD_DIRECTORY) return -9n;
+  if (whence > 2) return -22n;
+  const base: I64 = whence === 1 ? sx(loadU64(memory, state + FD_OFFSET), 64) :
+    whence === 2 ? sx(thistleVfsFileSize(memory, loadU32(memory, state + FD_INODE)), 64) : 0n;
+  const next = base + offset;
+  if (next < 0n || next > 0x7fffffffffffffffn || (offset > 0n && next < base)) return -22n;
+  storeU64(memory, state + FD_OFFSET, ux(next));
+  return next;
 };
 
 // The caller holds the VFS lock. The destination is the fixed kernel scratch arena.

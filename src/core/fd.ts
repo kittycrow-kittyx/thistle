@@ -44,6 +44,10 @@ export class Fd {
 
   get inode(): number { return this.native === null ? 0 : this.native.inode; }
 
+  readFile(length: number): Uint8Array { return (this.native ?? bad("EBADF")).readFile(length); }
+  writeFile(bytes: Uint8Array): number { return (this.native ?? bad("EBADF")).writeFile(bytes); }
+  seekFile(offset: number, whence: number): number { return (this.native ?? bad("EBADF")).seekFile(offset, whence); }
+
   closeNative(): void {
     const native = this.native ?? bad("EBADF", "descriptor not installed");
     native.close();

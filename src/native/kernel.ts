@@ -202,7 +202,6 @@ import {
   THISTLE_MAP_BACKING_HOST_FILE,
   THISTLE_MAP_CAPACITY,
   THISTLE_MAP_STRIDE,
-  FD_FLAGS,
   FD_INODE,
   FD_KIND,
   FD_OFFSET,
@@ -211,7 +210,6 @@ import {
   THISTLE_FD_CLOEXEC,
   THISTLE_FD_DIRECTORY,
   THISTLE_FD_EMPTY,
-  THISTLE_FD_FILE,
   THISTLE_FD_HOST,
   THISTLE_FD_READ,
   THISTLE_FD_WRITE,
@@ -290,11 +288,10 @@ import {
   unsignedWordToFloat,
 } from "./word.js";
 import {
-  descriptorAt, releaseDescriptor, installDescriptor, thistleVfsOpenInode,
+  descriptorAt, releaseDescriptor, installDescriptor, thistleVfsOpenInode, descriptorReadStatus, thistleVfsReadDescriptor, thistleVfsSeekDescriptor,
   thistleVfsAccess,
   thistleVfsFileSize,
   thistleVfsKind,
-  thistleVfsReadData,
   thistleVfsReadScratch,
   thistleVfsLoaded,
   thistleVfsResolve,
@@ -664,25 +661,7 @@ export const thistleReadDescriptor = (
     release(memory, proc + P_LOCK);
     return -11;
   }
-  const state = descriptorAt(memory, proc, descriptor);
-  const kind = loadU32(memory, state + FD_KIND);
-  if (kind === THISTLE_FD_DIRECTORY) {
-    release(memory, vfsLock);
-    release(memory, proc + P_LOCK);
-    return -21;
-  }
-  if (kind !== THISTLE_FD_FILE || (loadU32(memory, state + FD_FLAGS) & THISTLE_FD_READ) === 0) {
-    release(memory, vfsLock);
-    release(memory, proc + P_LOCK);
-    return -9;
-  }
-  if (length === 0) {
-    release(memory, vfsLock);
-    release(memory, proc + P_LOCK);
-    return 0;
-  }
-  const amount = thistleVfsReadData(memory, loadU32(memory, state + FD_INODE), loadU64(memory, state + FD_OFFSET), output, length);
-  if (amount > 0) storeU64(memory, state + FD_OFFSET, loadU64(memory, state + FD_OFFSET) + ux(word(amount)));
+  const amount = thistleVfsReadDescriptor(memory, descriptorAt(memory, proc, descriptor), output, length);
   release(memory, vfsLock);
   release(memory, proc + P_LOCK);
   return amount;
@@ -705,21 +684,7 @@ export const thistleSeekDescriptor = (
     release(memory, proc + P_LOCK);
     return -11n;
   }
-  const state = descriptorAt(memory, proc, descriptor);
-  const kind = loadU32(memory, state + FD_KIND);
-  if (kind !== THISTLE_FD_FILE && kind !== THISTLE_FD_DIRECTORY) {
-    release(memory, vfsLock);
-    release(memory, proc + P_LOCK);
-    return -9n;
-  }
-  const base: I64 = whence === 1 ? sx(loadU64(memory, state + FD_OFFSET), 64) : whence === 2 ? sx(thistleVfsFileSize(memory, loadU32(memory, state + FD_INODE)), 64) : 0n;
-  const next = base + offset;
-  if (next < 0n || (offset > 0n && next < base)) {
-    release(memory, vfsLock);
-    release(memory, proc + P_LOCK);
-    return -22n;
-  }
-  storeU64(memory, state + FD_OFFSET, ux(next));
+  const next = thistleVfsSeekDescriptor(memory, descriptorAt(memory, proc, descriptor), offset, whence);
   release(memory, vfsLock);
   release(memory, proc + P_LOCK);
   return next;
@@ -2482,10 +2447,10 @@ const mountedOpen = (memory: ThistleMemory, hart: U32, proc: Ptr, descriptor: I3
   return word(openPathLocked(memory, proc, base, scratch, wordToU32(word(length)), wordToU32(x(memory, hart, 12))));
 };
 
-const mountedRead = (memory: ThistleMemory, hart: U32, state: Ptr, kind: U32, scratch: Ptr): I64 => {
+const mountedRead = (memory: ThistleMemory, hart: U32, state: Ptr, scratch: Ptr): I64 => {
   // Directory reads must use the directory ABI. Bound regular-file reads by the remaining bytes and scratch buffer; advance the descriptor only after a successful copy.
-  if (kind === THISTLE_FD_DIRECTORY) return -21n;
-  if (kind !== THISTLE_FD_FILE || (loadU32(memory, state + FD_FLAGS) & THISTLE_FD_READ) === 0) return -9n;
+  const status = descriptorReadStatus(memory, state);
+  if (status !== 0) return word(status);
   const requested = ux(x(memory, hart, 12));
   if (requested === 0n) return 0n;
   const inode = loadU32(memory, state + FD_INODE);
@@ -2519,7 +2484,7 @@ const mountedFileLocked = (memory: ThistleMemory, hart: U32, proc: Ptr, number: 
   const kind = loadU32(memory, state + FD_KIND);
   if (kind === THISTLE_FD_EMPTY) return -9n;
   if (number === 57) { releaseDescriptor(memory, state); return 0n; }
-  if (number === 63) return mountedRead(memory, hart, state, kind, scratch);
+  if (number === 63) return mountedRead(memory, hart, state, scratch);
   return -38n;
 };
 
@@ -3105,7 +3070,7 @@ export const thistleExitHart = (memory: ThistleMemory, hart: U32, code: I32): I3
   return 0;
 };
 
-export { thistleVfsCreate, thistleVfsWrite, thistleVfsLink, thistleVfsUnlink, thistleVfsCanMove, thistleVfsRename, thistleVfsChmod, thistleVfsChown, thistleVfsUtime } from "./vfs-edit.js";
+export { thistleVfsCreate, thistleVfsWrite, thistleVfsWriteDescriptor, thistleVfsLink, thistleVfsUnlink, thistleVfsCanMove, thistleVfsRename, thistleVfsChmod, thistleVfsChown, thistleVfsUtime } from "./vfs-edit.js";
 
 
 export { thistleProcessReap } from "./process-reap.js";
