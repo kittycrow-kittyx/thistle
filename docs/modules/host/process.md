@@ -40,4 +40,4 @@ metadata; `queueSignal` and `changeSignalMask` marshal the native operations.
 
 `withFilesystem` holds process, credential and VFS locks while an adapter invokes canonical filesystem operations. An expired process view fails before the operation.
 
-`chdir` and `cwdPath` marshal paths to native cwd operations. The host does not maintain a directory name cache in these methods.
+`withDescriptors` holds the process lifetime and descriptor locks during slot access. Working-directory marshalling resides in [cwd](cwd.md).

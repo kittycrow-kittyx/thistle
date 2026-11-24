@@ -1,10 +1,9 @@
 import { thistleProcessFinish, thistleProcessSetHostState, thistleProcessQueueSignal, thistleProcessSignalMask } from "../native/process-host.js";
 import { bad } from "../core/err.js";
-import { thistleVfsChdir, thistleVfsCwdPath } from "../native/vfs.js";
 import type { ProcCred } from "../fs/vfs.js";
 import {
   C_PROCESS_LOCK, C_PROCESS_CAPACITY, C_CREDENTIAL_LOCK, C_VFS_GENERATION, P_PID, P_RUID, P_EUID, P_SUID,
-  P_RGID, P_EGID, P_SGID, P_FSUID, P_FSGID, P_GROUP_COUNT, P_UMASK, P_PPID, P_PGID, P_STATE, P_EXIT_CODE,
+  P_RGID, P_EGID, P_SGID, P_FSUID, P_FSGID, P_GROUP_COUNT, P_UMASK, P_PPID, P_PGID, P_STATE, P_EXIT_CODE, P_LOCK,
   THISTLE_PROCESS_RUNNABLE, THISTLE_PROCESS_WAITING, THISTLE_PROCESS_ZOMBIE,
   THISTLE_PROCESS_RUNNING, THISTLE_PROCESS_STOPPED, P_SIGNAL_LAST, P_SIGNAL_MASK,
 } from "../native/abi.js";
@@ -75,22 +74,9 @@ export class HostProcess {
       () => withVfsLock(this.memory, () => operation(record))));
   }
 
-  /** The host marshals path bytes; native memory owns the working directory. */
-  chdir(path: string): void {
-    const bytes = new TextEncoder().encode(path);
-    if (bytes.length > 4096) bad("ENAMETOOLONG", path);
-    withImage(this.memory, Math.max(1, bytes.length), input => this.withFilesystem(record => {
-      this.memory.bytes.set(bytes, input);
-      checkNative(thistleVfsChdir(this.memory, record, input, bytes.length));
-    }));
-  }
-
-  cwdPath(): string {
-    return withImage(this.memory, 4096, input => this.withFilesystem(record => {
-      const length = thistleVfsCwdPath(this.memory, record, input, 4096);
-      checkNative(length);
-      return new TextDecoder().decode(this.memory.bytes.subarray(input, input + length - 1));
-    }));
+  /** Serialize descriptor access against allocation, close and reaping. */
+  withDescriptors<T>(operation: (record: number) => T): T {
+    return this.withRecord(record => withNativeLock(this.memory, record + P_LOCK, () => operation(record)));
   }
 
   /** Root-only persistence generation receipt under live process and VFS locks. */

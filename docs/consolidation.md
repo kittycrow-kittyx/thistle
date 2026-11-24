@@ -206,4 +206,4 @@ The exported close operation and mounted RV64 close syscall share descriptor tea
 
 Reaping shares descriptor teardown with both close entry points and waits for the process descriptor lock. Unmapping separates range validation, split-capacity checks and mutation; partial-range fixtures cover preserved bytes and file offsets.
 
-The canonical cwd now supports checked directory changes and path reconstruction from dentries. Live cwd references block removal or replacement, while renames preserve the inode. Hosted `Proc.cwd` still needs migration to these operations.
+Canonical directory changes and path reconstruction use dentries and process cwd inode references. Removing or replacing a referenced directory returns EBUSY. Renaming preserves its inode. The hosted `Proc.cwd` field remains a migration target.
