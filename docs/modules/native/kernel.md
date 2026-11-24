@@ -114,3 +114,5 @@ The dispatcher imports the filesystem surface from [vfs-api](vfs-api.md), which 
 `thistleMapHostDescriptor` validates an open file descriptor and records its inode, rights and file offset before returning a mapping. The reference survives descriptor closure and map splitting until the final range is removed.
 
 `thistleMapHostAnonymous` uses canonical anonymous mapping policy after host write-back. Native anonymous MAP_FIXED requests that overlap file mappings delegate to the host before discarding mapped bytes.
+
+`thistleMarkGuestWrite` marks host writes through the native page bitmap. Guest stores and atomic writes use the same operation. Unmap and file remap reject dirty spans until write-back is acknowledged.

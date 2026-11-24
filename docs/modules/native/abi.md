@@ -384,3 +384,5 @@ Each process has 256 descriptor slots of 32 bytes. The identity at offset 12 cha
 `THISTLE_FLAG_HOST_TRANSPORT` advertises host byte/stream transport for a mounted filesystem. It does not select a separate kernel or change inode authority.
 
 `M_INODE` retains the mapped inode independently of the original descriptor. `M_FILE_RIGHTS` records the open read/write rights. Both occupy reserved words; the map stride is unchanged.
+
+`PAGE_DIRTY_FRAME` is the auxiliary bitmap-frame pointer in a sparse guest page entry. Zero means no bitmap has been allocated.

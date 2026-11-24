@@ -7,3 +7,5 @@ The host and anonymous mapping paths use one native resize implementation.
 Partial-unmap coverage checks capacity refusal before mutation, middle splits, front and tail trimming, file offsets, byte clearing and complete removal.
 
 The descriptor-backed mapping fixture verifies open rights, inode retention after close and unlink, adjusted split offsets and final reclamation.
+
+The dirty-byte fixture checks exact bit boundaries across bitmap words and refuses unmap before acknowledgement.

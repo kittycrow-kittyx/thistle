@@ -267,6 +267,7 @@ export const THISTLE_PROCESS_STOPPED: I32 = 5;
 
 export const THISTLE_GUEST_PAGE_SIZE: U32 = 65536;
 export const THISTLE_PAGE_ENTRY_SIZE: U32 = 16;
+export const PAGE_DIRTY_FRAME: U32 = 12;
 export const THISTLE_PAGE_CAPACITY: U32 = 8192;
 
 export const THISTLE_HART_EMPTY: I32 = 0;

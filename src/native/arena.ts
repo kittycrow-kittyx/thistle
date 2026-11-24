@@ -1,7 +1,7 @@
-import { P_PAGE_TABLE, P_PAGE_CAPACITY, THISTLE_PAGE_ENTRY_SIZE, C_IMAGE_TOP, C_IMAGE_LOCK, C_IMAGE_SIZE, THISTLE_CONTROL_BASE, C_PHYSICAL_FREE, C_PHYSICAL_NEXT, C_VFS_DATA_END, THISTLE_GUEST_PAGE_SIZE } from "./abi.js";
-import { atomicLoadI32, fill, loadU32, loadU64, storeU32 } from "./memory.js";
+import { P_PAGE_TABLE, P_PAGE_CAPACITY, THISTLE_PAGE_ENTRY_SIZE, C_IMAGE_TOP, C_IMAGE_LOCK, C_IMAGE_SIZE, THISTLE_CONTROL_BASE, C_PHYSICAL_FREE, C_PHYSICAL_NEXT, C_VFS_DATA_END, THISTLE_GUEST_PAGE_SIZE, PAGE_DIRTY_FRAME, C_MEMORY_LOCK } from "./abi.js";
+import { atomicLoadI32, atomicStoreI32, compareExchangeI32, fill, loadU32, loadU64, storeU32 } from "./memory.js";
 import type { ThistleMemory } from "./memory.js";
-import type { Ptr, U32 } from "./types.js";
+import type { I32, Ptr, U32 } from "./types.js";
 
 const INVALID: Ptr = 0xffffffff;
 const frameBase = (memory: ThistleMemory): Ptr =>
@@ -70,8 +70,9 @@ export const validProcessFrames = (memory: ThistleMemory, proc: Ptr): boolean =>
   while (index < count) {
     const entry = table + index * THISTLE_PAGE_ENTRY_SIZE;
     const frame = loadU32(memory, entry + 8);
+    const dirty = loadU32(memory, entry + PAGE_DIRTY_FRAME);
     if (loadU64(memory, entry) !== 0n &&
-        !validFrame(memory, frame)) return false;
+        (!validFrame(memory, frame) || (dirty !== 0 && (dirty === frame || !validFrame(memory, dirty))))) return false;
     index += 1;
   }
   return true;
@@ -86,9 +87,78 @@ export const releaseProcessFrames = (memory: ThistleMemory, proc: Ptr): void => 
     if (loadU64(memory, entry) !== 0n) {
       const frame = loadU32(memory, entry + 8);
       releaseFrame(memory, frame);
+      const dirty = loadU32(memory, entry + PAGE_DIRTY_FRAME);
+      if (dirty !== 0) releaseFrame(memory, dirty);
     }
     index += 1;
   }
   fill(memory, table, count * THISTLE_PAGE_ENTRY_SIZE, 0);
 };
 
+
+const dirtyFrame = (memory: ThistleMemory, entry: Ptr): Ptr => {
+  const current = loadU32(memory, entry + PAGE_DIRTY_FRAME);
+  if (current !== 0) return current;
+  if (compareExchangeI32(memory, C_MEMORY_LOCK, 0, 1) !== 0) return INVALID;
+  let frame = loadU32(memory, entry + PAGE_DIRTY_FRAME);
+  if (frame === 0) {
+    frame = allocateFrame(memory);
+    if (frame !== INVALID) storeU32(memory, entry + PAGE_DIRTY_FRAME, frame);
+  }
+  atomicStoreI32(memory, C_MEMORY_LOCK, 0);
+  return frame;
+};
+
+const dirtyMask = (offset: U32, count: U32): I32 =>
+  (0xffffffff >>> (32 - count)) << (offset & 31);
+
+const dirtyWordUpdate = (memory: ThistleMemory, at: Ptr, mask: I32, mark: boolean): void => {
+  let old = atomicLoadI32(memory, at);
+  let next = mark ? old | mask : old & ~mask;
+  while (old !== next && compareExchangeI32(memory, at, old, next) !== old) {
+    old = atomicLoadI32(memory, at);
+    next = mark ? old | mask : old & ~mask;
+  }
+};
+
+const dirtyBytesUpdate = (memory: ThistleMemory, frame: Ptr, offset: U32, length: U32, mark: boolean): void => {
+  let done: U32 = 0;
+  while (done < length) {
+    const current = offset + done;
+    const room = 32 - (current & 31);
+    const count = room < length - done ? room : length - done;
+    dirtyWordUpdate(memory, frame + (current >>> 5) * 4, dirtyMask(current, count), mark);
+    done += count;
+  }
+};
+
+/** One bit per guest byte, allocated from the canonical arena only on a shared-file write. */
+export const markDirtyBytes = (memory: ThistleMemory, entry: Ptr, offset: U32, length: U32): boolean => {
+  if (offset >= THISTLE_GUEST_PAGE_SIZE || length > THISTLE_GUEST_PAGE_SIZE - offset) return false;
+  if (length === 0) return true;
+  const frame = dirtyFrame(memory, entry);
+  if (frame === INVALID) return false;
+  dirtyBytesUpdate(memory, frame, offset, length, true);
+  return true;
+};
+
+/** Clear only the acknowledged bytes; adjacent dirty ranges remain retained. */
+export const clearDirtyBytes = (memory: ThistleMemory, entry: Ptr, offset: U32, length: U32): void => {
+  const frame = loadU32(memory, entry + PAGE_DIRTY_FRAME);
+  if (frame !== 0) dirtyBytesUpdate(memory, frame, offset, length, false);
+};
+
+/** Determine whether a range contains any unpublished shared-file writes. */
+export const hasDirtyBytes = (memory: ThistleMemory, entry: Ptr, offset: U32, length: U32): boolean => {
+  const frame = loadU32(memory, entry + PAGE_DIRTY_FRAME);
+  if (frame === 0) return false;
+  let done: U32 = 0;
+  while (done < length) {
+    const current = offset + done;
+    const room = 32 - (current & 31);
+    const count = room < length - done ? room : length - done;
+    if ((atomicLoadI32(memory, frame + (current >>> 5) * 4) & dirtyMask(current, count)) !== 0) return true;
+    done += count;
+  }
+  return false;
+};
