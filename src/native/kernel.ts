@@ -288,7 +288,7 @@ import {
   unsignedWordToFloat,
 } from "./word.js";
 import {
-  descriptorAt, releaseDescriptor, installDescriptor, thistleVfsOpenInode, descriptorReadStatus, thistleVfsReadDescriptor, thistleVfsSeekDescriptor,
+  descriptorAt, releaseDescriptor, installDescriptor, thistleVfsOpenInode, descriptorReadStatus, descriptorReadCount, thistleVfsReadDescriptor, thistleVfsSeekDescriptor,
   thistleVfsAccess,
   thistleVfsFileSize,
   thistleVfsKind,
@@ -2455,11 +2455,9 @@ const mountedRead = (memory: ThistleMemory, hart: U32, state: Ptr, scratch: Ptr)
   if (requested === 0n) return 0n;
   const inode = loadU32(memory, state + FD_INODE);
   const offset = loadU64(memory, state + FD_OFFSET);
-  const size = thistleVfsFileSize(memory, inode);
-  if (offset >= size) return 0n;
-  let amount = requested < size - offset ? requested : size - offset;
-  if (amount > ux(word(THISTLE_VFS_PATH_CAPACITY))) amount = ux(word(THISTLE_VFS_PATH_CAPACITY));
-  const length = wordToU32(amount);
+  const bounded = requested > ux(word(THISTLE_VFS_PATH_CAPACITY)) ? THISTLE_VFS_PATH_CAPACITY : wordToU32(requested);
+  const length = descriptorReadCount(memory, state, bounded);
+  if (length === 0) return 0n;
   const address = ux(x(memory, hart, 11));
   if (!guestAllowed(memory, hart, address, length, THISTLE_SEGMENT_WRITE) ||
       !guestWritable(memory, hart, address, length)) return -14n;

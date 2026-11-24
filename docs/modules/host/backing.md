@@ -31,3 +31,5 @@ The registry is bound to its root inode incarnation. A remount expires the regis
 `installLocked` is the mount transaction entry: the caller supplies a validated process record and reserved input buffer while holding the process, credential and VFS locks. It shares the backing commit implementation with ordinary operations.
 
 `snapshot` returns a copied resident carrier or its existing lazy source under live inode and process validation; arena-backed data returns null for the native reader. It does not fetch or publish lazy bytes.
+
+`CarrierDescriptor` supplies a synchronous, incarnation-checked storage lease. `readDescriptor` copies resident data and advances the native cursor; `writeDescriptor` uses canonical append and quota policy. `materialiseDescriptor` releases locks during provider I/O and validates the descriptor and payload revision on completion. A lazy carrier returns `EAGAIN` until materialised. No pathname or current inode mode check replaces open-file authority.
