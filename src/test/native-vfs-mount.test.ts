@@ -4,8 +4,8 @@ import { planHostThistleVfs } from "../native/vfs-image.js";
 import type { TreeEnt } from "../fs/tree.js";
 import { mountedKernel, rootVfsImage } from "./vfs-fixture.js";
 import { withImage } from "../host/native-access.js";
-import { thistleVfsCreate } from "../native/vfs-edit.js";
-import { thistleLoadVfs, thistleVfsIdentity, thistleVfsKind } from "../native/vfs.js";
+import { thistleVfsCreate, thistleVfsRename, thistleVfsUnlink } from "../native/vfs-edit.js";
+import { thistleLoadVfs, thistleVfsIdentity, thistleVfsKind, thistleVfsChdir, thistleVfsCwdPath } from "../native/vfs.js";
 import { thistleKernelInit, thistleProcessRecord, thistleOpenPath, thistleCloseDescriptor } from "../native/kernel.js";
 import { P_CWD_INODE, P_DESCRIPTOR_TABLE, THISTLE_DESCRIPTOR_STRIDE, FD_KIND, THISTLE_VFS_BUSY } from "../native/abi.js";
 import { directMemory, loadU32, storeU32 } from "../native/memory.js";
@@ -54,4 +54,25 @@ test("default VFS loads a root with the audited mikuOS inode count", () => {
     assert.equal(thistleLoadVfs(memory, input, image.length), 0);
   });
   assert.equal(thistleVfsKind(memory, 4679), 1);
+});
+
+test("canonical cwd follows directory rename and prevents removal of a live directory", () => {
+  const memory = mountedKernel(), proc = thistleProcessRecord(memory, 0);
+  withImage(memory, 128, input => {
+    memory.bytes.set(new TextEncoder().encode("dirnew"), input);
+    const directory = thistleVfsCreate(memory, proc, 1, input, 3, 2, 0o755, 1n);
+    assert.ok(directory > 1);
+    assert.equal(thistleVfsChdir(memory, proc, input, 3), 0);
+    assert.equal(thistleVfsCwdPath(memory, proc, input + 16, 32), 5);
+    assert.deepEqual([...memory.bytes.subarray(input + 16, input + 21)], [47, 100, 105, 114, 0]);
+    assert.equal(thistleVfsCwdPath(memory, proc, input + 16, 4), -34);
+    assert.equal(thistleVfsUnlink(memory, proc, 1, input, 3, true, 2n), -16);
+    assert.equal(thistleVfsRename(memory, proc, 1, input, 3, 1, input + 3, 3, 3n), 0);
+    assert.equal(thistleVfsCwdPath(memory, proc, input + 16, 32), 5);
+    assert.deepEqual([...memory.bytes.subarray(input + 16, input + 21)], [47, 110, 101, 119, 0]);
+    memory.bytes[input] = 47;
+    assert.equal(thistleVfsChdir(memory, proc, input, 1), 0);
+    assert.equal(thistleVfsCwdPath(memory, proc, input + 16, 32), 2);
+    assert.equal(thistleVfsUnlink(memory, proc, 1, input + 3, 3, true, 4n), 0);
+  });
 });

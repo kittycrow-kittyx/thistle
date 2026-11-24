@@ -29,3 +29,5 @@ work before the new operations can replace the hosted entry points.
 | `thistleVfsChmod` | Change mode as root or the inode owner. |
 | `thistleVfsChown` | Change ownership as root and clear set-ID mode bits. |
 | `thistleVfsUtime` | Set access/modification times as root or owner; update change time from the supplied clock value. |
+
+Removing or replacing a directory held as a process cwd returns `EBUSY`. Renaming a referenced directory retains its inode and updates the path observed by the process.

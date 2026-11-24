@@ -38,3 +38,5 @@ Path resolution checks that the current component is a searchable directory befo
 `thistleLoadVfs` returns `THISTLE_VFS_BUSY` before mutation when open inode descriptors or non-root process working directories retain the current filesystem. A successful root replacement redirects root working directories to the new root inode. Callers hold the process, credential and VFS locks during host mounting.
 
 `descriptorAt` locates a validated descriptor slot in a native process. `releaseDescriptor` clears the slot before checking final inode release. The exported close ABI, mounted RV64 close syscall and process reaper share this operation under descriptor and VFS locks.
+
+`thistleVfsChdir` resolves from the live cwd inode, checks directory search access and updates the process record. `thistleVfsCwdPath` returns a NUL-terminated path in a reserved image, including the terminator in its length. `thistleVfsCwdHeld` detects live cwd references; directory removal or replacement returns `EBUSY` while referenced.

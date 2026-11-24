@@ -69,6 +69,7 @@ import {
   loadU32,
   loadU64,
   memorySize as memorySizeOf,
+  storeU8,
   storeU32,
   storeU64,
 } from "./memory.js";
@@ -220,17 +221,22 @@ export const findChild = (memory: ThistleMemory, parent: U32, name: Ptr, nameLen
   return 0;
 };
 
-export const parentOf = (memory: ThistleMemory, inode: U32): U32 => {
-  const root = loadU32(memory, THISTLE_CONTROL_BASE + C_VFS_ROOT);
-  if (inode === root) return root;
+const entryForInode = (memory: ThistleMemory, inode: U32): Ptr => {
   const count = loadU32(memory, THISTLE_CONTROL_BASE + C_VFS_DENTRY_COUNT);
   let index: U32 = 0;
   while (index < count) {
     const dentry = dentryAt(memory, index);
-    if (loadU32(memory, dentry + D_INODE) === inode) return loadU32(memory, dentry + D_PARENT);
+    if (loadU32(memory, dentry + D_INODE) === inode) return dentry;
     index += 1;
   }
   return 0;
+};
+
+export const parentOf = (memory: ThistleMemory, inode: U32): U32 => {
+  const root = loadU32(memory, THISTLE_CONTROL_BASE + C_VFS_ROOT);
+  if (inode === root) return root;
+  const entry = entryForInode(memory, inode);
+  return entry === 0 ? 0 : loadU32(memory, entry + D_PARENT);
 };
 
 const inSupplementaryGroup = (memory: ThistleMemory, proc: Ptr, gid: U32): boolean => {
@@ -373,6 +379,57 @@ export const thistleVfsResolve = (
 
 export const thistleVfsAccess = (memory: ThistleMemory, proc: Ptr, inode: U32, bits: U32): boolean =>
   thistleVfsKind(memory, inode) !== THISTLE_VFS_KIND_EMPTY && bits <= 7 && allowed(memory, proc, inode, bits);
+
+/** Change cwd using the same traversal and search policy as native open. Caller holds VFS lock. */
+export const thistleVfsChdir = (memory: ThistleMemory, proc: Ptr, path: Ptr, length: U32): I32 => {
+  const result = thistleVfsResolve(memory, proc, loadU32(memory, proc + P_CWD_INODE), path, length, true);
+  if (result < 0) return result;
+  const inode = wordToU32(word(result));
+  if (thistleVfsKind(memory, inode) !== THISTLE_VFS_KIND_DIRECTORY) return -20;
+  if (!allowed(memory, proc, inode, 1)) return -13;
+  storeU32(memory, proc + P_CWD_INODE, inode);
+  return 0;
+};
+
+/** A directory used as cwd must not be deleted or replaced. Caller holds VFS lock. */
+export const thistleVfsCwdHeld = (memory: ThistleMemory, inode: U32): boolean => {
+  const base = loadU32(memory, C_PROCESS_TABLE_BASE), count = loadU32(memory, C_PROCESS_CAPACITY);
+  let index: U32 = 0;
+  while (index < count) {
+    const proc = base + index * THISTLE_PROCESS_STRIDE;
+    if (loadU32(memory, proc + P_STATE) !== 0 && loadU32(memory, proc + P_CWD_INODE) === inode) return true;
+    index += 1;
+  }
+  return false;
+};
+
+/** Write the current canonical directory path, including NUL, into a reserved image. */
+export const thistleVfsCwdPath = (memory: ThistleMemory, proc: Ptr, output: Ptr, capacity: U32): I32 => {
+  if (capacity < 2 || !inputContains(memory, output, capacity)) return -34;
+  const root = thistleVfsRoot(memory);
+  let inode = loadU32(memory, proc + P_CWD_INODE);
+  if (root === 0 || thistleVfsKind(memory, inode) !== THISTLE_VFS_KIND_DIRECTORY) return -2;
+  let cursor = capacity - 1;
+  storeU8(memory, output + cursor, 0);
+  let remaining = loadU32(memory, C_VFS_INODE_CAPACITY);
+  while (inode !== root && remaining !== 0) {
+    const entry = entryForInode(memory, inode);
+    if (entry === 0) return -2;
+    const length = loadU32(memory, entry + D_NAME_LENGTH);
+    if (length >= cursor) return -34;
+    cursor -= length;
+    copyMemory(memory, output + cursor, loadU32(memory, entry + D_NAME), length);
+    cursor -= 1;
+    storeU8(memory, output + cursor, 47);
+    inode = loadU32(memory, entry + D_PARENT);
+    remaining -= 1;
+  }
+  if (inode !== root) return -40;
+  if (cursor === capacity - 1) { cursor -= 1; storeU8(memory, output + cursor, 47); }
+  const length = capacity - cursor;
+  copyMemory(memory, output, output + cursor, length);
+  return wordToI32(word(length));
+};
 
 const readData = (memory: ThistleMemory, inode: U32, offset: U64, output: Ptr, length: U32): I32 => {
   const kind = thistleVfsKind(memory, inode);

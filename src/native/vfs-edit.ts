@@ -13,7 +13,7 @@ import type { ThistleMemory } from "./memory.js";
 import type { I32, Ptr, U32, U64 } from "./types.js";
 import {
   allocateData, allowed, residentFits, growData, dentryAt, findChild, hashBytes, inodeAt, parentOf,
-  sameName, thistleVfsKind, thistleVfsRelease, validName,
+  sameName, thistleVfsKind, thistleVfsRelease, thistleVfsCwdHeld, validName,
 } from "./vfs.js";
 
 // These operations run while the canonical kernel's VFS lock is held.
@@ -203,6 +203,7 @@ export const thistleVfsUnlink = (
   if (isDirectory && !directory) return -21;
   if (!isDirectory && directory) return -20;
   if (isDirectory && hasChildren(memory, inode)) return -39;
+  if (isDirectory && thistleVfsCwdHeld(memory, inode)) return -16;
   const at = entryFor(memory, parent, name, length);
   if (at === 0) return -2;
   storeU32(memory, at + D_INODE, 0);
@@ -257,6 +258,7 @@ export const thistleVfsRename = (
   if (kind !== THISTLE_VFS_KIND_DIRECTORY && previous === THISTLE_VFS_KIND_DIRECTORY) return -21;
   if (kind === THISTLE_VFS_KIND_DIRECTORY && replaced !== 0 && previous !== THISTLE_VFS_KIND_DIRECTORY) return -20;
   if (previous === THISTLE_VFS_KIND_DIRECTORY && hasChildren(memory, replaced)) return -39;
+  if (previous === THISTLE_VFS_KIND_DIRECTORY && thistleVfsCwdHeld(memory, replaced)) return -16;
   const stored = allocateData(memory, newLength);
   if (stored === 0xffffffff) return -28;
   copyMemory(memory, stored, newName, newLength);

@@ -39,3 +39,5 @@ previous mask and an unblocked signal. `signalMask` and `lastSignal` read native
 metadata; `queueSignal` and `changeSignalMask` marshal the native operations.
 
 `withFilesystem` holds process, credential and VFS locks while an adapter invokes canonical filesystem operations. An expired process view fails before the operation.
+
+`chdir` and `cwdPath` marshal paths to native cwd operations. The host does not maintain a directory name cache in these methods.

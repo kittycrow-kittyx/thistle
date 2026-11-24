@@ -205,3 +205,5 @@ The host root loader reuses the existing native image serializer and backing com
 The exported close operation and mounted RV64 close syscall share descriptor teardown. Both release the final unlinked inode reference, including descriptors whose payload is serviced by a host capability.
 
 Reaping shares descriptor teardown with both close entry points and waits for the process descriptor lock. Unmapping separates range validation, split-capacity checks and mutation; partial-range fixtures cover preserved bytes and file offsets.
+
+The canonical cwd now supports checked directory changes and path reconstruction from dentries. Live cwd references block removal or replacement, while renames preserve the inode. Hosted `Proc.cwd` still needs migration to these operations.
