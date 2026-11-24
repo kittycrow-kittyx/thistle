@@ -1,12 +1,11 @@
 import { VmFiles } from "./files.js";
 import { bad, KErr, requireValue } from "../core/err.js";
-import { wasiErrnoNumbers as eno } from "../core/errno.js";
 import type { Sig } from "../core/proc.js";
 import type { Sys } from "../core/sys.js";
 import { enc } from "../io/stream.js";
 import { Exe } from "../../thistle-asm/fmt.js";
 import { BY64_OP, I64_SZ, Op64 } from "../../thistle-asm/isa64.js";
-import { Sc } from "./vm.js";
+import { Sc, legacyErrnoNumbers as eno } from "./vm.js";
 import { Mem64 } from "./mem64.js";
 
 

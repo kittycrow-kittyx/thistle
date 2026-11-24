@@ -1,6 +1,7 @@
 import { VmFiles } from "./files.js";
 import { bad, KErr, requireValue } from "../core/err.js";
 import { wasiErrnoNumbers as eno } from "../core/errno.js";
+export { wasiErrnoNumbers as legacyErrnoNumbers } from "../core/errno.js";
 import type { Sig } from "../core/proc.js";
 import type { Sys } from "../core/sys.js";
 import { enc } from "../io/stream.js";
