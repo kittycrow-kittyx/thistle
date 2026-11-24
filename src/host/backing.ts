@@ -22,12 +22,12 @@ export class HostBacking {
 
   constructor(private readonly memory: ThistleMemory) {}
 
-  private publish(view: HostInode, process: HostProcess, payload: Payload, size: number, expected: bigint, write: boolean): void {
+  private publish(view: HostInode, process: HostProcess, payload: Payload, size: number, expected: bigint, operation: 0 | 1 | 2): void {
     if (!Number.isSafeInteger(size) || size < 0) bad("EINVAL", "invalid backing size");
     if (this.sequence > 0xffffffff) bad("ENFILE", "host carrier handles exhausted");
     const handle = this.sequence++;
     withImage(this.memory, 24, input => {
-      storeU32(this.memory, input, handle); storeU32(this.memory, input + 4, write ? 1 : 0);
+      storeU32(this.memory, input, handle); storeU32(this.memory, input + 4, operation);
       storeU64(this.memory, input + 8, BigInt(size));
       storeU64(this.memory, input + 16, BigInt(payload.bytes === null ? 0 : payload.bytes.byteLength));
       view.access(process, proc => {
@@ -38,17 +38,30 @@ export class HostBacking {
     });
   }
 
-  setBytes(inode: number, process: HostProcess, bytes: Uint8Array): void {
+  private replace(inode: number, process: HostProcess, payload: Payload, size: number, operation: 1 | 2): void {
     const view = new HostInode(this.memory, inode);
     const version = view.access(process, () => thistleVfsBackingVersion(this.memory, inode));
-    this.publish(view, process, { bytes: bytes.slice(), source: null }, bytes.byteLength, version, true);
+    this.publish(view, process, payload, size, version, operation);
+  }
+
+  setBytes(inode: number, process: HostProcess, bytes: Uint8Array): void {
+    this.replace(inode, process, { bytes: bytes.slice(), source: null }, bytes.byteLength, 1);
   }
 
   setSource(inode: number, process: HostProcess, source: RegSource): void {
     if (source.size === 0) { this.setBytes(inode, process, new Uint8Array()); return; }
-    const view = new HostInode(this.memory, inode);
-    const version = view.access(process, () => thistleVfsBackingVersion(this.memory, inode));
-    this.publish(view, process, { bytes: null, source: new SourceLoad(source) }, source.size, version, true);
+    this.replace(inode, process, { bytes: null, source: new SourceLoad(source) }, source.size, 1);
+  }
+
+  /** Root-only image loader operation preserving the inode's restored mode and timestamps. */
+  install(inode: number, process: HostProcess, source: RegSource | Uint8Array): void {
+    if (source instanceof Uint8Array) {
+      this.replace(inode, process, { bytes: source.slice(), source: null }, source.byteLength, 2);
+      return;
+    }
+    const payload = source.size === 0 ? { bytes: new Uint8Array(), source: null }
+      : { bytes: null, source: new SourceLoad(source) };
+    this.replace(inode, process, payload, source.size, 2);
   }
 
   async read(inode: number, process: HostProcess): Promise<Uint8Array> {
@@ -64,7 +77,7 @@ export class HostBacking {
     const source = payload.source ?? bad("EIO", "missing lazy byte source");
     const bytes = await source.read();
     if (BigInt(bytes.byteLength) !== size) bad("EIO", "lazy payload length mismatch");
-    this.publish(view, process, { bytes: bytes.slice(), source: null }, bytes.byteLength, version, false);
+    this.publish(view, process, { bytes: bytes.slice(), source: null }, bytes.byteLength, version, 0);
     return bytes.slice();
   }
 

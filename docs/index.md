@@ -153,3 +153,5 @@ bun run test
 - [test/host-inode.test](modules/test/host-inode.test.md)
 
 - [test/native-vfs-resolve.test](modules/test/native-vfs-resolve.test.md)
+
+- [test/host-restore.test](modules/test/host-restore.test.md)

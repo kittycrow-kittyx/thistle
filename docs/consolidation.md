@@ -189,3 +189,5 @@ The candidate inode layout includes a separate incarnation token. Host views rea
 `HostBacking` now uses those inode and process views. Lazy provider completion rechecks both identities before committing metadata, covering reaped readers and recycled inode slots.
 
 Directory snapshots use the same checked process/inode views. Native path traversal checks search permission for dot components and follows symlinks before resolving subsequent parent components.
+
+Payload restoration reuses the native backing commit operation with a root-only mode. It preserves image metadata while installing resident or lazy storage; ordinary writes retain their set-ID-clearing behaviour.

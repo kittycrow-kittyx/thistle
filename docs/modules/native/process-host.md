@@ -24,8 +24,20 @@ CPU readiness while the process records host callback phase.
 | `thistleProcessQueueSignal` | Check the allocated PID and supported signal; return 1 for host delivery or 0 for deferred/no delivery. |
 | `thistleProcessSignalMask` | Apply block/unblock/replace under the process lock; SIGKILL remains unblocked. |
 
-The 16-byte mask request contains the requested u64 mask at offset 0. On
-success, offset 0 contains the previous mask and offset 8 a newly unblocked
-signal, or zero. The function returns zero on success or a negative errno on failure.
+The mask operation uses a reserved 16-byte request.
+
+| Offset | Type | Request | Successful response |
+| --- | --- | --- | --- |
+| 0 | u64 | Requested mask | Previous mask |
+| 8 | u32 | Unused | Newly unblocked signal, or zero |
+
+| Return value | Meaning |
+| --- | --- |
+| 0 | Mask applied |
+| -3 (`ESRCH`) | Expired process binding |
+| -11 (`EAGAIN`) | Process lock contention |
+| -14 (`EFAULT`) | Request outside the input reservation |
+| -22 (`EINVAL`) | Unsupported operation, signal or process state |
+
 Supported signals are 0, 1, 2, 9, 13 and 15. The pending slot retains the hosted
 single-deferred-signal contract.

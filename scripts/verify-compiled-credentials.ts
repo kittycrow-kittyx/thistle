@@ -70,6 +70,15 @@ for (const threaded of [false, true]) {
   assert.equal(invoke("VfsResidentUsage", 0), 256n);
   assert.equal(invoke("VfsReadData", 0, file, 0n, record + 128, 1), -18);
   assert.equal(invoke("VfsCommitBacking", 0, proc, file, previous, record, 2n), -11);
+  assert.equal(invoke("VfsChmod", 0, proc, file, 0o4755, 3n), 0);
+  view.setUint32(record, 9, true); view.setUint32(record + 4, 2, true);
+  view.setBigUint64(record + 8, 7n, true); view.setBigUint64(record + 16, 7n, true);
+  assert.equal(invoke("VfsCommitBacking", 0, proc, file, invoke("VfsBackingVersion", 0, file), record, 4n), 0);
+  assert.equal(invoke("VfsMode", 0, file), 0o4755);
+  assert.equal(invoke("VfsFileSize", 0, file), 7n);
+  assert.equal(invoke("ProcessIdentity", 0, 0, 6, 1000, 0xffffffff, 0xffffffff), 0n);
+  assert.equal(invoke("VfsCommitBacking", 0, proc, file, invoke("VfsBackingVersion", 0, file), record, 4n), -1);
+  assert.equal(invoke("ProcessIdentity", 0, 0, 6, 0, 0xffffffff, 0xffffffff), 1000n);
   assert.equal(invoke("ImageRelease", 0, record, 256), 0);
   const identity = Number(invoke("ImageReserve", 0, 64));
   data.fill(0, identity, identity + 64);

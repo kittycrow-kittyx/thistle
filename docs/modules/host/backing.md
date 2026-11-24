@@ -8,6 +8,7 @@ awaiting a provider.
 
 | Method | Contract |
 | --- | --- |
+| `install` | Root-only payload restoration preserving image mode, ownership and timestamps. |
 | `setBytes` | Copy caller bytes and publish through the canonical permission/version/quota check. |
 | `setSource` | Register a lazy provider with zero initial resident bytes. |
 | `read` | Check canonical read access, copy resident data or materialise the provider. Reject stale completion. |

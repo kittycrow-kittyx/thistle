@@ -22,3 +22,5 @@ host adapter.
 | --- | --- |
 | EXDEV | Arena read/write requested for a host-backed inode. |
 | EAGAIN | Payload revision changed, including after inode reuse. |
+
+The descriptor operation selects materialisation (`0`), ordinary writing (`1`) or trusted restoration (`2`). Restoration requires filesystem UID zero and preserves the inode's image metadata while installing its resident bytes or lazy logical size. Version, quota and range checks apply to all three operations.
