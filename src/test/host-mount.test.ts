@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { requireValue } from "../core/err.js";
 import { mountHostTree } from "../host/mount.js";
 import { dumpHostTree } from "../host/snapshot.js";
 import { HostInode } from "../host/inode.js";
@@ -69,7 +68,11 @@ test("canonical persistence round trip retains aliases, arena data and lazy sour
   directory.create(process, "device", 4, 0o666);
   const dumped = dumpHostTree(process, backing);
   const byPath = new Map(dumped.map(item => [item.p, item]));
-  const record = (path: string): TreeEnt => requireValue(byPath.get(path) ?? null, path);
+  const record = (path: string): TreeEnt => {
+    const found = byPath.get(path) ?? null;
+    assert.ok(found, path);
+    return found;
+  };
   assert.equal(record("/base").id, record("/alias").id);
   assert.deepEqual(record("/base").data, enc("AB"));
   assert.deepEqual(record("/arena").data, enc("xyz"));
@@ -80,5 +83,7 @@ test("canonical persistence round trip retains aliases, arena data and lazy sour
   const restoredArena = HostInode.resolve(process, "/arena");
   assert.deepEqual(await restored.read(restoredArena.ino, process), enc("xyz"));
   assert.equal(HostInode.resolve(process, "/base").ino, HostInode.resolve(process, "/alias").ino);
-  assert.equal(requireValue(dumpHostTree(process, restored).find(item => item.p === "/sparse") ?? null, "restored sparse inode").source, source);
+  const restoredSparse = dumpHostTree(process, restored).find(item => item.p === "/sparse") ?? null;
+  assert.ok(restoredSparse);
+  assert.equal(restoredSparse.source, source);
 });
