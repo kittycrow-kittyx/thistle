@@ -73,7 +73,7 @@ test("descriptor inheritance retains unlinked inodes across processes", () => {
   const root = HostInode.resolve(parent, "/"), file = root.create(parent, "secret", 1, 0o600);
   file.write(parent, Uint8Array.of(1, 2, 3), 0, true);
   const fd = HostDescriptor.open(parent, file, THISTLE_FD_READ | THISTLE_FD_CLOEXEC);
-  assert.equal(fd.readFile(1)[0], 1);
+  assert.deepEqual([...fd.readFile(1)], [1]);
   root.unlink(parent, "secret");
   const source = new FdTable(parent), target = new FdTable(child);
   const view = source.get(fd.number);
@@ -104,7 +104,9 @@ test("opened directories retain identity across rename and permission changes", 
   work.chmod(root, 0);
   const view = new FdTable(user).get(fd.number);
   assert.ok(view);
-  assert.equal(view.inodeView()?.identity ?? null, work.identity);
+  const inode = view.inodeView();
+  assert.ok(inode);
+  assert.equal(inode.identity, work.identity);
   assert.deepEqual(view.directoryEntries(), [{ name: "entry", inode: file.ino, kind: 1 }]);
   assert.throws(() => HostDescriptor.openPath(user, "/renamed", 0x10000), { code: "EACCES" });
   fd.close();
