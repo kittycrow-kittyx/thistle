@@ -71,3 +71,37 @@ test("remount expires inode views and reads validate the live process authority"
   assert.equal(thistleProcessReap(memory, 0, other.pid), 0);
   assert.throws(() => view.read(other, 0n, 6), { code: "ESRCH" });
 });
+
+test("host path and metadata views use native traversal, credentials and incarnation", () => {
+  const memory = mountedKernel(2), root = new HostProcess(memory, 0);
+  withImage(memory, 16, input => {
+    memory.bytes.set(enc("deniedfilelink"), input);
+    root.withFilesystem(record => {
+      assert.ok(thistleVfsCreate(memory, record, 1, input, 6, 2, 0, 1n) > 1);
+      assert.ok(thistleVfsCreate(memory, record, 1, input + 6, 4, 1, 0o600, 1n) > 1);
+      const link = thistleVfsCreate(memory, record, 1, input + 10, 4, 3, 0o777, 1n);
+      assert.ok(link > 1);
+      assert.equal(thistleVfsWrite(memory, record, link, input + 6, 4, 0, true, 1n), 4);
+    });
+  });
+  const file = HostInode.resolve(root, "file");
+  assert.equal(HostInode.resolve(root, "/link").ino, file.ino);
+  assert.notEqual(HostInode.resolve(root, "/link", false).ino, file.ino);
+  assert.equal(HostInode.resolve(root, "/denied/..").ino, 1);
+  assert.equal(thistleHartInit(memory, 1, 0x10000000n, 0n), 0);
+  assert.equal(thistleProcessInit(memory, 1, 2, 1, 1000, 1000, 1000, 1000, 1000, 1000), 0);
+  const other = new HostProcess(memory, 1);
+  assert.throws(() => HostInode.resolve(other, "/denied/.."), { code: "EACCES" });
+  assert.throws(() => HostInode.resolve(other, "/file/."), { code: "ENOTDIR" });
+  assert.throws(() => file.chmod(other, 0o777), { code: "EPERM" });
+  assert.throws(() => file.chown(other, 1000, 1000), { code: "EPERM" });
+  file.chown(root, 1000, 1000);
+  file.chmod(other, 0o640);
+  file.utime(other, 10n, 20n);
+  const metadata = HostInode.resolve(root, "/file").metadata();
+  assert.equal(metadata.mode, 0o640);
+  assert.equal(metadata.uid, 1000);
+  assert.equal(metadata.at, 10n);
+  assert.equal(metadata.mt, 20n);
+  assert.throws(() => new HostInode(memory, file.ino, file.identity + 1n), { code: "ENOENT" });
+});
