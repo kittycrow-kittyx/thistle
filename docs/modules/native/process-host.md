@@ -9,3 +9,7 @@
 These are trusted embedding operations. They hold the process lock and every
 bound hart lock. Contention returns EAGAIN before mutation. Only the process
 leader can change the image lifecycle; peer processes retain their state.
+
+`thistleProcessFinish` accepts the allocated PID and exit code. It rejects an
+expired view with ESRCH, then records the exit status and retires every bound
+hart under the process and hart locks.

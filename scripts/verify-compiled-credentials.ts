@@ -101,5 +101,9 @@ for (const threaded of [false, true]) {
     assert.equal(view.getUint8(page + 100), 0);
     assert.equal(view.getUint32(C_PHYSICAL_NEXT, true), highWater);
   }
+  assert.equal(invoke("ProcessFinish", 0, 0, 999, 9), -3);
+  assert.equal(invoke("ProcessFinish", 0, 0, 1, 9), 0);
+  assert.equal(invoke("HartExitCode", 0, 0), 9);
+  assert.equal(invoke("HartExitCode", 0, 1), 9);
   console.log(name + ": ABI " + THISTLE_ABI_VERSION + ", extended groups, identity and frame reuse passed");
 }

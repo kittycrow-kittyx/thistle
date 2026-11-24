@@ -1,5 +1,5 @@
 import type { In, Out } from "../io/stream.js";
-import { credGid, credUid } from "../fs/vfs.js";
+import type { HostProcess } from "../host/process.js";
 import type { ProcCred } from "../fs/vfs.js";
 
 export type PState = "ready" | "run" | "sleep" | "stop" | "zombie";
@@ -55,14 +55,11 @@ export class Fd {
 }
 
 export interface ProcInit {
-  pid: number;
-  ppid: number;
   pgid: number;
   cmd: string;
   argv: string[];
   cwd: string;
   env: Map<string, string>;
-  cred: ProcCred;
   io: Io;
 }
 
@@ -74,31 +71,31 @@ export class Proc {
   readonly ac = new AbortController();
   readonly fds = new Map<number, Fd>();
   readonly kids = new Set<number>();
-  mask = 0o022;
   allHeld = false;
-  fsuid: number;
-  fsgid: number;
   signalMask = 0n;
   private pending: Sig | null = null;
   readonly done: Promise<number>;
   private fin: ((n: number) => void) | null = null;
 
-  readonly pid: number;
-  readonly ppid: number;
-  pgid: number;
+  get pid(): number { return this.native.pid; }
+  get ppid(): number { return this.native.parentPid; }
+  get pgid(): number { return this.native.groupId; }
+  set pgid(value: number) { this.native.groupId = value; }
   cmd: string;
   argv: string[];
   cwd: string;
   env: Map<string, string>;
-  cred: ProcCred;
+  get cred(): ProcCred { return this.native.identity().credentials; }
+  get fsuid(): number { return this.native.identity().fsuid; }
+  get fsgid(): number { return this.native.identity().fsgid; }
+  get mask(): number { return this.native.identity().umask; }
+  set mask(value: number) { this.native.setUmask(value); }
 
-  constructor(init: ProcInit) {
-    const { pid, ppid, pgid, cmd, argv, cwd, env, cred, io } = init;
-    this.pid = pid; this.ppid = ppid; this.pgid = pgid;
+  constructor(init: ProcInit, readonly native: HostProcess) {
+    const { pgid, cmd, argv, cwd, env, io } = init;
+    this.pgid = pgid;
     this.cmd = cmd; this.argv = argv; this.cwd = cwd;
-    this.env = env; this.cred = cred;
-    this.fsuid = credUid(cred);
-    this.fsgid = credGid(cred);
+    this.env = env;
     this.fds.set(0, new Fd(io.sin, null, "/dev/stdin", { rd: true, wr: false, add: false, clo: false }));
     this.fds.set(1, new Fd(null, io.sout, "/dev/stdout", { rd: false, wr: true, add: false, clo: false }));
     this.fds.set(2, new Fd(null, io.serr, "/dev/stderr", { rd: false, wr: true, add: false, clo: false }));
@@ -117,6 +114,7 @@ export class Proc {
 
   end(n: number): void {
     if (this.code !== null) return;
+    this.native.finish(n & 0xff);
     this.code = n & 0xff;
     this.state = "zombie";
     const finish = this.fin;

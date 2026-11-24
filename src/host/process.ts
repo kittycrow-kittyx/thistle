@@ -1,14 +1,18 @@
+import { thistleProcessFinish } from "../native/process-host.js";
 import { bad } from "../core/err.js";
 import type { ProcCred } from "../fs/vfs.js";
 import {
   C_PROCESS_LOCK, C_CREDENTIAL_LOCK, P_PID, P_RUID, P_EUID, P_SUID,
-  P_RGID, P_EGID, P_SGID, P_FSUID, P_FSGID, P_GROUP_COUNT, P_UMASK,
+  P_RGID, P_EGID, P_SGID, P_FSUID, P_FSGID, P_GROUP_COUNT, P_UMASK, P_PPID, P_PGID,
 } from "../native/abi.js";
-import { loadU32, storeU32 } from "../native/memory.js";
+import { atomicStoreI32, loadU32, storeU32 } from "../native/memory.js";
 import type { ThistleMemory } from "../native/memory.js";
 import { readGroup } from "../native/credentials.js";
 import { thistleProcessInstallCredentials, thistleProcessRecord, thistleProcessIdentity, thistleProcessGroups, thistleProcessUmask } from "../native/process-state.js";
 import { withNativeLock, withImage, checkNative } from "./native-access.js";
+
+const identityRequest = (id: number | null): number =>
+  id === null ? 0xffffffff : id === 0xffffffff ? Number.NaN : id;
 
 export interface HostIdentity {
   readonly credentials: ProcCred;
@@ -19,9 +23,9 @@ export interface HostIdentity {
 
 /** Non-owning view of a canonical process identified by hart and allocated PID. */
 export class HostProcess {
-  private readonly pid: number;
+  readonly pid: number;
 
-  constructor(private readonly memory: ThistleMemory, private readonly hart: number) {
+  constructor(readonly memory: ThistleMemory, readonly hart: number) {
     this.pid = withNativeLock(memory, C_PROCESS_LOCK, () => {
       const record = thistleProcessRecord(memory, hart);
       if (record === 0xffffffff) bad("ESRCH", "missing canonical process");
@@ -35,6 +39,18 @@ export class HostProcess {
       if (record === 0xffffffff || loadU32(this.memory, record + P_PID) !== this.pid) bad("ESRCH", "canonical process view expired");
       return operation(record);
     });
+  }
+
+  get parentPid(): number { return this.withRecord(record => loadU32(this.memory, record + P_PPID)); }
+  get groupId(): number { return this.withRecord(record => loadU32(this.memory, record + P_PGID)); }
+
+  set groupId(value: number) {
+    if (!Number.isInteger(value) || value < 1 || value >= 0xffffffff) bad("EINVAL", "process group ID");
+    this.withRecord(record => atomicStoreI32(this.memory, record + P_PGID, value | 0));
+  }
+
+  finish(code: number): void {
+    checkNative(thistleProcessFinish(this.memory, this.hart, this.pid, code));
   }
 
   identity(): HostIdentity {
@@ -52,9 +68,9 @@ export class HostProcess {
     }));
   }
 
-  setIdentity(operation: number, first: number, second = 0xffffffff, third = 0xffffffff): number {
+  setIdentity(operation: number, first: number | null, second: number | null = null, third: number | null = null): number {
     return this.withRecord(() => {
-      const result = Number(thistleProcessIdentity(this.memory, this.hart, operation, first, second, third));
+      const result = Number(thistleProcessIdentity(this.memory, this.hart, operation, identityRequest(first), identityRequest(second), identityRequest(third)));
       checkNative(result);
       return result;
     });

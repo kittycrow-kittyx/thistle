@@ -67,3 +67,6 @@ return THISTLE_THX_BUSY; invalid frame metadata returns THISTLE_THX_MEMORY.
 are the trusted host lifecycle operations in [process-host](process-host.md).
 They park callbacks, quiesce replacement images and activate loaded images
 under process and hart locks.
+
+`thistleProcessFinish` re-exports the checked host completion operation from
+process-host. The allocated PID must still match the hart binding.

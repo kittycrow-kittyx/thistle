@@ -148,7 +148,8 @@
       "thistleProcessInstallCredentials",
       "thistleProcessPark",
       "thistleProcessPrepareImage",
-      "thistleProcessRunImage"
+      "thistleProcessRunImage",
+      "thistleProcessFinish"
     ],
     "verify": {
       "init": "tetoKernelInit",
@@ -265,7 +266,8 @@
       "thistleProcessInstallCredentials": "tetoProcessInstallCredentials",
       "thistleProcessPark": "tetoProcessPark",
       "thistleProcessPrepareImage": "tetoProcessPrepareImage",
-      "thistleProcessRunImage": "tetoProcessRunImage"
+      "thistleProcessRunImage": "tetoProcessRunImage",
+      "thistleProcessFinish": "tetoProcessFinish"
     }
   },
   "memory": {

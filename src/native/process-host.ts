@@ -1,7 +1,7 @@
 import {
   C_MAX_HARTS, C_PROCESS_LOCK, H_EVENT, H_FAULT, H_FCSR, H_HOST_OPERATION,
   H_PROCESS_SLOT, H_RESERVATION, H_STATUS, H_X, H_F, H_EXIT_CODE,
-  P_LEADER_HART, P_STATE, P_SEGMENT_COUNT, P_IMAGE_ENTRY,
+  P_LEADER_HART, P_STATE, P_PID, P_EXIT_CODE, P_SEGMENT_COUNT, P_IMAGE_ENTRY,
   THISTLE_HART_EMPTY, THISTLE_HART_EXITED, THISTLE_HART_RUNNABLE,
   THISTLE_HART_WAITING, THISTLE_PROCESS_RUNNABLE, THISTLE_PROCESS_WAITING,
   THISTLE_PROCESS_ZOMBIE, THISTLE_EVENT_NONE,
@@ -10,6 +10,7 @@ import { atomicStoreI32, compareExchangeI32, fill, loadU32, loadU64, storeI64 } 
 import type { ThistleMemory } from "./memory.js";
 import { hartAt, INVALID_POINTER, lockProcessHarts, processForHart, unlockProcessHarts, validHart, validKernel } from "./state.js";
 import type { I32, Ptr, U32 } from "./types.js";
+import { word } from "./word.js";
 
 const resetRegisters = (memory: ThistleMemory, at: Ptr): void => {
   fill(memory, at + H_X, 32 * 8, 0);
@@ -45,31 +46,55 @@ const parkLocked = (memory: ThistleMemory, hart: U32, proc: Ptr, operation: U32)
   return 0;
 };
 
+const finishLocked = (memory: ThistleMemory, proc: Ptr, slot: U32, code: I32): I32 => {
+  const count = loadU32(memory, C_MAX_HARTS);
+  let hart: U32 = 0;
+  while (hart < count) {
+    const at = hartAt(hart);
+    if (loadU32(memory, at + H_STATUS) !== THISTLE_HART_EMPTY && loadU32(memory, at + H_PROCESS_SLOT) === slot) {
+      storeI64(memory, at + H_X + 10 * 8, word(code));
+      atomicStoreI32(memory, at + H_EXIT_CODE, code);
+      atomicStoreI32(memory, at + H_EVENT, THISTLE_EVENT_NONE);
+      atomicStoreI32(memory, at + H_STATUS, THISTLE_HART_EXITED);
+    }
+    hart += 1;
+  }
+  atomicStoreI32(memory, proc + P_EXIT_CODE, code);
+  atomicStoreI32(memory, proc + P_STATE, THISTLE_PROCESS_ZOMBIE);
+  return 0;
+};
+
 // Hold the process and every bound hart lock across each complete transition.
-const changeLocked = (memory: ThistleMemory, hart: U32, proc: Ptr, operation: U32): I32 => {
+const changeLocked = (memory: ThistleMemory, hart: U32, proc: Ptr, operation: U32, code: I32): I32 => {
   if (loadU32(memory, proc + P_LEADER_HART) !== hart ||
-      loadU32(memory, proc + P_STATE) === THISTLE_PROCESS_ZOMBIE) return -22;
+      operation !== 3 && loadU32(memory, proc + P_STATE) === THISTLE_PROCESS_ZOMBIE) return -22;
   const slot = loadU32(memory, hartAt(hart) + H_PROCESS_SLOT);
   if (!lockProcessHarts(memory, slot)) return -11;
-  const result = operation === 2 ? runImageLocked(memory, hart, proc) : parkLocked(memory, hart, proc, operation);
+  const result = operation === 3 ? finishLocked(memory, proc, slot, code) : operation === 2
+    ? runImageLocked(memory, hart, proc) : parkLocked(memory, hart, proc, operation);
   unlockProcessHarts(memory, slot, loadU32(memory, C_MAX_HARTS), INVALID_POINTER);
   return result;
 };
 
-const change = (memory: ThistleMemory, hart: U32, operation: U32): I32 => {
+const change = (memory: ThistleMemory, hart: U32, operation: U32, code: I32, expectedPid: U32): I32 => {
   if (!validKernel(memory) || !validHart(memory, hart)) return -22;
   if (compareExchangeI32(memory, C_PROCESS_LOCK, 0, 1) !== 0) return -11;
   const proc = processForHart(memory, hart);
-  const result = proc === INVALID_POINTER ? -3 : changeLocked(memory, hart, proc, operation);
+  const result = proc === INVALID_POINTER || expectedPid !== 0 && loadU32(memory, proc + P_PID) !== expectedPid
+    ? -3 : changeLocked(memory, hart, proc, operation, code);
   atomicStoreI32(memory, C_PROCESS_LOCK, 0);
   return result;
 };
 
 /** Trusted host callback parking, with no instruction at address zero to schedule. */
-export const thistleProcessPark = (memory: ThistleMemory, hart: U32): I32 => change(memory, hart, 0);
+export const thistleProcessPark = (memory: ThistleMemory, hart: U32): I32 => change(memory, hart, 0, 0, 0);
 
 /** Quiesce every process hart before an embedding replaces its executable image. */
-export const thistleProcessPrepareImage = (memory: ThistleMemory, hart: U32): I32 => change(memory, hart, 1);
+export const thistleProcessPrepareImage = (memory: ThistleMemory, hart: U32): I32 => change(memory, hart, 1, 0, 0);
 
 /** Publish a fully loaded image as runnable through its existing process leader. */
-export const thistleProcessRunImage = (memory: ThistleMemory, hart: U32): I32 => change(memory, hart, 2);
+export const thistleProcessRunImage = (memory: ThistleMemory, hart: U32): I32 => change(memory, hart, 2, 0, 0);
+
+/** Finish every process hart while checking the host view's allocated identity. */
+export const thistleProcessFinish = (memory: ThistleMemory, hart: U32, pid: U32, code: I32): I32 =>
+  pid === 0 ? -22 : change(memory, hart, 3, code, pid);

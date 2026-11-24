@@ -5,7 +5,7 @@ import { thistleHartInit, thistleProcessInit, thistleHartGetX, thistleHartSetX,
   thistleHartStatus, thistleGuestPage, thistleImageBegin, thistleImageSegment,
   thistleImageFinish, thistleImageReserve, thistleImageRelease } from "../native/kernel.js";
 import { thistleProcessAttach } from "../native/process-state.js";
-import { thistleProcessPark, thistleProcessPrepareImage, thistleProcessRunImage } from "../native/process-host.js";
+import { thistleProcessPark, thistleProcessPrepareImage, thistleProcessRunImage, thistleProcessFinish } from "../native/process-host.js";
 import { C_PROCESS_LOCK, H_LOCK, THISTLE_HART_WAITING, THISTLE_HART_EXITED,
   THISTLE_HART_RUNNABLE } from "../native/abi.js";
 import { hartAt } from "../native/state.js";
@@ -51,4 +51,11 @@ test("host image transition parks the process and resets only its own harts", ()
   assert.equal(thistleProcessRunImage(memory, 1), 0);
   assert.equal(thistleHartStatus(memory, 1), THISTLE_HART_RUNNABLE);
   assert.equal(memory.bytes[peerPage], 77);
+  assert.equal(thistleProcessFinish(memory, 1, 999, 9), -3);
+  assert.equal(thistleHartStatus(memory, 1), THISTLE_HART_RUNNABLE);
+  assert.equal(thistleProcessFinish(memory, 1, 2, 9), 0);
+  assert.equal(thistleHartStatus(memory, 1), THISTLE_HART_EXITED);
+  assert.equal(thistleHartStatus(memory, 2), THISTLE_HART_EXITED);
+  assert.equal(thistleHartGetX(memory, 1, 10), 9n);
+  assert.equal(thistleHartStatus(memory, 3), THISTLE_HART_RUNNABLE);
 });

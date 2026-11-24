@@ -1,3 +1,4 @@
+import { HostContext } from "../host/context.js";
 import { App } from "../apps/base.js";
 import { bad, KErr, msg, requireValue } from "./err.js";
 import { MemIn, MemOut, enc } from "../io/stream.js";
@@ -96,13 +97,12 @@ function replaceProcessImage(p: Proc, error: ExecReplace): void {
   p.cmd = error.path;
   p.argv = [...error.argv];
   p.env = new Map(error.env);
-  p.cred = fullCred(error.cred);
-  p.fsuid = credUid(p.cred);
-  p.fsgid = credGid(p.cred);
+  p.native.installIdentity(fullCred(error.cred));
 
 }
 
 export class Kern {
+  readonly canonical = new HostContext();
   readonly fs: Vfs;
   readonly apps = new Map<string, App>();
   readonly procs = new Map<number, Proc>();
@@ -115,7 +115,6 @@ export class Kern {
   executionCore = "Thistle TypeScript";
   disk = false;
   ttyFn: (s: string, err: boolean) => void = () => {};
-  private seq = 1;
   private haltFn: (() => void) | null = null;
 
   readonly net: KernelOptions["net"];
@@ -145,10 +144,9 @@ export class Kern {
   init(): Proc {
     if (this.procs.has(1)) return requireValue(this.procs.get(1) ?? null, "this.procs.get(1)");
     const z = new MemOut();
-    const p = new Proc({ pid: 1, ppid: 0, pgid: 1, cmd: "init", argv: ["init"], cwd: "/", env: this.baseEnv(), cred: root, io: { sin: new MemIn(), sout: z, serr: z } });
+    const p = new Proc({ pgid: 1, cmd: "init", argv: ["init"], cwd: "/", env: this.baseEnv(), io: { sin: new MemIn(), sout: z, serr: z } }, this.canonical.create(1, 0, root));
     p.state = "sleep";
     this.procs.set(1, p);
-    this.seq = 2;
     this.log("init: process 1 entered service loop");
     return p;
   }
@@ -156,12 +154,12 @@ export class Kern {
   session(io: Io, account: AccountConfig | SessionCred = root): Proc {
     this.init();
     const { cred, name, home } = accountCred(account);
-    const pid = this.seq++;
+    const pid = this.canonical.nextPid();
     const env = this.baseEnv();
     env.set("HOME", home);
     env.set("USER", name);
     env.set("PWD", home);
-    const p = new Proc({ pid, ppid: 1, pgid: pid, cmd: "thsh", argv: ["thsh"], cwd: home, env, cred: fullCred(cred), io });
+    const p = new Proc({ pgid: pid, cmd: "thsh", argv: ["thsh"], cwd: home, env, io }, this.canonical.create(pid, 1, cred));
     p.state = "run";
     this.procs.set(pid, p);
     requireValue(this.procs.get(1) ?? null, "this.procs.get(1)").kids.add(pid);
@@ -238,7 +236,7 @@ export class Kern {
     const path = this.which(name, par);
     const h = this.fs.at(path, par.cwd, procFsCred(par));
     const node = h.node instanceof Reg ? h.node : bad("ENOEXEC", path);
-    const pid = this.seq++;
+    const pid = this.canonical.nextPid();
     const streams = opt.io;
     const io: Io = {
       sin: (streams === null ? null : streams.sin) ?? par.input(0) ?? new MemIn(),
@@ -247,7 +245,7 @@ export class Kern {
     };
     if (!opt.fds) holdStandardIo(io);
     const cred = this.executableCred(path, node, par.cred);
-    const p = new Proc({ pid, ppid: par.pid, pgid: opt.pgid ?? pid, cmd: path, argv: [name, ...argv], cwd: opt.cwd ?? par.cwd, env: new Map(opt.env ?? par.env), cred, io });
+    const p = new Proc({ pgid: opt.pgid ?? pid, cmd: path, argv: [name, ...argv], cwd: opt.cwd ?? par.cwd, env: new Map(opt.env ?? par.env), io }, this.canonical.create(pid, par.pid, cred));
     if (opt.fds) {
       p.fds.clear(); p.allHeld = true;
       for (const [n, f] of opt.fds) {
@@ -358,8 +356,10 @@ export class Kern {
     if (pid <= 2) return;
     const p = this.procs.get(pid) ?? null;
     if (!p || p.code === null) return;
+    const parent = par ?? (this.procs.get(p.ppid) ?? this.procs.get(1) ?? null);
+    if (parent === null) bad("ESRCH", "canonical reaper");
+    this.canonical.reap(parent.native, pid);
     this.procs.delete(pid);
-    const parent = par ?? (this.procs.get(p.ppid) ?? null);
     if (parent !== null) parent.kids.delete(pid);
   }
 

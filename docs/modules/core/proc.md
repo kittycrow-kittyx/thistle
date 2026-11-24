@@ -1,5 +1,16 @@
 # proc
 
-`Proc` owns PID and group identity, credentials, descriptor table, signal mask and completion promise. `PState` describes lifecycle status; `Sig` describes supported signals. `Fd` holds stream endpoints, file path and cursor, access and close-on-exec flags. `Io` carries standard streams. `ExecReplace` transfers control to a replacement image without allocating a new PID.
+`Proc` retains host streams, environment, callback completion and signal
+delivery. Its `native` property is a non-owning `HostProcess` view. PID, parent
+PID, process group, credentials, filesystem IDs and umask read canonical memory.
+`PState` and `Sig` describe the remaining host lifecycle and signal interface.
 
-`FdFlags` names descriptor access and inheritance flags. `ProcInit` names the initial process image, identity, environment and streams.
+`Fd` currently holds host stream endpoints, file path, cursor and flags.
+Descriptor ownership, scheduling and signal-state migration remain pending.
+
+`FdFlags` names descriptor access and inheritance flags. `Io` carries standard
+streams. `ProcInit` contains host image metadata and streams; construction also
+requires the allocated canonical process view. `ExecReplace` transfers control
+to a replacement image without allocating a new PID.
+
+Credential getters return snapshots. Use `Sys` or the trusted constructor/validated-exec loader to change credentials.

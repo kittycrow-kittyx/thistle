@@ -27,85 +27,27 @@ export class Sys {
   set umask(n: number) { this.p.mask = n & 0o777; }
 
   private get fcred(): Cred { return { uid: this.p.fsuid, gid: this.p.fsgid, groups: [...this.p.cred.groups] }; }
-  private get privileged(): boolean { return this.euid === 0; }
-
-  private validId(n: number): boolean { return Number.isInteger(n) && n >= 0 && n < 0xffffffff; }
-  private requested(id: number | null): id is number { return id !== null; }
-  private canSetUid(id: number): boolean { return this.privileged || id === this.ruid || id === this.euid || id === this.suid; }
-  private canSetGid(id: number): boolean { return this.privileged || id === this.rgid || id === this.egid || id === this.sgid; }
-  private ids(a: Array<number | null>, group = false): void {
-    for (const id of a) if (this.requested(id) && (!this.validId(id) || !(group ? this.canSetGid(id) : this.canSetUid(id)))) bad("EPERM", String(id));
-  }
-
   setResuid(ruid: number | null = null, euid: number | null = null, suid: number | null = null): void {
-    this.ids([ruid, euid, suid]);
-    const next = { ruid: this.ruid, euid: this.euid, suid: this.suid };
-    if (this.requested(ruid)) next.ruid = ruid;
-    if (this.requested(euid)) next.euid = euid;
-    if (this.requested(suid)) next.suid = suid;
-    this.p.cred = { ...this.p.cred, ...next, uid: next.euid };
-    this.p.fsuid = next.euid;
+    this.p.native.setIdentity(0, ruid, euid, suid);
   }
 
   setResgid(rgid: number | null = null, egid: number | null = null, sgid: number | null = null): void {
-    this.ids([rgid, egid, sgid], true);
-    const next = { rgid: this.rgid, egid: this.egid, sgid: this.sgid };
-    if (this.requested(rgid)) next.rgid = rgid;
-    if (this.requested(egid)) next.egid = egid;
-    if (this.requested(sgid)) next.sgid = sgid;
-    this.p.cred = { ...this.p.cred, ...next, gid: next.egid };
-    this.p.fsgid = next.egid;
+    this.p.native.setIdentity(1, rgid, egid, sgid);
   }
 
   setReuid(ruid: number | null = null, euid: number | null = null): void {
-    const oldRuid = this.ruid;
-    this.ids([ruid, euid]);
-    const nextR = this.requested(ruid) ? ruid : this.ruid;
-    const nextE = this.requested(euid) ? euid : this.euid;
-    const nextS = this.requested(ruid) || (this.requested(euid) && euid !== oldRuid) ? nextE : this.suid;
-    this.p.cred = { ...this.p.cred, ruid: nextR, euid: nextE, suid: nextS, uid: nextE };
-    this.p.fsuid = nextE;
+    this.p.native.setIdentity(2, ruid, euid);
   }
 
   setRegid(rgid: number | null = null, egid: number | null = null): void {
-    const oldRgid = this.rgid;
-    this.ids([rgid, egid], true);
-    const nextR = this.requested(rgid) ? rgid : this.rgid;
-    const nextE = this.requested(egid) ? egid : this.egid;
-    const nextS = this.requested(rgid) || (this.requested(egid) && egid !== oldRgid) ? nextE : this.sgid;
-    this.p.cred = { ...this.p.cred, rgid: nextR, egid: nextE, sgid: nextS, gid: nextE };
-    this.p.fsgid = nextE;
+    this.p.native.setIdentity(3, rgid, egid);
   }
 
-  setUid(uid: number): void {
-    this.ids([uid]);
-    if (this.privileged) this.setResuid(uid, uid, uid);
-    else this.setResuid(null, uid, null);
-  }
-
-  setGid(gid: number): void {
-    this.ids([gid], true);
-    if (this.privileged) this.setResgid(gid, gid, gid);
-    else this.setResgid(null, gid, null);
-  }
-
-  setFsuid(uid: number): number {
-    const old = this.p.fsuid;
-    if (this.validId(uid) && this.canSetUid(uid)) this.p.fsuid = uid;
-    return old;
-  }
-
-  setFsgid(gid: number): number {
-    const old = this.p.fsgid;
-    if (this.validId(gid) && this.canSetGid(gid)) this.p.fsgid = gid;
-    return old;
-  }
-
-  setGroups(groups: number[]): void {
-    if (!this.privileged) bad("EPERM", "setgroups");
-    if (!groups.every(x => this.validId(x))) bad("EINVAL", "group id");
-    this.p.cred = { ...this.p.cred, groups: [...groups] };
-  }
+  setUid(uid: number): void { this.p.native.setIdentity(4, uid); }
+  setGid(gid: number): void { this.p.native.setIdentity(5, gid); }
+  setFsuid(uid: number): number { return this.p.native.setIdentity(6, uid); }
+  setFsgid(gid: number): number { return this.p.native.setIdentity(7, gid); }
+  setGroups(groups: number[]): void { this.p.native.setGroups(groups); }
 
   async inb(): Promise<Uint8Array> {
     const input = this.p.input(0) ?? bad("EBADF", "stdin");

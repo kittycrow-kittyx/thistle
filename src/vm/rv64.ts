@@ -1,6 +1,5 @@
 // This module composes kernel, toolchain or integration-test boundaries and intentionally imports their contracts.
 //@cg-expect-warning
-import { THISTLE_KERNEL_MEMORY_BYTES } from "../core/kernel-memory.js";
 import { errnoNumbers as eno } from "../core/errno.js";
 import { hostNumber, randomFill, readString } from "./mem64.js";
 import { ensure } from "../core/err.js";
@@ -17,8 +16,10 @@ import type { RvMemory } from "./mem64.js";
 import { Fd } from "../core/proc.js";
 import { RvLinuxEvents } from "./linux-events.js";
 import type { StartIo } from "../core/kernel.js";
-import { directMemory, loadI32, loadU32 } from "../native/memory.js";
+import { loadI32, loadU32 } from "../native/memory.js";
 import type { ThistleMemory } from "../native/memory.js";
+import { thistleProcessPrepareImage, thistleProcessRunImage } from "../native/process-host.js";
+import { checkNative } from "../host/native-access.js";
 import { ThistleMem64 } from "../native/host-memory.js";
 import type { ThistleExports } from "../native/host-exports.js";
 import {
@@ -60,7 +61,6 @@ import {
   thistleProcessMapEnd,
   thistleProcessMapProtection,
   thistleProcessSetGroup,
-  thistleProcessReadGroups,
   thistleResolvePath,
   thistleAccessInode,
   thistleOpenPath,
@@ -94,7 +94,7 @@ import {
   thistleVfsUid,
 } from "../native/vfs.js";
 import {
-  C_PROCESS_TABLE_BASE,
+  C_MAX_HARTS,
   H_FAULT,
   H_LOCK,
   H_STATUS,
@@ -107,14 +107,6 @@ import {
   H_F,
   H_X,
   H_PROCESS_SLOT,
-  P_EGID,
-  P_EUID,
-  P_FSGID,
-  P_FSUID,
-  P_RGID,
-  P_RUID,
-  P_SGID,
-  P_SUID,
   THISTLE_BATCH_BUSY,
   THISTLE_BATCH_CONTENDED,
   THISTLE_BATCH_EXITED,
@@ -124,14 +116,13 @@ import {
   THISTLE_FAULT_BREAKPOINT,
   THISTLE_HART_BASE,
   THISTLE_HART_RUNNABLE,
+  THISTLE_HART_EMPTY,
   THISTLE_HART_WAITING,
   THISTLE_HART_EXITED,
   THISTLE_HART_FAULTED,
   THISTLE_EVENT_NONE,
   THISTLE_HART_STRIDE,
   THISTLE_HOST_WRITE,
-  THISTLE_CONTROL_BASE,
-  THISTLE_PROCESS_STRIDE,
   THISTLE_STARTUP_MAGIC,
   THISTLE_START_OK,
   THISTLE_THX_OK,
@@ -208,7 +199,11 @@ export class Rv64 {
   private fState: BigUint64Array<ArrayBufferLike> = new BigUint64Array(32);
   private memoryState: RvMemory | null = null;
   private nativeMemory: ThistleMemory | null = null;
-  private get m(): RvMemory { return requireValue(this.memoryState, "m before VM initialisation"); }
+  private executionActive = false;
+  private get m(): RvMemory {
+    if (!this.executionActive) bad("EINTR", "expired guest image");
+    return requireValue(this.memoryState, "m before VM initialisation");
+  }
   private set m(value: RvMemory) { this.memoryState = value; }
   private pc = 0n;
   private floor = 0n;
@@ -242,8 +237,9 @@ export class Rv64 {
   }
 
   private async runThistleSource(exe: Exe, argv: string[], image: Uint8Array | null = null): Promise<number> {
-    const physicalBytes = THISTLE_KERNEL_MEMORY_BYTES;
-    const memory = directMemory(physicalBytes);
+    const memory = this.s.k.canonical.memory;
+    const physicalBytes = memory.bytes.length;
+    this.thistleActiveHart = this.s.p.native.hart;
     this.nativeMemory = memory;
     const exports: ThistleExports = {
       thistleKernelInit: (_memory, maxHarts, threaded) => thistleKernelInit(memory, maxHarts, threaded !== 0),
@@ -320,7 +316,15 @@ export class Rv64 {
       thistleResumeHost: (_memory, hart, result) => thistleResumeHost(memory, hart, result),
       thistleExitHart: (_memory, hart, code) => thistleExitHart(memory, hart, code),
     };
-    return this.runThistleCore(exe, argv, image, { memory, exports, label: "Thistle native source" }, physicalBytes);
+    this.executionActive = true;
+    try {
+      return await this.runThistleCore(exe, argv, image, { memory, exports, label: "Thistle native source" }, physicalBytes);
+    } finally {
+      this.executionActive = false;
+      for (const waiters of this.thistleFutexWaiters.values()) {
+        for (const wake of [...waiters]) wake(-4n);
+      }
+    }
   }
 
   /** Thin-host packaging for strings and the random capability consumed by Thistle. */
@@ -352,23 +356,13 @@ export class Rv64 {
     const raw = image ?? bad("ENOEXEC", `${core.label} needs the original THX image`);
     const { memory, exports } = core;
     const maxHarts = THISTLE_GUEST_THREADS;
-    if (exports.thistleKernelInit(0, maxHarts, 0) !== 0 || exports.thistleHartInit(0, 0, 0x0000ffffffffffffn, 0n) !== 0) {
-      bad("ENOMEM", `${core.label} memory initialisation failed`);
-    }
-    if (exports.thistleProcessInit(0, 0, this.s.pid, this.s.ppid, this.s.uid, this.s.euid, this.s.suid, this.s.gid, this.s.egid, this.s.sgid) !== 0) {
-      bad("EPROTO", `${core.label} process initialisation failed`);
-    }
-    for (let index = 0; index < this.s.groups.length; index++) {
-      if (exports.thistleProcessSetGroup(0, 0, index, requireValue(this.s.groups[index] ?? null, "src/vm/rv64.ts:474")) !== 0) {
-        bad("EPROTO", `${core.label} supplementary-group initialisation failed`);
-      }
-    }
+    checkNative(thistleProcessPrepareImage(memory, this.s.p.native.hart));
     // Hosted guests use the live canonical VFS through Sys. A read-only native
     // snapshot would hide writes and allocate a second, stale descriptor table.
     const imageAt = exports.thistleImageReserve(0, raw.length) >>> 0;
     if (imageAt === 0xffffffff || imageAt + raw.length > memory.bytes.length) bad("ENOMEM", `${core.label} image reservation failed`);
     memory.bytes.set(raw, imageAt);
-    const loaded = exports.thistleLoadThx(0, 0, imageAt, raw.length);
+    const loaded = exports.thistleLoadThx(0, this.s.p.native.hart, imageAt, raw.length);
     const released = exports.thistleImageRelease(0, imageAt, raw.length);
     if (released !== THISTLE_THX_OK) bad("EPROTO", `${core.label} image release failed (${released})`);
     if (loaded !== THISTLE_THX_OK) bad("ENOEXEC", `${core.label} rejected THX image (${loaded})`);
@@ -378,13 +372,13 @@ export class Rv64 {
     memory.bytes.set(startup, startupAt);
     const stackLimit = this.s.k.lim.stack;
     if (!Number.isSafeInteger(stackLimit) || stackLimit < 0 || stackLimit > 0xffffffff) bad("EINVAL", "invalid RV64 stack limit");
-    const started = exports.thistleBuildInitialStack(0, 0, startupAt, startup.length, stackLimit);
+    const started = exports.thistleBuildInitialStack(0, this.s.p.native.hart, startupAt, startup.length, stackLimit);
     const startupReleased = exports.thistleImageRelease(0, startupAt, startup.length);
     if (startupReleased !== THISTLE_THX_OK) bad("EPROTO", `${core.label} startup release failed (${startupReleased})`);
     if (started !== THISTLE_START_OK) bad("ENOEXEC", `${core.label} rejected startup block (${started})`);
-    this.xState = new BigInt64Array(memory.buffer, THISTLE_HART_BASE + H_X, 32);
-    this.fState = new BigUint64Array(memory.buffer, THISTLE_HART_BASE + H_F, 32);
-    this.m = new ThistleMem64(memory, 0, exports.thistleHartVirtualTop(0, 0), physicalBytes,
+    this.xState = new BigInt64Array(memory.buffer, THISTLE_HART_BASE + this.s.p.native.hart * THISTLE_HART_STRIDE + H_X, 32);
+    this.fState = new BigUint64Array(memory.buffer, THISTLE_HART_BASE + this.s.p.native.hart * THISTLE_HART_STRIDE + H_F, 32);
+    this.m = new ThistleMem64(memory, this.s.p.native.hart, exports.thistleHartVirtualTop(0, this.s.p.native.hart), physicalBytes,
       (hart, address, create) => exports.thistleGuestPage(0, hart, address, create ? 1 : 0));
     this.seg.length = 0;
     const seen: Array<[bigint, bigint]> = [];
@@ -397,24 +391,25 @@ export class Rv64 {
       seen.push([at, end]);
       this.seg.push({ name: section.name, at, end, flg: section.flg });
     }
-    this.floor = exports.thistleHartImageFloor(0, 0);
+    checkNative(thistleProcessRunImage(memory, this.s.p.native.hart));
+    this.floor = exports.thistleHartImageFloor(0, this.s.p.native.hart);
     this.brk = al(this.floor);
     this.mapAt = 0x4000000000n;
-    this.pc = exports.thistleHartPc(0, 0);
-    this.stackAt = exports.thistleHartStackBottom(0, 0);
+    this.pc = exports.thistleHartPc(0, this.s.p.native.hart);
+    this.stackAt = exports.thistleHartStackBottom(0, this.s.p.native.hart);
     if (maxHarts > 1) return this.runThistleCooperative(core);
     let fuel = this.s.k.lim.fuel;
     selectionExit1: while (!this.done) {
       this.s.chk();
-      const before = exports.thistleHartMetric(0, 0, H_INSTRUCTIONS);
-      const result = exports.thistleRunRv64Batch(0, 0, 16384, BigInt(Date.now()) * 1000n, 0);
-      const after = exports.thistleHartMetric(0, 0, H_INSTRUCTIONS);
+      const before = exports.thistleHartMetric(0, this.s.p.native.hart, H_INSTRUCTIONS);
+      const result = exports.thistleRunRv64Batch(0, this.s.p.native.hart, 16384, BigInt(Date.now()) * 1000n, 0);
+      const after = exports.thistleHartMetric(0, this.s.p.native.hart, H_INSTRUCTIONS);
       if (fuel) {
         fuel -= Number(after - before);
         ensure(!(fuel < 0), () => bad("ELOOP", "RV64 instruction limit reached"));
       }
-      this.pc = exports.thistleHartPc(0, 0);
-      this.brk = exports.thistleHartBreak(0, 0);
+      this.pc = exports.thistleHartPc(0, this.s.p.native.hart);
+      this.brk = exports.thistleHartBreak(0, this.s.p.native.hart);
       switch (true) {
 case !!(result === THISTLE_BATCH_SYSCALL): {
         // A guest syscall is an explicit Thistle-to-host service boundary, not a
@@ -422,20 +417,19 @@ case !!(result === THISTLE_BATCH_SYSCALL): {
         // continue exclusively in the selected generated Thistle execution core.
         // Thistle owns credentials, brk and anonymous mmap state.
         // Synchronise the host syscall adapter before servicing the request.
-        this.syncThistleCredentials(memory);
         this.syncThistleMemoryState(exports);
 
         await this.sys();
         if (this.done) break selectionExit1;
-        ensure(!(exports.thistleHartSetPc(0, 0, ux(this.pc)) !== 0 || exports.thistleResumeSyscall(0, 0, requireValue(this.x[10] ?? null, "src/vm/rv64.ts:562")) !== 0), () => bad("EPROTO", `${core.label} syscall resume failed`));
+        ensure(!(exports.thistleHartSetPc(0, this.s.p.native.hart, ux(this.pc)) !== 0 || exports.thistleResumeSyscall(0, this.s.p.native.hart, requireValue(this.x[10] ?? null, "src/vm/rv64.ts:562")) !== 0), () => bad("EPROTO", `${core.label} syscall resume failed`));
 
 break; }
 case !!(result === THISTLE_BATCH_HOST): {
-        const operation = exports.thistleHostOperation(0, 0);
+        const operation = exports.thistleHostOperation(0, this.s.p.native.hart);
         ensure(!(operation !== THISTLE_HOST_WRITE), () => bad("ENOSYS", `${core.label} requested unsupported host operation ${operation}`));
-        const descriptor = exports.thistleHostDescriptor(0, 0);
-        const address = exports.thistleHostAddress(0, 0);
-        const length = exports.thistleHostLength(0, 0);
+        const descriptor = exports.thistleHostDescriptor(0, this.s.p.native.hart);
+        const address = exports.thistleHostAddress(0, this.s.p.native.hart);
+        const length = exports.thistleHostLength(0, this.s.p.native.hart);
         let hostResult: bigint;
         try {
           hostResult = BigInt(await this.write(descriptor, this.m.read(address, length)));
@@ -443,17 +437,17 @@ case !!(result === THISTLE_BATCH_HOST): {
           if (!(error instanceof KErr)) throw error;
           hostResult = -BigInt(eno[error.code] ?? 5);
         }
-        ensure(!(exports.thistleResumeHost(0, 0, hostResult) !== 0), () => bad("EPROTO", `${core.label} host-operation resume failed`));
+        ensure(!(exports.thistleResumeHost(0, this.s.p.native.hart, hostResult) !== 0), () => bad("EPROTO", `${core.label} host-operation resume failed`));
 
 break; }
 case !!(result === THISTLE_BATCH_EXITED): {
-        this.exit(BigInt(exports.thistleHartExitCode(0, 0)));
+        this.exit(BigInt(exports.thistleHartExitCode(0, this.s.p.native.hart)));
         break selectionExit1;
        }
 default: { switch (true) {
 case !!(result === THISTLE_BATCH_FAULT): {
-        const fault = loadI32(memory, THISTLE_HART_BASE + H_FAULT);
-        const instruction = loadU32(memory, THISTLE_HART_BASE + H_LAST_INSTRUCTION);
+        const fault = loadI32(memory, THISTLE_HART_BASE + this.s.p.native.hart * THISTLE_HART_STRIDE + H_FAULT);
+        const instruction = loadU32(memory, THISTLE_HART_BASE + this.s.p.native.hart * THISTLE_HART_STRIDE + H_LAST_INSTRUCTION);
         if (fault === THISTLE_FAULT_BREAKPOINT) bad("EINTR", `RV64 breakpoint at 0x${this.pc.toString(16)}`);
         bad("ENOEXEC", `${core.label} fault ${fault} on instruction 0x${instruction.toString(16).padStart(8, "0")} at 0x${this.pc.toString(16)}`);
 
@@ -474,9 +468,9 @@ case !!(result === THISTLE_BATCH_BUSY || result === THISTLE_BATCH_CONTENDED): {
     const { memory, exports } = core;
     const session: ThistleThreadRuntime = {"failure": null,
       core,
-      active: new Set([0]),
+      active: new Set([this.s.p.native.hart]),
       pending: new Map<number, Promise<void>>(),
-      tids: new Map([[0, this.s.pid]]),
+      tids: new Map([[this.s.p.native.hart, this.s.pid]]),
       clearTid: new Map<number, bigint>(),
       nextTid: this.s.pid + 100000,
     };
@@ -493,7 +487,7 @@ case !!(result === THISTLE_BATCH_BUSY || result === THISTLE_BATCH_CONTENDED): {
           if (status === THISTLE_HART_EXITED) {
             // Guest state updates stay inside the selected instruction or syscall path.
             //@cg-expect-warning
-            if (hart === 0) this.exit(BigInt(exports.thistleHartExitCode(0, 0)));
+            if (hart === this.s.p.native.hart) this.exit(BigInt(exports.thistleHartExitCode(0, this.s.p.native.hart)));
             else session.active.delete(hart);
             continue;
           }
@@ -518,7 +512,7 @@ break; }
 case !!(result === THISTLE_BATCH_HOST): { this.thistleScheduleHost(session, hart);
 break; }
 case !!(result === THISTLE_BATCH_EXITED): {
-            if (hart === 0) this.exit(BigInt(exports.thistleHartExitCode(0, 0)));
+            if (hart === this.s.p.native.hart) this.exit(BigInt(exports.thistleHartExitCode(0, this.s.p.native.hart)));
             else this.thistleThreadExit(hart, exports.thistleHartExitCode(0, hart));
 
 break; }
@@ -663,12 +657,11 @@ break; }
     this.thistleActiveHart = hart;
     this.pc = exports.thistleHartPc(0, hart);
     this.brk = exports.thistleHartBreak(0, hart);
-    this.syncThistleCredentials(memory);
     this.syncThistleMemoryState(exports);
     const registers = this.xState;
     const pc = this.pc;
     const work = this.sys().then(() => {
-      if (exports.thistleHartStatus(0, hart) !== THISTLE_HART_WAITING) return;
+      if (!this.executionActive || exports.thistleHartStatus(0, hart) !== THISTLE_HART_WAITING) return;
       if (exports.thistleHartSetPc(0, hart, ux(pc)) !== 0 ||
           exports.thistleResumeSyscall(0, hart, requireValue(registers[10] ?? null, "src/vm/rv64.ts:784")) !== 0) {
         bad("EPROTO", `Thistle hart ${hart} syscall resume failed`);
@@ -692,6 +685,7 @@ break; }
         if (!(error instanceof KErr)) throw error;
         value = -BigInt(eno[error.code] ?? 5);
       }
+      if (!this.executionActive) return;
       if (exports.thistleResumeHost(0, hart, value) !== 0) {
         bad("EPROTO", `Thistle hart ${hart} host resume failed`);
       }
@@ -705,12 +699,16 @@ break; }
     const option = ux(flags);
     if ((option & 0x10000n) === 0n) return this.clone(flags, stack, tls);
     if ((option & 0x900n) !== 0x900n) return -22n;
+    if (session.active.size >= THISTLE_GUEST_THREADS) return -11n;
+    const { memory, exports } = session.core;
     let child = -1;
-    for (let hart = 1; hart < THISTLE_GUEST_THREADS; hart++) {
-      if (!session.active.has(hart)) { child = hart; break; }
+    const harts = loadU32(memory, C_MAX_HARTS);
+    for (let hart = 0; hart < harts; hart++) {
+      const empty = exports.thistleHartStatus(0, hart) === THISTLE_HART_EMPTY;
+      const reusable = session.tids.has(hart) && !session.active.has(hart) && !session.pending.has(hart);
+      if (empty || reusable) { child = hart; break; }
     }
     if (child < 0) return -11n;
-    const { memory, exports } = session.core;
     const parent = this.thistleActiveHart;
     const source = THISTLE_HART_BASE + parent * THISTLE_HART_STRIDE;
     const target = THISTLE_HART_BASE + child * THISTLE_HART_STRIDE;
@@ -805,56 +803,8 @@ break; }
     });
   }
 
-  private syncThistleCredentials(memory: ThistleMemory): void {
-    const slot = loadU32(memory, THISTLE_HART_BASE + H_PROCESS_SLOT);
-    if (slot === 0xffffffff) return;
-
-    const table = loadU32(
-      memory,
-      THISTLE_CONTROL_BASE + C_PROCESS_TABLE_BASE,
-    );
-    const proc = table + slot * THISTLE_PROCESS_STRIDE;
-
-    const ruid = loadU32(memory, proc + P_RUID);
-    const euid = loadU32(memory, proc + P_EUID);
-    const suid = loadU32(memory, proc + P_SUID);
-    const fsuid = loadU32(memory, proc + P_FSUID);
-
-    const rgid = loadU32(memory, proc + P_RGID);
-    const egid = loadU32(memory, proc + P_EGID);
-    const sgid = loadU32(memory, proc + P_SGID);
-    const fsgid = loadU32(memory, proc + P_FSGID);
-
-    const count = thistleProcessReadGroups(memory, 0, 0, 0);
-    if (count < 0) bad("EAGAIN", "native credential snapshot unavailable");
-    const groups: number[] = [];
-    const input = count === 0 ? 0 : thistleImageReserve(memory, count * 4);
-    if (input === 0xffffffff) bad("ENOMEM", "native credential snapshot buffer unavailable");
-    if (count !== 0 && thistleProcessReadGroups(memory, 0, input, count) !== count) {
-      thistleImageRelease(memory, input, count * 4);
-      bad("EAGAIN", "native credential vector changed during snapshot");
-    }
-    for (let index = 0; index < count; index++) groups.push(loadU32(memory, input + index * 4));
-    if (count !== 0) thistleImageRelease(memory, input, count * 4);
-
-    this.s.p.cred = {
-      uid: euid,
-      gid: egid,
-      ruid,
-      euid,
-      suid,
-      rgid,
-      egid,
-      sgid,
-      groups,
-    };
-
-    this.s.p.fsuid = fsuid;
-    this.s.p.fsgid = fsgid;
-  }
-
   private syncThistleMemoryState(exports: ThistleExports): void {
-    this.brk = exports.thistleHartBreak(0, 0);
+    this.brk = exports.thistleHartBreak(0, this.s.p.native.hart);
 
     // Retain file-backed mappings maintained by the compatibility bridge.
     const hostOwned = this.maps.filter(
@@ -864,12 +814,12 @@ break; }
     this.maps.length = 0;
     this.maps.push(...hostOwned);
 
-    const count = exports.thistleProcessMapCount(0, 0);
+    const count = exports.thistleProcessMapCount(0, this.s.p.native.hart);
 
     for (let index = 0; index < count; index++) {
-      const at = exports.thistleProcessMapAddress(0, 0, index);
-      const end = exports.thistleProcessMapEnd(0, 0, index);
-      const prot = exports.thistleProcessMapProtection(0, 0, index);
+      const at = exports.thistleProcessMapAddress(0, this.s.p.native.hart, index);
+      const end = exports.thistleProcessMapEnd(0, this.s.p.native.hart, index);
+      const prot = exports.thistleProcessMapProtection(0, this.s.p.native.hart, index);
 
       if (end > at && !hostOwned.some(mapping => mapping.at === at && mapping.end === end)) {
         this.maps.push({"path": null, "off": null, at,
@@ -884,10 +834,13 @@ break; }
   private async sys(): Promise<void> {
     // Capture the originating hart: another hart may run while this syscall awaits.
     const registers = this.x;
-    try { registers[10] = sx(await this.call(Number(ux(requireValue(registers[17] ?? null, "src/vm/rv64.ts:1322")))), 64); }
+    try {
+      const result = await this.call(Number(ux(requireValue(registers[17] ?? null, "src/vm/rv64.ts:1322"))));
+      if (this.executionActive) registers[10] = sx(result, 64);
+    }
     catch (caughtValue) { const e = caughtValue instanceof Error ? caughtValue : new Error(typeof caughtValue === "undefined" ? "undefined" : String(caughtValue));
       if (!(e instanceof KErr)) throw e;
-      registers[10] = sx(-BigInt(eno[e.code] ?? 5), 64);
+      if (this.executionActive) registers[10] = sx(-BigInt(eno[e.code] ?? 5), 64);
     }
   }
 
