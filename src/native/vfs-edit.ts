@@ -4,7 +4,7 @@ import {
   D_NAME_LENGTH, D_PARENT, P_FSGID, P_FSUID, THISTLE_CONTROL_BASE,
   THISTLE_VFS_INODE_STRIDE, THISTLE_VFS_KIND_CHARACTER, THISTLE_VFS_KIND_DIRECTORY,
   THISTLE_VFS_KIND_FILE, THISTLE_VFS_KIND_LINK, V_ATIME, V_CAPACITY, V_CTIME,
-  V_DATA, V_GID, V_KIND, V_MODE, V_MTIME, V_NLINK, V_SIZE, V_UID,
+  V_DATA, V_FLAGS, V_VERSION, THISTLE_VFS_HOST_BACKING, V_GID, V_KIND, V_MODE, V_MTIME, V_NLINK, V_SIZE, V_UID,
 } from "./abi.js";
 import { word, ux, wordToU32 } from "./word.js";
 import { inputContains } from "./arena.js";
@@ -12,7 +12,7 @@ import { atomicLoadU64, atomicStoreU64, copyMemory, fill, loadU32, loadU64, stor
 import type { ThistleMemory } from "./memory.js";
 import type { I32, Ptr, U32, U64 } from "./types.js";
 import {
-  allocateData, allowed, growData, dentryAt, findChild, hashBytes, inodeAt, parentOf,
+  allocateData, allowed, residentFits, growData, dentryAt, findChild, hashBytes, inodeAt, parentOf,
   sameName, thistleVfsKind, thistleVfsRelease, validName,
 } from "./vfs.js";
 
@@ -119,11 +119,13 @@ export const thistleVfsCreate = (
   kind: U32, mode: U32, now: U64,
 ): I32 => {
   if (kind < THISTLE_VFS_KIND_FILE || kind > THISTLE_VFS_KIND_CHARACTER) return -22;
+  if (!residentFits(memory, 0n, 128n)) return -28;
   const inode = freeInode(memory);
   if (inode === 0) return -28;
   const at = inodeAt(memory, inode);
   fill(memory, at, THISTLE_VFS_INODE_STRIDE, 0);
   storeU32(memory, at + V_KIND, kind);
+  storeU64(memory, at + V_VERSION, atomicLoadU64(memory, C_VFS_GENERATION) + 1n);
   storeU32(memory, at + V_MODE, mode & 0o7777);
   storeU32(memory, at + V_UID, loadU32(memory, proc + P_FSUID));
   storeU32(memory, at + V_GID, loadU32(memory, proc + P_FSGID));
@@ -148,10 +150,12 @@ export const thistleVfsWrite = (
   if (!inputContains(memory, input, length)) return -14;
   if (!allowed(memory, proc, inode, 2)) return -13;
   const state = inodeAt(memory, inode);
+  if ((loadU32(memory, state + V_FLAGS) & THISTLE_VFS_HOST_BACKING) !== 0) return -18;
   const oldSize = loadU64(memory, state + V_SIZE);
   if (oldSize > 0xffffffffn || offset > 0x7fffffff || length > 0x7fffffff - offset) return -27;
   const required = offset + length;
   const size: U32 = replace || oldSize < ux(word(required)) ? required : wordToU32(oldSize);
+  if (kind === THISTLE_VFS_KIND_FILE && !residentFits(memory, oldSize, ux(word(size)))) return -28;
   const capacity = loadU32(memory, state + V_CAPACITY);
   const previous = loadU32(memory, state + V_DATA);
   const data = size > capacity ? growData(memory, inode, size) : previous;
@@ -164,6 +168,7 @@ export const thistleVfsWrite = (
   storeU32(memory, state + V_CAPACITY, size > capacity ? size : capacity);
   storeU64(memory, state + V_SIZE, ux(word(size)));
   storeU32(memory, state + V_MODE, loadU32(memory, state + V_MODE) & ~0o6000);
+  storeU64(memory, state + V_VERSION, loadU64(memory, state + V_VERSION) + 1n);
   touch(memory, inode, now, true);
   changed(memory);
   return length;

@@ -55,6 +55,7 @@ if (target === "wasm") {
   writeFileSync(configPath, project.replace('"src/native/word.ts"', [
     '"src/native/word.ts"', '"src/native/vfs-edit.ts"',
     '"src/native/process-state.ts"', '"src/native/process-reap.ts"',
+    '"src/native/vfs-backing.ts"',
   ].join(",\n    ")));
   command([
     process.execPath, path.join(compiler, "bake/src/cli.ts"),

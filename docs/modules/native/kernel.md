@@ -44,3 +44,7 @@ before allocation. Free tail frames reduce the physical high-water mark.
 and `thistleProcessUmask` are re-exported from
 [process-state](process-state.md). Host adapters use these canonical records
 and credential operations instead of maintaining their own authoritative copies.
+
+Backing metadata exports `thistleVfsBacking`, `thistleVfsBackingVersion`,
+`thistleVfsCommitBacking` and `thistleVfsSetQuota` are defined in
+[vfs-backing](vfs-backing.md).

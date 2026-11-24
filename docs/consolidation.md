@@ -102,3 +102,23 @@ The storage adapter remains unresolved: `Lim.host()` permits sparse filesystem
 budgets above the native in-memory arena's 128 MiB limit. Preserving lazy host
 payloads requires a backing-storage capability with canonical inode, path,
 permission and descriptor authority.
+
+## Validated credential and compiler checkpoint
+
+Commit `99ad2dcc87bb74bf4192bf695d73b37c4e9b89db` passed Kernel validation
+run 45217753714 and Canonical compiler validation run 45217753684. The latter
+covers released Bake/Baguette/Croissant/Crust, zero kernel diagnostics, compiled
+baseline/threaded WASM credential checks, and six C plus six Rust targets.
+These are candidate compilation checks, not releases or mikuOS boot evidence.
+
+## Backing-storage increment
+
+Canonical inode records can reference an opaque host byte carrier with separate
+logical size, resident bytes and payload revision. A reserved descriptor commits
+storage metadata only after permission, version and resident-quota checks.
+Native arena access returns EXDEV for these inodes. The Bun carrier and filesystem
+facade are not connected yet. Filesystem ownership remains a migration gate.
+
+The untagged ABI 11 inode stride changes to 80 bytes for resident accounting and
+payload versions. The VFS image format and process stride remain unchanged.
+No release archive or consumer pin uses this candidate layout.

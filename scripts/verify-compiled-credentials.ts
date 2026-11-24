@@ -39,5 +39,21 @@ for (const threaded of [false, true]) {
   assert.equal(view.getUint32(proc + P_GROUP_DATA, true), 0);
   assert.equal(view.getUint32(C_PHYSICAL_NEXT, true), initial);
   assert.equal(invoke("ImageRelease", 0, input, count * 4), 0);
+  const record = Number(invoke("ImageReserve", 0, 256));
+  data[record + 128] = 102;
+  const file = Number(invoke("VfsCreate", 0, proc, 1, record + 128, 1, 1, 0o644, 1n));
+  assert.ok(file > 1);
+  assert.equal(invoke("VfsSetQuota", 0, 1024n), 0);
+  const previous = invoke("VfsBackingVersion", 0, file);
+  view.setUint32(record, 7, true); view.setUint32(record + 4, 1, true);
+  view.setBigUint64(record + 8, 5n * 1024n ** 3n, true);
+  view.setBigUint64(record + 16, 0n, true);
+  assert.equal(invoke("VfsCommitBacking", 0, proc, file, previous, record, 2n), 0);
+  assert.equal(invoke("VfsBacking", 0, file), 7);
+  assert.equal(invoke("VfsFileSize", 0, file), 5n * 1024n ** 3n);
+  assert.equal(invoke("VfsResidentUsage", 0), 256n);
+  assert.equal(invoke("VfsReadData", 0, file, 0n, record + 128, 1), -18);
+  assert.equal(invoke("VfsCommitBacking", 0, proc, file, previous, record, 2n), -11);
+  assert.equal(invoke("ImageRelease", 0, record, 256), 0);
   console.log(name + ": ABI " + THISTLE_ABI_VERSION + ", extended groups, identity and frame reuse passed");
 }

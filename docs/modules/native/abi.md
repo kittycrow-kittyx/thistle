@@ -342,3 +342,11 @@ ABI identities, fixed region sizes, status/error values, flags and capacities us
 | Process stride | 352 bytes |
 | Inline supplementary IDs | 32 |
 | Previous memory ABI | 10; rejected by ABI 11 validation |
+
+| Additional ABI 11 field | Layout |
+| --- | --- |
+| `C_VFS_QUOTA` | Control offset 3368, u64 resident-byte limit |
+| `V_RESIDENT` | Inode offset 64, u64 host-resident bytes |
+| `V_VERSION` | Inode offset 72, u64 payload revision |
+| `THISTLE_VFS_HOST_BACKING` | Inode flag 1; `V_DATA` is an opaque host carrier handle |
+| `THISTLE_VFS_INODE_STRIDE` | 80 bytes; VFS image format remains unchanged |

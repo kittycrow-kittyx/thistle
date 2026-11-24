@@ -110,3 +110,6 @@ bun run test
 - [test/native-credentials.test](modules/test/native-credentials.test.md)
 
 - [Compiler validation](compiler-validation.md)
+
+- [native/vfs-backing](modules/native/vfs-backing.md)
+- [test/native-vfs-backing.test](modules/test/native-vfs-backing.test.md)

@@ -3066,3 +3066,4 @@ export { thistleVfsCreate, thistleVfsWrite, thistleVfsLink, thistleVfsUnlink, th
 
 export { thistleProcessReap } from "./process-reap.js";
 export { thistleProcessSetGroup, thistleProcessReadGroups, thistleProcessRecord, thistleNextPid, thistleProcessIdentity, thistleProcessGroups, thistleProcessUmask } from "./process-state.js";
+export { thistleVfsBacking, thistleVfsBackingVersion, thistleVfsCommitBacking, thistleVfsSetQuota } from "./vfs-backing.js";

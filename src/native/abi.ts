@@ -203,7 +203,7 @@ export const M_BACKING: U32 = 40;
 export const THISTLE_MAP_BACKING_ANONYMOUS: U32 = 0;
 export const THISTLE_MAP_BACKING_HOST_FILE: U32 = 1;
 
-export const THISTLE_VFS_INODE_STRIDE: U32 = 64;
+export const THISTLE_VFS_INODE_STRIDE: U32 = 80;
 export const THISTLE_VFS_INODE_CAPACITY: U32 = 4096;
 export const THISTLE_VFS_DENTRY_STRIDE: U32 = 24;
 export const THISTLE_VFS_DENTRY_CAPACITY: U32 = 8192;
@@ -303,3 +303,9 @@ export const THISTLE_START_OK: I32 = 0;
 export const THISTLE_START_RANGE: I32 = 1;
 export const THISTLE_START_FORMAT: I32 = 2;
 export const THISTLE_START_MEMORY: I32 = 3;
+
+// ABI 11 backing metadata. Host handles identify byte carriers, not VFS nodes.
+export const C_VFS_QUOTA: U32 = 3368;
+export const V_RESIDENT: U32 = 64;
+export const V_VERSION: U32 = 72;
+export const THISTLE_VFS_HOST_BACKING: U32 = 1;

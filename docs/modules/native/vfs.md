@@ -19,3 +19,8 @@ and supply validated canonical inode or dentry indices.
   requested permission bit against the process filesystem identity/groups.
 
 `thistleVfsRelease` releases a nameless inode after its final canonical descriptor closes. `vfs-edit` re-exports the same function.
+
+`thistleVfsResidentUsage` sums 128 bytes per live inode and each regular file's
+resident payload. `residentFits` checks a byte replacement against the canonical
+quota, with zero retaining the native arena-only policy. Host-backed payload
+reads return EXDEV for explicit host transport.

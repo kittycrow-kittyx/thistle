@@ -10,7 +10,8 @@
     "src/native/start.ts",
     "src/native/vfs-edit.ts",
     "src/native/process-state.ts",
-    "src/native/process-reap.ts"
+    "src/native/process-reap.ts",
+    "src/native/vfs-backing.ts"
   ],
   "generatedDir": "build/compiler-validation/wasm/generated",
   "outDir": "build/compiler-validation/wasm/compiled",
@@ -135,7 +136,12 @@
       "thistleProcessGroups",
       "thistleProcessReadGroups",
       "thistleProcessUmask",
-      "thistleProcessReap"
+      "thistleProcessReap",
+      "thistleVfsBacking",
+      "thistleVfsBackingVersion",
+      "thistleVfsCommitBacking",
+      "thistleVfsSetQuota",
+      "thistleVfsResidentUsage"
     ],
     "verify": {
       "init": "tetoKernelInit",
@@ -241,7 +247,12 @@
       "thistleProcessGroups": "tetoProcessGroups",
       "thistleProcessReadGroups": "tetoProcessReadGroups",
       "thistleProcessUmask": "tetoProcessUmask",
-      "thistleProcessReap": "tetoProcessReap"
+      "thistleProcessReap": "tetoProcessReap",
+      "thistleVfsBacking": "tetoVfsBacking",
+      "thistleVfsBackingVersion": "tetoVfsBackingVersion",
+      "thistleVfsCommitBacking": "tetoVfsCommitBacking",
+      "thistleVfsSetQuota": "tetoVfsSetQuota",
+      "thistleVfsResidentUsage": "tetoVfsResidentUsage"
     }
   },
   "memory": {

@@ -51,7 +51,7 @@ import {
   V_CAPACITY,
   V_CTIME,
   V_DATA,
-  V_FLAGS,
+  V_FLAGS, V_RESIDENT, V_VERSION, C_VFS_QUOTA, THISTLE_VFS_HOST_BACKING,
   V_GID,
   V_KIND,
   V_MODE,
@@ -363,6 +363,7 @@ const readData = (memory: ThistleMemory, inode: U32, offset: U64, output: Ptr, l
   const kind = thistleVfsKind(memory, inode);
   if (kind !== THISTLE_VFS_KIND_FILE && kind !== THISTLE_VFS_KIND_LINK) return -22;
   const state = inodeAt(memory, inode);
+  if ((loadU32(memory, state + V_FLAGS) & THISTLE_VFS_HOST_BACKING) !== 0) return -18;
   const size = loadU64(memory, state + V_SIZE);
   if (offset >= size) return 0;
   const available = size - offset;
@@ -523,6 +524,12 @@ export const thistleLoadVfs = (memory: ThistleMemory, image: Ptr, imageLength: U
   if (dentryResult < 0n) return wordToI32(-dentryResult);
   if (dentryResult !== word(end)) return THISTLE_VFS_FORMAT;
   publishVfs(memory, inodeCount, dentryCount, root);
+  let versioned: U32 = 1;
+  while (versioned < inodeCapacity) {
+    const state = inodeAt(memory, versioned);
+    if (loadU32(memory, state + V_KIND) !== 0) storeU64(memory, state + V_VERSION, atomicLoadU64(memory, C_VFS_GENERATION));
+    versioned += 1;
+  }
   return THISTLE_VFS_OK;
 };
 
@@ -549,3 +556,27 @@ export const thistleVfsRelease = (memory: ThistleMemory, inode: U32): void => {
   storeU32(memory, C_VFS_INODE_COUNT, loadU32(memory, C_VFS_INODE_COUNT) - 1);
 };
 
+
+/** Caller holds the VFS lock. Open unlinked inodes remain charged until close. */
+export const thistleVfsResidentUsage = (memory: ThistleMemory): U64 => {
+  const capacity = loadU32(memory, C_VFS_INODE_CAPACITY);
+  let inode: U32 = 1;
+  let total: U64 = 0n;
+  while (inode < capacity) {
+    const state = inodeAt(memory, inode);
+    const kind = loadU32(memory, state + V_KIND);
+    if (kind !== 0) total += 128n;
+    if (kind === THISTLE_VFS_KIND_FILE) total += (loadU32(memory, state + V_FLAGS) & THISTLE_VFS_HOST_BACKING) !== 0
+      ? loadU64(memory, state + V_RESIDENT) : loadU64(memory, state + V_SIZE);
+    inode += 1;
+  }
+  return total;
+};
+
+/** Check a resident-byte replacement against the canonical quota. */
+export const residentFits = (memory: ThistleMemory, previous: U64, replacement: U64): boolean => {
+  const limit = loadU64(memory, C_VFS_QUOTA);
+  if (limit === 0n) return true;
+  const used = thistleVfsResidentUsage(memory);
+  return previous <= used && replacement <= limit && used - previous <= limit - replacement;
+};
