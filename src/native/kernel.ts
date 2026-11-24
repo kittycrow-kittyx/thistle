@@ -1,5 +1,5 @@
 import { bindProcess, INVALID_POINTER, hartAt, processAt, processForHart, processSlotByPid, validHart, validKernel } from "./state.js";
-import { inputContains, allocateFrame, validProcessFrames, releaseProcessFrames, trimFreeFrames, markDirtyBytes, clearDirtyBytes, hasDirtyBytes } from "./arena.js";
+import { inputContains, allocateFrame, validProcessFrames, releaseProcessFrames, trimFreeFrames, markDirtyBytes, clearDirtyBytes, hasDirtyRange } from "./arena.js";
 import { updateIdentity, readGroup, replaceGroups } from "./credentials.js";
 import { rv64Branch, rv64RegisterWordValid, rv64RegisterWordValue, rv64ImmediateWordValid, rv64ImmediateWordValue, rv64ImmediateOpValid, rv64ImmediateOpValue, rv64RegisterValid, rv64RegisterValue, rv64FloatClass, rv64CompressedJump, rv64ImmediateB, rv64ImmediateI, rv64ImmediateJ, rv64ImmediateS, rv64ImmediateU } from "../core/rv64-decode.js";
 import {
@@ -1082,21 +1082,6 @@ export const thistleMarkGuestWrite = (memory: ThistleMemory, hart: U32, address:
   return result;
 };
 
-const dirtyRangePresent = (memory: ThistleMemory, proc: Ptr, start: U64, end: U64): boolean => {
-  const table = loadU32(memory, proc + P_PAGE_TABLE), count = loadU32(memory, proc + P_PAGE_CAPACITY);
-  let index: U32 = 0;
-  while (index < count) {
-    const entry = table + index * THISTLE_PAGE_ENTRY_SIZE;
-    const key = atomicLoadU64(memory, entry);
-    if (key === 0n || loadU32(memory, entry + PAGE_DIRTY_FRAME) === 0) { index += 1; continue; }
-    const base = (key - 1n) << 16n, stop = base + ux(word(THISTLE_GUEST_PAGE_SIZE));
-    const low = start > base ? start : base, high = end < stop ? end : stop;
-    if (low < high && hasDirtyBytes(memory, entry, wordToU32(low - base), wordToU32(high - low))) return true;
-    index += 1;
-  }
-  return false;
-};
-
 const clearMappedRange = (memory: ThistleMemory, proc: Ptr, start: U64, end: U64): void => {
   const table = loadU32(memory, proc + P_PAGE_TABLE);
   const capacity = loadU32(memory, proc + P_PAGE_CAPACITY);
@@ -1445,7 +1430,7 @@ const anonymousUnmap = (memory: ThistleMemory, proc: Ptr, address: U64, length: 
   const end = address + size;
   const splits = unmapSplitCount(memory, proc, address, end);
   if (splits < 0) return MAP_NOT_OWNED;
-  if (dirtyRangePresent(memory, proc, address, end)) return -16n;
+  if (hasDirtyRange(memory, proc, address, end)) return -16n;
   if (wordToU32(word(splits)) > loadU32(memory, proc + P_MAP_CAPACITY) - loadU32(memory, proc + P_MAP_COUNT)) return -12n;
   applyUnmap(memory, proc, address, end);
   return 0n;
@@ -1668,7 +1653,7 @@ const remapMapping = (memory: ThistleMemory, hart: U32, proc: Ptr, backing: U32)
   if (found === count) return MAP_NOT_OWNED;
   const mapping = mapAt(memory, proc, found);
   if (newSize === oldSize) return sx(oldAddress, 64);
-  if (backing === THISTLE_MAP_BACKING_HOST_FILE && dirtyRangePresent(memory, proc, oldAddress, oldAddress + oldSize)) return -16n;
+  if (backing === THISTLE_MAP_BACKING_HOST_FILE && hasDirtyRange(memory, proc, oldAddress, oldAddress + oldSize)) return -16n;
   if (newSize < oldSize) {
     clearMappedRange(memory, proc, oldAddress + newSize, oldAddress + oldSize);
     storeU64(memory, mapping + M_END, oldAddress + newSize);

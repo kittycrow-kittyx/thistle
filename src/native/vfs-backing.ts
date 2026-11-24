@@ -2,9 +2,9 @@ import {
   C_VFS_DIRTY, C_VFS_GENERATION, C_VFS_QUOTA, THISTLE_VFS_HOST_BACKING,
   THISTLE_VFS_KIND_FILE, THISTLE_FD_READ, THISTLE_FD_WRITE, FD_INODE, FD_OFFSET, V_CAPACITY, V_CTIME, V_DATA, V_FLAGS,
   V_MODE, V_MTIME, V_RESIDENT, V_SIZE, V_VERSION, P_FSUID,
-  P_MAP_COUNT, P_MAP_TABLE, THISTLE_MAP_STRIDE, M_INODE, M_FILE_RIGHTS, M_FLAGS, M_BACKING, THISTLE_MAP_BACKING_HOST_FILE, M_VIEW_VERSION,
+  P_MAP_COUNT, P_MAP_TABLE, THISTLE_MAP_STRIDE, M_INODE, M_FILE_RIGHTS, M_FLAGS, M_BACKING, THISTLE_MAP_BACKING_HOST_FILE, M_VIEW_VERSION, M_ADDRESS, M_END,
 } from "./abi.js";
-import { inputContains } from "./arena.js";
+import { inputContains, hasDirtyRange } from "./arena.js";
 import { atomicLoadU64, atomicStoreU64, loadU32, loadU64, storeU32, storeU64 } from "./memory.js";
 import type { ThistleMemory } from "./memory.js";
 import type { I32, Ptr, U32, U64 } from "./types.js";
@@ -125,7 +125,9 @@ export const thistleVfsMappingStale = (memory: ThistleMemory, proc: Ptr, index: 
   if (inode < 0) return inode;
   const mapping = loadU32(memory, proc + P_MAP_TABLE) + index * THISTLE_MAP_STRIDE;
   if ((loadU32(memory, mapping + M_FLAGS) & 3) !== 1) return 0;
-  return loadU64(memory, mapping + M_VIEW_VERSION) === thistleVfsBackingVersion(memory, inode) ? 0 : 1;
+  if (loadU64(memory, mapping + M_VIEW_VERSION) === thistleVfsBackingVersion(memory, inode)) return 0;
+  if (hasDirtyRange(memory, proc, loadU64(memory, mapping + M_ADDRESS), loadU64(memory, mapping + M_END))) return -16;
+  return 1;
 };
 
 /** Acknowledge a refreshed shared view only while the inode revision still matches. */

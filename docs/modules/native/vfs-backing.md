@@ -32,3 +32,5 @@ Descriptor operation `3` replaces the complete resident payload, clears set-ID b
 `thistleVfsMappingInode` validates a live mapping's read or shared-write rights. `thistleVfsCommitMappingBacking` publishes resident bytes through that authority, with the existing version and quota checks. It rejects a changed file size.
 
 `thistleVfsMappingStale` compares the shared view revision with the live inode revision. `thistleVfsMappingRefreshed` acknowledges an exact revision after transport; a changed revision is rejected.
+
+A stale shared view with pending dirty bytes returns EBUSY. The transport must publish those bytes before refreshing the view.

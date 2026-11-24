@@ -16,3 +16,5 @@ Guest pages and supplementary-group extensions share the allocator.
 the table under the memory lock. Reaping and image reload reuse these operations.
 
 `markDirtyBytes` allocates and marks a byte-precise bitmap in a canonical auxiliary frame. `hasDirtyBytes` checks a span; `clearDirtyBytes` clears acknowledged bits. The auxiliary frame is retained until image reset or process reaping, and validated and reclaimed with its guest frame.
+
+`hasDirtyRange` checks a process's retained bitmaps for an overlapping dirty span. Bitmap pointer publication uses atomic loads and stores.

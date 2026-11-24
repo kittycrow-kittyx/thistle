@@ -212,16 +212,25 @@ test("RV64 shared mapping flush preserves later descriptor writes to clean bytes
     0x00050713, 0x00000513, 0x000015b7, 0x00300613, 0x00100693, 0x00000793, 0x0de00893, 0x73,
     0x00050493, 0x02a00293, 0x00548023,
     0x00000513, 0xff810593, 0x00100613, 0x03f00893, 0x73,
-    0x00000513, 0x05d00893, 0x73,
+    0x0014c503, 0x05d00893, 0x73,
   ];
   sys.mkfile("/dirty.thx", executable(words, new TextEncoder().encode("/mapped\0")), 0o755);
   const child = sys.start("/dirty.thx", []);
   await new Promise<void>(resolve => setImmediate(resolve));
   assert.equal(thistleHartStatus(kernel.canonical.memory, child.native.hart), THISTLE_HART_WAITING, output.text());
-  sys.writeb("/mapped", Uint8Array.of(1, 99, 3));
+  assert.deepEqual(sys.readb("/mapped"), Uint8Array.of(42, 2, 3));
+  sys.writeb("/mapped", Uint8Array.of(42, 99, 3));
   await input.wr(Uint8Array.of(1));
-  assert.equal(await sys.wait(child.pid), 0, output.text());
+  assert.equal(await sys.wait(child.pid), 99, output.text());
   assert.deepEqual(sys.readb("/mapped"), Uint8Array.of(42, 99, 3));
+  // A second guest reaches the same blocking syscall; signal delivery must not lose its write.
+  sys.writeb("/mapped", Uint8Array.of(1, 2, 3));
+  const killed = sys.start("/dirty.thx", []);
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(thistleHartStatus(kernel.canonical.memory, killed.native.hart), THISTLE_HART_WAITING, output.text());
+  assert.equal(sys.kill(killed.pid, 9), 1);
+  assert.equal(await sys.wait(killed.pid), 137);
+  assert.deepEqual(sys.readb("/mapped"), Uint8Array.of(42, 2, 3));
 });
 
 test("RV64 shared aliases observe a store before the next guest instruction", async () => {
