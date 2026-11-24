@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Kern } from "../core/kernel.js";
+import { createHostKernel } from "../core/host-kernel.js";
 import { Sys } from "../core/sys.js";
-import { defaultKernelOptions } from "../core/host-options.js";
 import { MemIn, MemOut } from "../io/stream.js";
 import { directMemory, loadU32, storeU32 } from "../native/memory.js";
 import {
@@ -17,7 +16,7 @@ test("canonical credential operations match the hosted identity contract", () =>
   assert.equal(thistleKernelInitWithVfs(memory, 2, false, 16, 32, 4096), 0);
   assert.equal(thistleHartInit(memory, 0, 0x10000000n, 0n), 0);
   assert.equal(thistleProcessInit(memory, 0, 1, 0, 0, 0, 0, 0, 0, 0), 0);
-  const kernel = new Kern(defaultKernelOptions()), output = new MemOut();
+  const kernel = createHostKernel(), output = new MemOut();
   const process = kernel.session({ sin: new MemIn(), sout: output, serr: output });
   const sys = new Sys(kernel, process), proc = thistleProcessRecord(memory, 0), keep = 0xffffffff;
   assert.equal(thistleProcessRecord(memory, 1), 0xffffffff);
