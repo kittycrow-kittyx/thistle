@@ -165,6 +165,7 @@ bun run test
 
 - [host/inode](modules/host/inode.md)
 - [test/host-inode.test](modules/test/host-inode.test.md)
+- [test/host-linux-events.test](modules/test/host-linux-events.test.md)
 
 - [test/native-vfs-resolve.test](modules/test/native-vfs-resolve.test.md)
 

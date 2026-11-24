@@ -220,10 +220,10 @@ Character-device opens retain native inode and descriptor authority. The explici
 
 `Kern` mounts its root in the existing canonical memory at construction. `Vfs` is a request facade over that mount and `VNode` subclasses are non-owning inode views. `Sys` uses native inode descriptors for all ordinary files; `Proc.cwd` reads and changes the native cwd reference. `TreeFs` delegates root images to the canonical serializer and loader. RV64 file mapping retention, vfork descriptor snapshots and live overlay reconciliation remain explicit parity gates before promotion.
 
-RV64 eventfd and epoll waits expire on process cancellation or image disposal. Waiters remove their abort
-listeners and timers, and resumed operations check descriptor incarnation before
-accessing guest memory. This fixes host callback lifetime only; it does not yet
-move Linux event semantics into the canonical kernel.
+RV64 eventfd and epoll waits expire on process cancellation or image disposal.
+Cancellation removes abort listeners and timers. Resumed operations check the
+descriptor incarnation before accessing guest memory. Linux event semantics
+remain in the host bridge.
 
 Canonical map records retain the inode and original open rights in previously
 unused words. VFS reclamation and remount validation account for mapped inodes.
