@@ -7,7 +7,10 @@ import { HostInode } from "../host/inode.js";
 import { HostProcess } from "../host/process.js";
 import { mountedKernel } from "./vfs-fixture.js";
 import type { TreeEnt } from "../fs/tree.js";
-import { thistleOpenPath, thistleCloseDescriptor } from "../native/kernel.js";
+import { thistleOpenPath, thistleCloseDescriptor, thistleKernelInit } from "../native/kernel.js";
+import { directMemory } from "../native/memory.js";
+import { thistleLoadVfs, thistleVfsKind } from "../native/vfs.js";
+import { planHostThistleVfs } from "../native/vfs-image.js";
 import { withImage } from "../host/native-access.js";
 import { enc } from "../io/stream.js";
 
@@ -81,4 +84,17 @@ test("canonical persistence round trip retains aliases, arena data and lazy sour
   assert.deepEqual(await restored.read(restoredArena.ino, process), enc("xyz"));
   assert.equal(HostInode.resolve(process, "/base").ino, HostInode.resolve(process, "/alias").ino);
   assert.equal(requireValue(dumpHostTree(process, restored).find(item => item.p === "/sparse") ?? null, "restored sparse inode").source, source);
+});
+
+test("default canonical VFS accommodates the mikuOS base manifest inode scale", () => {
+  // Match the audited manifest's inode count and highest ID without duplicating its contents.
+  const entries = [entry("/", "d", 1), ...Array.from({ length: 4667 }, (_, index) => entry("/f" + index, "f", index + 13))];
+  const memory = directMemory(64 * 1024 * 1024);
+  assert.equal(thistleKernelInit(memory, 1, false), 0);
+  const { image } = planHostThistleVfs(entries);
+  withImage(memory, image.length, input => {
+    memory.bytes.set(image, input);
+    assert.equal(thistleLoadVfs(memory, input, image.length), 0);
+  });
+  assert.equal(thistleVfsKind(memory, 4679), 1);
 });
