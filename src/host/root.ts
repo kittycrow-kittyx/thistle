@@ -7,6 +7,7 @@ import { thistleVfsResidentUsage, thistleVfsInodeCount } from "../native/vfs.js"
 import type { TreeEnt } from "../fs/tree.js";
 import { registerDevice, type CharacterDevice } from "./devices.js";
 import type { HostInode } from "./inode.js";
+import { currentDirectory, checkFilesystemInstance } from "./cwd.js";
 
 /** One mounted root and its byte-transport handle. Namespace state is native. */
 export class RootVolume {
@@ -18,6 +19,12 @@ export class RootVolume {
       data: null, sum: null, size: null, source: null, to: null };
     this.backing = mountHostTree(authority, [root], cap);
   }
+
+  checkProcess(process: HostProcess): void {
+    checkFilesystemInstance(this.authority, process);
+  }
+
+  cwd(process: HostProcess): string { this.checkProcess(process); return currentDirectory(process); }
 
   restore(entries: readonly TreeEnt[]): void { this.backing = mountHostTree(this.authority, entries, this.cap); }
   dump(): TreeEnt[] { return dumpHostTree(this.authority, this.backing); }

@@ -26,3 +26,5 @@ controller carries delivery to JavaScript callbacks. Completed receipts retain
 the terminal signal alongside the exit code.
 
 `cwd` is reconstructed from native dentries; setting it uses canonical chdir. Child construction can inherit the existing cwd inode without a new path lookup. No hosted cwd string is stored.
+
+`inheritCwd(parent)` copies the parent's canonical working-directory reference when constructing a child.

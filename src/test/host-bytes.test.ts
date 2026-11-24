@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { SourceLoad } from "../host/bytes.js";
 import { Reg } from "../fs/vfs.js";
+import { createHostKernel } from "../core/host-kernel.js";
 
 test("shared byte loading coalesces requests and retries a failed provider", async () => {
   let calls = 0;
@@ -17,13 +18,19 @@ test("shared byte loading coalesces requests and retries a failed provider", asy
   assert.equal(calls, 2);
 });
 
-test("legacy Reg retains replacement during an in-flight shared source load", async () => {
+test("canonical Reg view retains replacement during an in-flight shared source load", async () => {
   let finish: (bytes: Uint8Array) => void = () => { throw new Error("source not loaded"); };
-  const file = new Reg("", { mode: 0o644, uid: 0, gid: 0, copy: true,
-    source: { size: 2, sum: "", head: null, load: () => new Promise(resolve => { finish = resolve; }) } });
+  const kernel = createHostKernel(), fs = kernel.fs, root = fs.authority;
+  const tree = fs.dump();
+  tree.push({ p: "/lazy", id: 2, k: "f", mode: 0o644, uid: 0, gid: 0, at: 0, mt: 0, ct: 0,
+    data: null, sum: "", size: 2, to: null,
+    source: { size: 2, sum: "", head: null, load: () => new Promise<Uint8Array>(resolve => { finish = resolve; }) } });
+  fs.restore(tree);
+  const file = fs.at("/lazy", root).node;
+  assert.ok(file instanceof Reg);
   const read = file.materialise();
-  file.replace(new Uint8Array([7, 8]));
+  fs.writeb("/lazy", new Uint8Array([7, 8]), root);
   finish(new Uint8Array([3, 4]));
-  await assert.rejects(read, /source changed during load/);
+  await assert.rejects(read, { code: "EAGAIN" });
   assert.deepEqual([...file.data], [7, 8]);
 });

@@ -1,5 +1,4 @@
 import { HostContext } from "../host/context.js";
-import { inheritDirectory } from "../host/cwd.js";
 import { App } from "../apps/base.js";
 import { bad, KErr, msg, requireValue } from "./err.js";
 import { MemIn, MemOut, enc } from "../io/stream.js";
@@ -224,7 +223,7 @@ export class Kern {
     if (!opt.fds) holdStandardIo(io);
     const cred = this.executableCred(path, node, par.cred);
     const p = new Proc({ pgid: opt.pgid ?? pid, cmd: path, argv: [name, ...argv], cwd: "/", env: new Map(opt.env ?? par.env), io }, this.canonical.create(pid, par.pid, cred));
-    if (opt.cwd === null) inheritDirectory(par.native, p.native);
+    if (opt.cwd === null) p.inheritCwd(par);
     else p.cwd = opt.cwd;
     if (opt.fds) {
       p.fds.clear(); p.allHeld = true;

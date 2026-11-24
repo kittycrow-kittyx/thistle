@@ -1,4 +1,4 @@
-import { changeDirectory, currentDirectory } from "../host/cwd.js";
+import { changeDirectory, currentDirectory, inheritDirectory } from "../host/cwd.js";
 import type { In, Out } from "../io/stream.js";
 import { Fd, FdTable } from "./fd.js";
 export { Fd, FdTable } from "./fd.js";
@@ -66,6 +66,7 @@ export class Proc {
   argv: string[];
   get cwd(): string { return currentDirectory(this.native); }
   set cwd(path: string) { changeDirectory(this.native, path); }
+  inheritCwd(parent: Proc): void { inheritDirectory(parent.native, this.native); }
   env: Map<string, string>;
   get cred(): ProcCred { return this.native.identity().credentials; }
   get fsuid(): number { return this.native.id("fsuid"); }

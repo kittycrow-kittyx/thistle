@@ -44,3 +44,8 @@ export const inheritDirectory = (parent: HostProcess, child: HostProcess): void 
   parent.withDescriptorPair(child, (source, destination) => withVfsLock(parent.memory, () =>
     checkNative(thistleVfsInheritCwd(parent.memory, source, destination))));
 };
+
+/** Reject cross-mount operations before path resolution. */
+export const checkFilesystemInstance = (authority: HostProcess, process: HostProcess): void => {
+  if (process.memory !== authority.memory) bad("EXDEV", "filesystem instance mismatch");
+};

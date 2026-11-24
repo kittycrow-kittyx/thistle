@@ -206,7 +206,7 @@ The exported close operation and mounted RV64 close syscall share descriptor tea
 
 Reaping shares descriptor teardown with both close entry points and waits for the process descriptor lock. Unmapping separates range validation, split-capacity checks and mutation; partial-range fixtures cover preserved bytes and file offsets.
 
-Canonical directory changes and path reconstruction use dentries and process cwd inode references. Removing or replacing a referenced directory returns EBUSY. Renaming preserves its inode. The hosted `Proc.cwd` field remains a migration target.
+Canonical directory changes and path reconstruction use dentries and process cwd inode references. Removing or replacing a referenced directory returns EBUSY. Renaming preserves its inode. The hosted `Proc.cwd` getter delegates to canonical path reconstruction.
 
 ## Explicit host capability boundary
 
@@ -218,4 +218,4 @@ Character-device opens retain native inode and descriptor authority. The explici
 
 ## Production hosted root cutover
 
-`Kern` mounts its root in the existing canonical memory at construction. `Vfs` is a request facade over that mount and `VNode` subclasses are non-owning inode views. The old mutable object tree and detached-credential permission implementation are absent. `Sys` uses native inode descriptors for all ordinary files; `Proc.cwd` reads and changes the native cwd reference. `TreeFs` delegates root images to the canonical serializer and loader. RV64 file mapping retention, vfork descriptor snapshots and live overlay reconciliation remain explicit parity gates before promotion.
+`Kern` mounts its root in the existing canonical memory at construction. `Vfs` is a request facade over that mount and `VNode` subclasses are non-owning inode views. `Sys` uses native inode descriptors for all ordinary files; `Proc.cwd` reads and changes the native cwd reference. `TreeFs` delegates root images to the canonical serializer and loader. RV64 file mapping retention, vfork descriptor snapshots and live overlay reconciliation remain explicit parity gates before promotion.

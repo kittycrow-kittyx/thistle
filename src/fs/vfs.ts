@@ -3,7 +3,6 @@ import { dec, enc } from "../io/stream.js";
 import { HostInode } from "../host/inode.js";
 import { HostDescriptor } from "../host/descriptor.js";
 import type { HostProcess } from "../host/process.js";
-import { currentDirectory } from "../host/cwd.js";
 import { RootVolume } from "../host/root.js";
 import { Chr, Dir, Reg, Sym, nodeView, statView } from "./nodes.js";
 import type { VNode } from "./nodes.js";
@@ -83,14 +82,15 @@ export class Vfs {
   }
 
   at(path: string, process: HostProcess, follow = true): Hit {
-    if (process.memory !== this.authority.memory) bad("EXDEV", "filesystem instance mismatch");
+    this.volume.checkProcess(process);
     const inode = HostInode.resolve(process, path, follow);
-    return { node: this.view(inode, process), path: absolutePath(path, currentDirectory(process)) };
+    return { node: this.view(inode, process), path: absolutePath(path, this.volume.cwd(process)) };
   }
 
   need(node: VNode, process: HostProcess, bits: number): void { node.view.need(process, bits); }
 
   private parent(path: string, process: HostProcess): Parent {
+    this.volume.checkProcess(process);
     const { parent, name } = splitParent(path);
     return { directory: HostInode.resolve(process, parent), name };
   }
@@ -135,6 +135,7 @@ export class Vfs {
   }
 
   private createFile(path: string, data: Uint8Array, process: HostProcess, mode: number, exclusive: boolean): Reg {
+    this.volume.checkProcess(process);
     const flags = OPEN_WRITE | OPEN_CREATE | (exclusive ? OPEN_EXCLUSIVE : 0);
     const descriptor = HostDescriptor.openPath(process, path, flags, mode);
     const inode = descriptor.inodeView() ?? bad("EIO", "file creation has no inode");
@@ -186,7 +187,7 @@ export class Vfs {
   }
 
   link(from: string, to: string, process: HostProcess): void {
-    const inode = HostInode.resolve(process, from), { directory, name } = this.parent(to, process);
+    const { directory, name } = this.parent(to, process), inode = HostInode.resolve(process, from);
     directory.link(process, name, inode);
   }
 
@@ -222,7 +223,7 @@ export class Vfs {
 
   glob(pattern: string, process: HostProcess): string[] {
     if (!wild(pattern)) return [pattern];
-    const cwd = currentDirectory(process), absolute = norm(pattern, cwd);
+    const cwd = this.volume.cwd(process), absolute = norm(pattern, cwd);
     const root = absolute.slice(0, Math.max(1, absolute.search(/[*?]|\[[^\]]+\]/)));
     const base = root.slice(0, root.lastIndexOf("/")) || "/", rx = wrx(absolute);
     const prefix = cwd === "/" ? "/" : cwd + "/";
