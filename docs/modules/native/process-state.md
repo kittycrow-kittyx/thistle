@@ -28,3 +28,9 @@ getgroups/setgroups accept up to 65,536 entries.
 | --- | --- |
 | `thistleProcessSetGroup` | Trusted initialisation of an existing group or append at the current count. Returns established positive native status codes. |
 | `thistleProcessReadGroups` | Capacity zero returns the count. Otherwise copies a coherent snapshot into a reserved output buffer; insufficient capacity returns ERANGE. |
+
+`thistleProcessAttach` binds a fresh initialised hart to an existing process.
+It preserves the process count, credentials, descriptors and guest pages. The
+process lock stabilises slot ownership, and all existing process harts are
+locked during binding. A bound destination returns EBUSY; missing/zombie
+processes return ESRCH; contention returns EAGAIN.

@@ -9,32 +9,10 @@ import { releaseFrame, trimFreeFrames, validFrame } from "./arena.js";
 import { releaseGroups } from "./credentials.js";
 import { atomicStoreI32, compareExchangeI32, fill, loadU32, loadU64, storeU32 } from "./memory.js";
 import type { ThistleMemory } from "./memory.js";
-import { INVALID_POINTER, hartAt, processAt, processForHart, processSlotByPid, validHart, validKernel } from "./state.js";
+import { lockProcessHarts, unlockProcessHarts, INVALID_POINTER, hartAt, processAt, processForHart, processSlotByPid, validHart, validKernel } from "./state.js";
 import type { I32, Ptr, U32 } from "./types.js";
 import { thistleVfsRelease } from "./vfs.js";
 import { word, wordToU32 } from "./word.js";
-
-const unlockProcessHarts = (memory: ThistleMemory, slot: U32, end: U32): void => {
-  let hart: U32 = 0;
-  while (hart < end) {
-    if (loadU32(memory, hartAt(hart) + H_PROCESS_SLOT) === slot) atomicStoreI32(memory, hartAt(hart) + H_LOCK, 0);
-    hart += 1;
-  }
-};
-
-const lockProcessHarts = (memory: ThistleMemory, slot: U32): boolean => {
-  const count = loadU32(memory, C_MAX_HARTS);
-  let hart: U32 = 0;
-  while (hart < count) {
-    const owner = loadU32(memory, hartAt(hart) + H_PROCESS_SLOT);
-    if (owner === slot && compareExchangeI32(memory, hartAt(hart) + H_LOCK, 0, 1) !== 0) {
-      unlockProcessHarts(memory, slot, hart);
-      return false;
-    }
-    hart += 1;
-  }
-  return true;
-};
 
 const validProcessFrames = (memory: ThistleMemory, proc: Ptr): boolean => {
   const table = loadU32(memory, proc + P_PAGE_TABLE);
@@ -119,7 +97,7 @@ const reapProcess = (memory: ThistleMemory, parent: Ptr, pid: U32): I32 => {
   if (loadU32(memory, proc + P_STATE) !== wordToU32(word(THISTLE_PROCESS_ZOMBIE))) return -11;
   if (!lockProcessHarts(memory, slot)) return -11;
   const result = reapResources(memory, proc, slot);
-  unlockProcessHarts(memory, slot, loadU32(memory, C_MAX_HARTS));
+  unlockProcessHarts(memory, slot, loadU32(memory, C_MAX_HARTS), INVALID_POINTER);
   return result;
 };
 

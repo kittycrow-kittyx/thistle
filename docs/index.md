@@ -124,3 +124,5 @@ bun run test
 
 - [host/bytes](modules/host/bytes.md)
 - [test/host-bytes.test](modules/test/host-bytes.test.md)
+
+- [test/native-process-attach.test](modules/test/native-process-attach.test.md)

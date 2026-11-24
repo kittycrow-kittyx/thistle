@@ -26,6 +26,12 @@ for (const threaded of [false, true]) {
   assert.equal(invoke("HartInit", 0, 0, 0x10000000n, 0n), 0);
   assert.equal(invoke("ProcessInit", 0, 0, 1, 0, 0, 0, 0, 0, 0, 0), 0);
   const proc = Number(invoke("ProcessRecord", 0, 0));
+  assert.equal(invoke("HartInit", 0, 1, 0x20000000n, 0n), 0);
+  assert.equal(invoke("ProcessAttach", 0, 1, 1), 0);
+  assert.equal(invoke("ProcessRecord", 0, 1), proc);
+  assert.equal(invoke("ProcessCount", 0), 1);
+  assert.equal(invoke("ProcessAttach", 0, 1, 1), -16);
+
   const initial = view.getUint32(C_PHYSICAL_NEXT, true);
   const count = 16500, input = Number(invoke("ImageReserve", 0, count * 4));
   for (let index = 0; index < count; index++) view.setUint32(input + index * 4, index + 100, true);

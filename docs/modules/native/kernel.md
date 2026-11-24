@@ -48,3 +48,8 @@ and credential operations instead of maintaining their own authoritative copies.
 Backing metadata exports `thistleVfsBacking`, `thistleVfsBackingVersion`,
 `thistleVfsCommitBacking` and `thistleVfsSetQuota` are defined in
 [vfs-backing](vfs-backing.md).
+
+`thistleProcessAttach` is re-exported from process-state. Native process
+initialisation and attachment share `bindProcess`. Secondary-thread detection
+uses the process's `P_LEADER_HART`, allowing multiple process groups in one
+kernel instance without assuming that every leader is hart zero.

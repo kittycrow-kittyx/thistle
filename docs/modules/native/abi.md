@@ -350,3 +350,5 @@ ABI identities, fixed region sizes, status/error values, flags and capacities us
 | `V_VERSION` | Inode offset 72, u64 payload revision |
 | `THISTLE_VFS_HOST_BACKING` | Inode flag 1; `V_DATA` is an opaque host carrier handle |
 | `THISTLE_VFS_INODE_STRIDE` | 80 bytes; VFS image format remains unchanged |
+
+`P_LEADER_HART` occupies process offset 348 in the untagged ABI 11 layout.

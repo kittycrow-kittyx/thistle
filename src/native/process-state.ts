@@ -1,6 +1,7 @@
 import { readGroup, replaceGroups, writeGroup, updateIdentity } from "./credentials.js";
 import {
-  C_PROCESS_LOCK, C_CREDENTIAL_LOCK, C_VFS_LOCK, C_NEXT_PID, P_EUID, P_FSUID, P_FSGID, P_GROUP_COUNT, THISTLE_BATCH_CONTENDED, THISTLE_FAULT_BAD_STATE, THISTLE_FAULT_MEMORY,
+  C_MAX_HARTS, C_PROCESS_LOCK, C_CREDENTIAL_LOCK, C_VFS_LOCK, C_NEXT_PID, P_EUID, P_FSUID, P_FSGID, P_GROUP_COUNT, THISTLE_BATCH_CONTENDED, THISTLE_FAULT_BAD_STATE, THISTLE_FAULT_MEMORY,
+  H_LOCK, H_PROCESS_SLOT, H_STATUS, THISTLE_HART_RUNNABLE, THISTLE_PROCESS_RUNNABLE, THISTLE_PROCESS_WAITING,
   P_RGID, P_RUID, P_STATE, P_UMASK,
 } from "./abi.js";
 import { inputContains } from "./arena.js";
@@ -9,7 +10,7 @@ import {
   loadU32, storeU32,
 } from "./memory.js";
 import type { ThistleMemory } from "./memory.js";
-import { INVALID_POINTER, processForHart, validHart, validKernel } from "./state.js";
+import { lockProcessHarts, unlockProcessHarts, bindProcess, hartAt, processAt, processSlotByPid, INVALID_POINTER, processForHart, validHart, validKernel } from "./state.js";
 import type { I32, I64, Ptr, U32 } from "./types.js";
 import { floatFloor, word, wordToI32 } from "./word.js";
 
@@ -123,5 +124,41 @@ export const thistleProcessReadGroups = (memory: ThistleMemory, hart: U32, outpu
   if (compareExchangeI32(memory, C_CREDENTIAL_LOCK, 0, 1) !== 0) return -11;
   const result = copyGroups(memory, proc, output, capacity);
   atomicStoreI32(memory, C_CREDENTIAL_LOCK, 0);
+  return result;
+};
+
+const attachBoundLocked = (memory: ThistleMemory, hart: U32, slot: U32): I32 => {
+  const proc = processAt(memory, slot), at = hartAt(hart);
+  const state = loadU32(memory, proc + P_STATE);
+  if (state !== THISTLE_PROCESS_RUNNABLE && state !== THISTLE_PROCESS_WAITING) return -3;
+  if (loadU32(memory, at + H_PROCESS_SLOT) !== INVALID_POINTER) return -16;
+  if (loadU32(memory, at + H_STATUS) !== THISTLE_HART_RUNNABLE) return -22;
+  bindProcess(memory, hart, slot);
+  storeU32(memory, proc + P_STATE, THISTLE_PROCESS_RUNNABLE);
+  return 0;
+};
+
+const attachLocked = (memory: ThistleMemory, hart: U32, pid: U32): I32 => {
+  if (loadU32(memory, hartAt(hart) + H_STATUS) !== THISTLE_HART_RUNNABLE) return -22;
+  if (loadU32(memory, hartAt(hart) + H_PROCESS_SLOT) !== INVALID_POINTER) return -16;
+  const slot = processSlotByPid(memory, pid);
+  if (slot === INVALID_POINTER) return -3;
+  if (!lockProcessHarts(memory, slot)) return -11;
+  const result = attachBoundLocked(memory, hart, slot);
+  unlockProcessHarts(memory, slot, loadU32(memory, C_MAX_HARTS), hart);
+  return result;
+};
+
+/** Attach a fresh hart to existing process state, without a second process record. */
+export const thistleProcessAttach = (memory: ThistleMemory, hart: U32, pid: U32): I32 => {
+  if (!validKernel(memory) || !validHart(memory, hart)) return -22;
+  if (compareExchangeI32(memory, C_PROCESS_LOCK, 0, 1) !== 0) return -11;
+  const at = hartAt(hart);
+  if (compareExchangeI32(memory, at + H_LOCK, 0, 1) !== 0) {
+    atomicStoreI32(memory, C_PROCESS_LOCK, 0); return -11;
+  }
+  const result = attachLocked(memory, hart, pid);
+  atomicStoreI32(memory, at + H_LOCK, 0);
+  atomicStoreI32(memory, C_PROCESS_LOCK, 0);
   return result;
 };

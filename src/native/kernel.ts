@@ -1,4 +1,4 @@
-import { INVALID_POINTER, hartAt, processAt, processForHart, processSlotByPid, validHart, validKernel } from "./state.js";
+import { bindProcess, INVALID_POINTER, hartAt, processAt, processForHart, processSlotByPid, validHart, validKernel } from "./state.js";
 import { inputContains, allocateFrame } from "./arena.js";
 import { updateIdentity, readGroup, replaceGroups } from "./credentials.js";
 import { rv64Branch, rv64RegisterWordValid, rv64RegisterWordValue, rv64ImmediateWordValid, rv64ImmediateWordValue, rv64ImmediateOpValid, rv64ImmediateOpValue, rv64RegisterValid, rv64RegisterValue, rv64FloatClass, rv64CompressedJump, rv64ImmediateB, rv64ImmediateI, rv64ImmediateJ, rv64ImmediateS, rv64ImmediateU } from "../core/rv64-decode.js";
@@ -167,7 +167,7 @@ import {
   P_CWD_INODE,
   P_DESCRIPTOR_TABLE,
   P_DESCRIPTOR_CAPACITY,
-  P_LOCK,
+  P_LOCK, P_LEADER_HART,
   P_MAP_CAPACITY,
   P_MAP_COUNT,
   P_MAP_NEXT,
@@ -373,13 +373,10 @@ const OPEN_CLOEXEC: U32 = 0x80000;
 const regAt = (hart: U32, register: U32): Ptr => hartAt(hart) + H_X + register * 8;
 const floatRegAt = (hart: U32, register: U32): Ptr => hartAt(hart) + H_F + register * 8;
 const pageAlign = (value: U32): U32 => (value + THISTLE_GUEST_PAGE_SIZE - 1) & -THISTLE_GUEST_PAGE_SIZE;
-/** A cloned thread shares the same process slot as hart zero; other harts may
- * represent entirely independent processes. */
+/** Secondary harts are relative to their own process leader, not hart zero. */
 const sharedProcessThread = (memory: ThistleMemory, hart: U32): boolean => {
-  if (hart === 0) return false;
-  const slot = loadU32(memory, hartAt(hart) + H_PROCESS_SLOT);
-  return slot !== INVALID_PROCESS &&
-    slot === loadU32(memory, hartAt(0) + H_PROCESS_SLOT);
+  const proc = processForHart(memory, hart);
+  return proc !== INVALID_POINTER && loadU32(memory, proc + P_LEADER_HART) !== hart;
 };
 
 const descriptorAt = (memory: ThistleMemory, proc: Ptr, descriptor: U32): Ptr =>
@@ -542,6 +539,7 @@ export const thistleProcessInit = (
   fill(memory, segmentTable, segmentCapacity * THISTLE_SEGMENT_STRIDE, 0);
   fill(memory, mapTable, mapCapacity * THISTLE_MAP_STRIDE, 0);
   fill(memory, descriptorTable, descriptorCapacity * THISTLE_DESCRIPTOR_STRIDE, 0);
+  storeU32(memory, proc + P_LEADER_HART, hart);
   atomicStoreI32(memory, proc + P_PID, wordToI32(word(pid)));
   atomicStoreI32(memory, proc + P_PPID, wordToI32(word(ppid)));
   atomicStoreI32(memory, proc + P_PGID, wordToI32(word(pid)));
@@ -574,10 +572,7 @@ export const thistleProcessInit = (
   storeU32(memory, descriptorAt(memory, proc, 2) + FD_KIND, THISTLE_FD_HOST);
   storeU32(memory, descriptorAt(memory, proc, 2) + FD_FLAGS, THISTLE_FD_WRITE);
   atomicStoreI32(memory, proc + P_STATE, THISTLE_PROCESS_RUNNABLE);
-  storeU32(memory, hartAt(hart) + H_PROCESS_SLOT, slot);
-  storeU32(memory, hartAt(hart) + H_PAGE_TABLE, pageTable);
-  storeU32(memory, hartAt(hart) + H_PAGE_CAPACITY, pageCapacity);
-  storeU32(memory, hartAt(hart) + H_PAGE_COUNT, 0);
+  bindProcess(memory, hart, slot);
   storeU32(memory, THISTLE_CONTROL_BASE + C_PROCESS_COUNT, loadU32(memory, THISTLE_CONTROL_BASE + C_PROCESS_COUNT) + 1);
   if (pid >= loadU32(memory, THISTLE_CONTROL_BASE + C_NEXT_PID)) storeU32(memory, THISTLE_CONTROL_BASE + C_NEXT_PID, pid + 1);
   release(memory, lock);
@@ -3065,5 +3060,5 @@ export { thistleVfsCreate, thistleVfsWrite, thistleVfsLink, thistleVfsUnlink, th
 
 
 export { thistleProcessReap } from "./process-reap.js";
-export { thistleProcessSetGroup, thistleProcessReadGroups, thistleProcessRecord, thistleNextPid, thistleProcessIdentity, thistleProcessGroups, thistleProcessUmask } from "./process-state.js";
+export { thistleProcessAttach, thistleProcessSetGroup, thistleProcessReadGroups, thistleProcessRecord, thistleNextPid, thistleProcessIdentity, thistleProcessGroups, thistleProcessUmask } from "./process-state.js";
 export { thistleVfsBacking, thistleVfsBackingVersion, thistleVfsCommitBacking, thistleVfsSetQuota } from "./vfs-backing.js";

@@ -309,3 +309,5 @@ export const C_VFS_QUOTA: U32 = 3368;
 export const V_RESIDENT: U32 = 64;
 export const V_VERSION: U32 = 72;
 export const THISTLE_VFS_HOST_BACKING: U32 = 1;
+
+export const P_LEADER_HART: U32 = 348;

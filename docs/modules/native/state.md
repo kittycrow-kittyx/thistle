@@ -12,3 +12,9 @@
 
 Kernel execution, credential changes and host record views use these address
 calculations. Callers retain the locks required by the operation they perform.
+
+| Process binding helper | Contract |
+| --- | --- |
+| `bindProcess` | Bind hart page-table views and limits to the canonical process slot; caller owns process/hart locks. |
+| `lockProcessHarts` | Try to lock every hart attached to a process slot, undoing partial acquisition on contention. Caller holds the global process lock. |
+| `unlockProcessHarts` | Release matching hart locks below the scan bound, excluding the explicitly retained hart. |

@@ -142,7 +142,8 @@
       "thistleVfsCommitBacking",
       "thistleVfsSetQuota",
       "thistleVfsResidentUsage",
-      "thistleVfsReadEntry"
+      "thistleVfsReadEntry",
+      "thistleProcessAttach"
     ],
     "verify": {
       "init": "tetoKernelInit",
@@ -254,7 +255,8 @@
       "thistleVfsCommitBacking": "tetoVfsCommitBacking",
       "thistleVfsSetQuota": "tetoVfsSetQuota",
       "thistleVfsResidentUsage": "tetoVfsResidentUsage",
-      "thistleVfsReadEntry": "tetoVfsReadEntry"
+      "thistleVfsReadEntry": "tetoVfsReadEntry",
+      "thistleProcessAttach": "tetoProcessAttach"
     }
   },
   "memory": {
