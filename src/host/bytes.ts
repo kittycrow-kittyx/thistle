@@ -27,3 +27,9 @@ export const fileSum = (b: Uint8Array): string => {
   for (const x of b) { n ^= x; n = Math.imul(n, 0x01000193); }
   return `${b.length}:${(n >>> 0).toString(16)}`;
 };
+
+/** A transient changed byte span, addressed in the guest virtual address space. */
+export interface DirtyWrite {
+  readonly at: bigint;
+  readonly bytes: Uint8Array;
+}

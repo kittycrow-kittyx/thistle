@@ -3,11 +3,10 @@ import { bad } from "../core/err.js";
 import { SourceLoad } from "./bytes.js";
 import { HostInode } from "./inode.js";
 import type { HostProcess } from "./process.js";
-import type { RegSource } from "./bytes.js";
+import type { RegSource, DirtyWrite } from "./bytes.js";
 import { C_VFS_INODE_CAPACITY, FD_INODE, FD_KIND, FD_OFFSET, THISTLE_FD_READ, THISTLE_FD_WRITE, THISTLE_FD_FILE, V_DATA, V_RESIDENT, P_MAP_TABLE, P_MAP_COUNT, THISTLE_MAP_STRIDE, M_INODE, M_ADDRESS, M_END, M_FLAGS, M_FILE_RIGHTS, M_FILE_OFFSET, M_PROTECTION } from "../native/abi.js";
 import { loadU32, loadU64, storeU32, storeU64 } from "../native/memory.js";
 import type { ThistleMemory } from "../native/memory.js";
-import type { DirtyWrite } from "../native/host-memory.js";
 import { thistleVfsAccess, thistleVfsFileSize, thistleVfsRoot, thistleVfsIdentity, descriptorAccessStatus, descriptorReadCount, descriptorWriteOffset, residentFits, inodeAt, arenaInodeStatus } from "../native/vfs.js";
 import { thistleVfsBacking, thistleVfsBackingVersion, thistleVfsCommitBacking, thistleVfsCommitDescriptorBacking, thistleVfsMappingInode, thistleVfsCommitMappingBacking } from "../native/vfs-backing.js";
 

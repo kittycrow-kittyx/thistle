@@ -5,6 +5,7 @@ import { P_PAGE_COUNT, P_PAGE_TABLE, P_PAGE_CAPACITY, P_PID, THISTLE_GUEST_PAGE_
 import { thistleGuestPage, thistleMarkGuestWrite } from "../native/kernel.js";
 import { clearDirtyBytes } from "./arena.js";
 import { checkNative } from "../host/native-access.js";
+import type { DirtyWrite } from "../host/bytes.js";
 import { processForHart, INVALID_POINTER } from "./state.js";
 import { loadU32, loadU64 } from "../native/memory.js";
 import type { ThistleMemory } from "../native/memory.js";
@@ -12,11 +13,6 @@ import type { ThistleMemory } from "../native/memory.js";
 const INVALID = 0xffffffff;
 const UNMAPPED = 0xfffffffe;
 export type ThistlePageLookup = (hart: number, address: bigint, create: boolean) => number;
-
-export interface DirtyWrite {
-  readonly at: bigint;
-  readonly bytes: Uint8Array;
-}
 
 interface DirtySpan {
   readonly entry: number;

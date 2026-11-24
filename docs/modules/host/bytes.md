@@ -10,3 +10,5 @@ inode, permission or filesystem state. Both the legacy `Reg` reference and the
 canonical `HostBacking` adapter use it. Each caller controls publication.
 
 `fileSum` retains the persistence format's existing content checksum for both legacy and canonical snapshots.
+
+`DirtyWrite` describes a transient guest-addressed byte span supplied to a mapped-file carrier during write-back.

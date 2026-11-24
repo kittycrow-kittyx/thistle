@@ -2390,13 +2390,13 @@ const atomicInstruction = (memory: ThistleMemory, hart: U32, instruction: U32): 
     release(memory, lockAt);
     return THISTLE_BATCH_BUDGET;
   }
+  const success = fn === 3 && loadI64(memory, at + H_RESERVATION) === address;
+  if (success && !markGuestWrite(memory, hart, ux(address), size)) {
+    release(memory, lockAt);
+    return THISTLE_BATCH_FAULT;
+  }
   if (fn === 3) {
-    const success = loadI64(memory, at + H_RESERVATION) === address;
     storeI64(memory, at + H_RESERVATION, NO_RESERVATION);
-    if (success && !markGuestWrite(memory, hart, ux(address), size)) {
-      release(memory, lockAt);
-      return THISTLE_BATCH_FAULT;
-    }
     storeConditional(memory, pointer, value, funct3 === 2, success);
     setX(memory, hart, register, success ? 0n : 1n);
     release(memory, lockAt);

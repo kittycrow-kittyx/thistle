@@ -84,12 +84,11 @@ export const releaseProcessFrames = (memory: ThistleMemory, proc: Ptr): void => 
   let index: U32 = 0;
   while (index < count) {
     const entry = table + index * THISTLE_PAGE_ENTRY_SIZE;
-    if (loadU64(memory, entry) !== 0n) {
-      const frame = loadU32(memory, entry + 8);
-      releaseFrame(memory, frame);
-      const dirty = loadU32(memory, entry + PAGE_DIRTY_FRAME);
-      if (dirty !== 0) releaseFrame(memory, dirty);
-    }
+    if (loadU64(memory, entry) === 0n) { index += 1; continue; }
+    const frame = loadU32(memory, entry + 8);
+    releaseFrame(memory, frame);
+    const dirty = loadU32(memory, entry + PAGE_DIRTY_FRAME);
+    if (dirty !== 0) releaseFrame(memory, dirty);
     index += 1;
   }
   fill(memory, table, count * THISTLE_PAGE_ENTRY_SIZE, 0);
@@ -100,11 +99,9 @@ const dirtyFrame = (memory: ThistleMemory, entry: Ptr): Ptr => {
   const current = loadU32(memory, entry + PAGE_DIRTY_FRAME);
   if (current !== 0) return current;
   if (compareExchangeI32(memory, C_MEMORY_LOCK, 0, 1) !== 0) return INVALID;
-  let frame = loadU32(memory, entry + PAGE_DIRTY_FRAME);
-  if (frame === 0) {
-    frame = allocateFrame(memory);
-    if (frame !== INVALID) storeU32(memory, entry + PAGE_DIRTY_FRAME, frame);
-  }
+  const existing = loadU32(memory, entry + PAGE_DIRTY_FRAME);
+  const frame = existing === 0 ? allocateFrame(memory) : existing;
+  if (existing === 0 && frame !== INVALID) storeU32(memory, entry + PAGE_DIRTY_FRAME, frame);
   atomicStoreI32(memory, C_MEMORY_LOCK, 0);
   return frame;
 };

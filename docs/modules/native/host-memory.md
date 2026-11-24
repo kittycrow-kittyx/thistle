@@ -6,4 +6,4 @@ The view retains its allocated PID and rejects access after reaping or rebinding
 `used` reads the canonical process page count, including pages allocated by
 other harts attached to the same process.
 
-`populate` installs initial mapped bytes without marking writes. `write` marks guest writes in the canonical bitmap. `DirtyWrite` identifies a changed span; `flushDirty` publishes all changed spans in a range, then clears their bits after success. Publication is synchronous in the cooperative host.
+`populate` installs initial mapped bytes without marking writes. `write` marks guest writes in the canonical bitmap. `flushDirty` publishes all changed spans in a range, then clears their bits after success. Publication is synchronous in the cooperative host.
