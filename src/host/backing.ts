@@ -28,6 +28,23 @@ export interface MappedRange {
   readonly writable: boolean;
 }
 
+/** A transient view of the native map table; no host mapping registry is retained. */
+export const mappedRanges = (process: HostProcess): MappedRange[] => {
+  const memory = process.memory;
+  return process.withDescriptors(record => {
+    const ranges: MappedRange[] = [], table = loadU32(memory, record + P_MAP_TABLE);
+    const count = loadU32(memory, record + P_MAP_COUNT);
+    for (let index = 0; index < count; index++) {
+      const state = table + index * THISTLE_MAP_STRIDE, inode = loadU32(memory, state + M_INODE);
+      if (inode === 0) continue;
+      ranges.push({ index, inode, at: loadU64(memory, state + M_ADDRESS), end: loadU64(memory, state + M_END),
+        prot: loadU32(memory, state + M_PROTECTION), writable: (loadU32(memory, state + M_FLAGS) & 3) === 1 &&
+          (loadU32(memory, state + M_FILE_RIGHTS) & THISTLE_FD_WRITE) !== 0 });
+    }
+    return ranges;
+  });
+};
+
 interface BackingUpdate {
   readonly inode: number;
   readonly payload: Payload;
@@ -302,33 +319,23 @@ export class HostBacking {
     }));
   }
 
-  /** A transient view of the native map table; no host mapping registry is retained. */
-  static mappedRanges(process: HostProcess): MappedRange[] {
-    const memory = process.memory;
-    return process.withDescriptors(record => {
-      const ranges: MappedRange[] = [], table = loadU32(memory, record + P_MAP_TABLE);
-      const count = loadU32(memory, record + P_MAP_COUNT);
-      for (let index = 0; index < count; index++) {
-        const state = table + index * THISTLE_MAP_STRIDE, inode = loadU32(memory, state + M_INODE);
-        if (inode === 0) continue;
-        ranges.push({ index, inode, at: loadU64(memory, state + M_ADDRESS), end: loadU64(memory, state + M_END),
-          prot: loadU32(memory, state + M_PROTECTION), writable: (loadU32(memory, state + M_FLAGS) & 3) === 1 &&
-            (loadU32(memory, state + M_FILE_RIGHTS) & THISTLE_FD_WRITE) !== 0 });
-      }
-      return ranges;
-    });
+  /** Select the byte registry associated with the process's canonical mount. */
+  static forMapping(process: HostProcess): HostBacking {
+    const backing = HostBacking.mounts.get(process.memory) ?? null;
+    if (backing === null) bad("EIO", "mount has no byte carrier registry");
+    return backing;
   }
 
-  private static mappingStorage<T>(process: HostProcess, index: number, write: boolean,
-    operation: (backing: HostBacking, record: number, state: number, inode: number) => T): T {
+  private mappingStorage<T>(process: HostProcess, index: number, write: boolean,
+    operation: (record: number, state: number, inode: number) => T): T {
     if (!Number.isInteger(index) || index < 0 || index > 0xffffffff) bad("EINVAL", "invalid mapping index");
-    const memory = process.memory;
+    if (process.memory !== this.memory) bad("EINVAL", "mapping mount mismatch");
+    const memory = this.memory;
     return process.withDescriptors(record => withVfsLock(memory, () => {
       const inode = thistleVfsMappingInode(memory, record, index, write);
       checkNative(inode);
-      const backing = HostBacking.mounts.get(memory) ?? bad("EIO", "mount has no byte carrier registry");
-      backing.checkMountLocked();
-      return operation(backing, record, loadU32(memory, record + P_MAP_TABLE) + index * THISTLE_MAP_STRIDE, inode);
+      this.checkMountLocked();
+      return operation(record, loadU32(memory, record + P_MAP_TABLE) + index * THISTLE_MAP_STRIDE, inode);
     }));
   }
 
@@ -340,27 +347,27 @@ export class HostBacking {
   }
 
   /** Copy resident bytes through a canonical mapping without moving any descriptor cursor. */
-  static readMapping(process: HostProcess, index: number, address: bigint, length: number): Uint8Array {
-    return HostBacking.mappingStorage(process, index, false, (backing, _record, state, inode) => {
-      const offset = backing.mappingOffset(state, address, length), bytes = backing.residentBytes(inode);
+  readMapping(process: HostProcess, index: number, address: bigint, length: number): Uint8Array {
+    return this.mappingStorage(process, index, false, (_record, state, inode) => {
+      const offset = this.mappingOffset(state, address, length), bytes = this.residentBytes(inode);
       if (offset >= BigInt(bytes.length)) return new Uint8Array();
       return bytes.slice(Number(offset), Number(offset) + length);
     });
   }
 
   /** Flush a shared range through retained open authority, bounded by the current EOF. */
-  static writeMapping(process: HostProcess, index: number, address: bigint, bytes: Uint8Array): void {
-    withImage(process.memory, 24, input => HostBacking.mappingStorage(process, index, true, (backing, record, state, inode) => {
-      const offset = backing.mappingOffset(state, address, bytes.length), previous = backing.residentBytes(inode);
+  writeMapping(process: HostProcess, index: number, address: bigint, bytes: Uint8Array): void {
+    withImage(this.memory, 24, input => this.mappingStorage(process, index, true, (record, state, inode) => {
+      const offset = this.mappingOffset(state, address, bytes.length), previous = this.residentBytes(inode);
       if (offset >= BigInt(previous.length) || bytes.length === 0) return;
       const start = Number(offset), amount = Math.min(bytes.length, previous.length - start);
       const part = bytes.subarray(0, amount);
-      if (part.every((byte, i) => byte === previous[start + i])) return;
+      if (part.every((byte, i) => byte === (previous[start + i] ?? -1))) return;
       const replacement = previous.slice();
       replacement.set(part, start);
-      backing.commit({ inode, payload: { bytes: replacement, source: null }, size: replacement.length,
-        expected: thistleVfsBackingVersion(process.memory, inode), operation: 3 }, { process: record, mapping: index }, input);
-      backing.collectLocked();
+      this.commit({ inode, payload: { bytes: replacement, source: null }, size: replacement.length,
+        expected: thistleVfsBackingVersion(this.memory, inode), operation: 3 }, { process: record, mapping: index }, input);
+      this.collectLocked();
     }));
   }
 

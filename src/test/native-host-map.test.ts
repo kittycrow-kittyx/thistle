@@ -1,32 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mountedKernel } from "./vfs-fixture.js";
-import { thistleImageBegin, thistleImageSegment, thistleImageFinish, thistleStackPrepare,
-  thistleMapHostFile, thistleMapHostDescriptor, thistleUnmapHostFile, thistleRemapHostFile, thistleCloseDescriptor,
+import { mappingKernel } from "./vfs-fixture.js";
+import { thistleMapHostFile, thistleMapHostDescriptor, thistleUnmapHostFile, thistleRemapHostFile, thistleCloseDescriptor,
   thistleHartSetX, thistleGuestPage, thistleGuestAccess, thistleProcessMapCount, thistleProcessRecord, thistleProcessMapAddress, thistleProcessMapEnd } from "../native/kernel.js";
 import { withImage } from "../host/native-access.js";
-import { HostBacking } from "../host/backing.js";
-import { HostProcess } from "../host/process.js";
-import { HostInode } from "../host/inode.js";
-import { HostDescriptor } from "../host/descriptor.js";
-import { thistleVfsSetQuota } from "../native/vfs-backing.js";
-import { H_LOCK, P_MAP_CAPACITY, P_MAP_TABLE, THISTLE_MAP_STRIDE, M_FILE_OFFSET, M_INODE, THISTLE_VFS_KIND_FILE, THISTLE_FD_READ, THISTLE_FD_WRITE } from "../native/abi.js";
+import { H_LOCK, P_MAP_CAPACITY, P_MAP_TABLE, THISTLE_MAP_STRIDE, M_FILE_OFFSET, M_INODE, THISTLE_VFS_KIND_FILE, THISTLE_FD_READ } from "../native/abi.js";
 import { hartAt } from "../native/state.js";
 import { storeU32, loadU32, loadU64 } from "../native/memory.js";
 import { thistleVfsKind, thistleVfsOpenInode } from "../native/vfs.js";
 import { thistleVfsCreate, thistleVfsUnlink } from "../native/vfs-edit.js";
-
-const mappingKernel = () => {
-  const memory = mountedKernel();
-  withImage(memory, 4, input => {
-    storeU32(memory, input, 0x73);
-    assert.equal(thistleImageBegin(memory, 0, 0x10000000n, 0x200000n, 0n, 0, 0), 0);
-    assert.equal(thistleImageSegment(memory, 0, 1, 1, 0x200000n, 4n, 5, input, 4), 0);
-    assert.equal(thistleImageFinish(memory, 0, 4), 0);
-  });
-  assert.equal(thistleStackPrepare(memory, 0, 0xf000000n, 0xfffff00n), 0);
-  return memory;
-};
 
 test("host mappings reuse canonical resize policy and preserve moved bytes", () => {
   const memory = mappingKernel();
@@ -119,23 +101,3 @@ test("canonical mapped inodes survive descriptor close, unlink and range splitti
   });
 });
 
-test("mapped byte transport uses retained authority and never extends truncated files", () => {
-  const memory = mappingKernel(), process = new HostProcess(memory, 0), address = 0x400000n;
-  assert.equal(thistleVfsSetQuota(memory, 16384n), 0);
-  const root = HostInode.resolve(process, "/"), file = root.create(process, "mapped", 1, 0o600);
-  const backing = new HostBacking(memory);
-  backing.setBytes(file.ino, process, Uint8Array.of(1, 2, 3));
-  const fd = HostDescriptor.open(process, file, THISTLE_FD_READ | THISTLE_FD_WRITE);
-  assert.equal(thistleMapHostDescriptor(memory, 0, address, 4096n, 3n, 0x100001n, fd.number, 0n), address);
-  fd.close();
-  root.unlink(process, "mapped");
-  const replacement = root.create(process, "mapped", 1, 0o600);
-  backing.setBytes(replacement.ino, process, Uint8Array.of(8));
-  assert.deepEqual(HostBacking.readMapping(process, 0, address, 4096), Uint8Array.of(1, 2, 3));
-  HostBacking.writeMapping(process, 0, address + 1n, Uint8Array.of(9, 7, 6));
-  assert.deepEqual(HostBacking.readMapping(process, 0, address, 4096), Uint8Array.of(1, 9, 7));
-  assert.deepEqual(backing.snapshot(replacement, process), Uint8Array.of(8));
-  assert.equal(thistleUnmapHostFile(memory, 0, address, 4096n), 0n);
-  assert.throws(() => HostBacking.readMapping(process, 0, address, 1), { code: "EINVAL" });
-  assert.equal(thistleVfsKind(memory, file.ino), 0);
-});

@@ -43,3 +43,5 @@ A mount has one registered host byte carrier registry per root incarnation. `for
 `resizeDescriptor` changes the size using open write authority and the resident quota. Zero length drops lazy data without fetching it.
 
 `mappedRanges` derives an ephemeral view from the canonical mapping table. `readMapping` and `writeMapping` use retained inode authority. Shared write-back is clipped at current EOF and does not alter a descriptor cursor.
+
+`MappedRange` describes a transient file mapping. `forMapping` selects the mount registry for a process; subsequent byte operations validate the process and retained mapping under lock.

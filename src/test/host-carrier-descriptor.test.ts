@@ -4,7 +4,9 @@ import { HostDescriptor } from "../host/descriptor.js";
 import { HostBacking } from "../host/backing.js";
 import { HostInode } from "../host/inode.js";
 import { HostProcess } from "../host/process.js";
-import { mountedKernel } from "./vfs-fixture.js";
+import { mountedKernel, mappingKernel } from "./vfs-fixture.js";
+import { thistleMapHostDescriptor, thistleUnmapHostFile } from "../native/kernel.js";
+import { thistleVfsKind } from "../native/vfs.js";
 import { THISTLE_FD_READ, THISTLE_FD_WRITE, THISTLE_FD_APPEND } from "../native/abi.js";
 import { thistleVfsSetQuota } from "../native/vfs-backing.js";
 
@@ -101,4 +103,25 @@ test("replacement discards lazy bytes without loading the provider", () => {
   fd.replaceFile(Uint8Array.of(42));
   assert.deepEqual(backing.snapshot(file, process), Uint8Array.of(42));
   fd.close();
+});
+
+test("mapped byte transport uses retained authority and never extends truncated files", () => {
+  const memory = mappingKernel(), process = new HostProcess(memory, 0), address = 0x400000n;
+  assert.equal(thistleVfsSetQuota(memory, 16384n), 0);
+  const root = HostInode.resolve(process, "/"), file = root.create(process, "mapped", 1, 0o600);
+  const backing = new HostBacking(memory);
+  backing.setBytes(file.ino, process, Uint8Array.of(1, 2, 3));
+  const fd = HostDescriptor.open(process, file, THISTLE_FD_READ | THISTLE_FD_WRITE);
+  assert.equal(thistleMapHostDescriptor(memory, 0, address, 4096n, 3n, 0x100001n, fd.number, 0n), address);
+  fd.close();
+  root.unlink(process, "mapped");
+  const replacement = root.create(process, "mapped", 1, 0o600);
+  backing.setBytes(replacement.ino, process, Uint8Array.of(8));
+  assert.deepEqual(backing.readMapping(process, 0, address, 4096), Uint8Array.of(1, 2, 3));
+  backing.writeMapping(process, 0, address + 1n, Uint8Array.of(9, 7, 6));
+  assert.deepEqual(backing.readMapping(process, 0, address, 4096), Uint8Array.of(1, 9, 7));
+  assert.deepEqual(backing.snapshot(replacement, process), Uint8Array.of(8));
+  assert.equal(thistleUnmapHostFile(memory, 0, address, 4096n), 0n);
+  assert.throws(() => backing.readMapping(process, 0, address, 1), { code: "EINVAL" });
+  assert.equal(thistleVfsKind(memory, file.ino), 0);
 });
