@@ -78,15 +78,20 @@ export class HostInode {
 
   rename(process: HostProcess, name: string, destination: HostInode, newName: string): void {
     if (destination.memory !== this.memory) bad("EINVAL", "filesystem instance mismatch");
-    const target = enc(newName);
-    if (target.length > 255) bad("ENAMETOOLONG", newName);
-    this.withName(name, (input, length) => withImage(this.memory, Math.max(1, target.length), output =>
-      this.access(process, record => {
-        destination.recordLocked();
-        this.memory.bytes.set(target, output);
-        checkNative(thistleVfsRename(this.memory, record, this.ino, input, length,
-          destination.ino, output, target.length, BigInt(Date.now())));
-      })));
+    const source = enc(name), target = enc(newName);
+    if (source.length > 255 || target.length > 255) bad("ENAMETOOLONG", name);
+    this.accessRename(process, destination, source, target);
+  }
+
+  private accessRename(process: HostProcess, destination: HostInode, source: Uint8Array, target: Uint8Array): void {
+    withImage(this.memory, Math.max(1, source.length + target.length), input => this.access(process, record => {
+      destination.recordLocked();
+      const output = input + source.length;
+      this.memory.bytes.set(source, input);
+      this.memory.bytes.set(target, output);
+      checkNative(thistleVfsRename(this.memory, record, this.ino, input, source.length,
+        destination.ino, output, target.length, BigInt(Date.now())));
+    }));
   }
 
   /** Native arena payload write; host-backed files use the existing HostBacking carrier. */
