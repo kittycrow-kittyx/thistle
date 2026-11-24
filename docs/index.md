@@ -132,3 +132,6 @@ bun run test
 - [test/host-process.test](modules/test/host-process.test.md)
 
 - [test/native-image-lifetime.test](modules/test/native-image-lifetime.test.md)
+
+- [native/process-host](modules/native/process-host.md)
+- [test/native-process-host.test](modules/test/native-process-host.test.md)

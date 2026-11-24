@@ -11,7 +11,8 @@
     "src/native/vfs-edit.ts",
     "src/native/process-state.ts",
     "src/native/process-reap.ts",
-    "src/native/vfs-backing.ts"
+    "src/native/vfs-backing.ts",
+    "src/native/process-host.ts"
   ],
   "generatedDir": "build/compiler-validation/wasm/generated",
   "outDir": "build/compiler-validation/wasm/compiled",
@@ -144,7 +145,10 @@
       "thistleVfsResidentUsage",
       "thistleVfsReadEntry",
       "thistleProcessAttach",
-      "thistleProcessInstallCredentials"
+      "thistleProcessInstallCredentials",
+      "thistleProcessPark",
+      "thistleProcessPrepareImage",
+      "thistleProcessRunImage"
     ],
     "verify": {
       "init": "tetoKernelInit",

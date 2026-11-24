@@ -473,7 +473,7 @@ export const thistleHartInit = (
   virtualTop: U64,
   pc: U64,
 ): I32 => {
-  if (!thistleKernelValid(memory) || !validHart(memory, hart)) return THISTLE_FAULT_BAD_STATE;
+  if (!thistleKernelValid(memory) || !validHart(memory, hart) || processForHart(memory, hart) !== INVALID_POINTER) return THISTLE_FAULT_BAD_STATE;
   if (virtualTop < 1024n * 1024n || virtualTop > 0x0000ffffffffffffn || pc >= virtualTop) return THISTLE_FAULT_MEMORY;
   const at = hartAt(hart);
   const capacity = loadU32(memory, THISTLE_CONTROL_BASE + C_PAGE_CAPACITY);
@@ -503,7 +503,9 @@ export const thistleProcessInit = (
   egid: U32,
   sgid: U32,
 ): I32 => {
-  if (!validHart(memory, hart) || pid < 1) return THISTLE_FAULT_BAD_STATE;
+  if (!validKernel(memory) || !validHart(memory, hart) || pid < 1 || pid >= INVALID_PROCESS ||
+      loadU32(memory, hartAt(hart) + H_STATUS) !== THISTLE_HART_RUNNABLE ||
+      loadU32(memory, hartAt(hart) + H_PROCESS_SLOT) !== INVALID_PROCESS) return THISTLE_FAULT_BAD_STATE;
   const lock = THISTLE_CONTROL_BASE + C_PROCESS_LOCK;
   if (!acquire(memory, lock)) return THISTLE_BATCH_CONTENDED;
   const capacity = loadU32(memory, THISTLE_CONTROL_BASE + C_PROCESS_CAPACITY);
@@ -3079,3 +3081,5 @@ export { thistleVfsCreate, thistleVfsWrite, thistleVfsLink, thistleVfsUnlink, th
 export { thistleProcessReap } from "./process-reap.js";
 export { thistleProcessInstallCredentials, thistleProcessAttach, thistleProcessSetGroup, thistleProcessReadGroups, thistleProcessRecord, thistleNextPid, thistleProcessIdentity, thistleProcessGroups, thistleProcessUmask } from "./process-state.js";
 export { thistleVfsBacking, thistleVfsBackingVersion, thistleVfsCommitBacking, thistleVfsSetQuota } from "./vfs-backing.js";
+
+export { thistleProcessPark, thistleProcessPrepareImage, thistleProcessRunImage } from "./process-host.js";

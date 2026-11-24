@@ -12,7 +12,7 @@
     "test:memory": "bun test --timeout 60000 src/test/kernel-memory.test.ts src/test/native-image-lifetime.test.ts",
     "test:numeric": "bun test --timeout 60000 src/test/native-word.test.ts",
     "test:vfs": "bun test --timeout 60000 src/test/native-vfs-syscall.test.ts src/test/native-vfs-edit.test.ts src/test/native-vfs-backing.test.ts",
-    "test:process": "bun test --timeout 60000 src/test/native-process-reap.test.ts src/test/native-process-state.test.ts src/test/native-credentials.test.ts src/test/native-process-attach.test.ts",
+    "test:process": "bun test --timeout 60000 src/test/native-process-reap.test.ts src/test/native-process-state.test.ts src/test/native-credentials.test.ts src/test/native-process-attach.test.ts src/test/native-process-host.test.ts",
     "test:host": "bun test --timeout 60000 src/test/net-boundary.test.ts src/test/host-rv64.test.ts src/test/host-backing.test.ts src/test/host-native-access.test.ts src/test/host-bytes.test.ts src/test/host-process.test.ts"
   },
   "devDependencies": {

@@ -83,6 +83,10 @@ for (const threaded of [false, true]) {
   assert.equal(invoke("HartSetX", 0, 0, 17, 174n), 0);
   assert.equal(invoke("RunRv64Batch", 0, 0, 1, 0n, -1), 0);
   assert.equal(invoke("HartGetX", 0, 0, 10), 0xfffffffen);
+  assert.equal(invoke("ProcessPark", 0, 0), 0);
+  assert.equal(invoke("ProcessPrepareImage", 0, 0), 0);
+  assert.equal(invoke("HartGetX", 0, 0, 17), 0n);
+  assert.equal(invoke("ProcessRunImage", 0, 0), 0);
   const highWater = view.getUint32(C_PHYSICAL_NEXT, true);
   for (let cycle = 0; cycle < 8; cycle++) {
     const oldPage = Number(invoke("GuestPage", 0, 0, 0x200000n, 0));
