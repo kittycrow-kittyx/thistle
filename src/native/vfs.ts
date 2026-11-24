@@ -580,3 +580,34 @@ export const residentFits = (memory: ThistleMemory, previous: U64, replacement: 
   const used = thistleVfsResidentUsage(memory);
   return previous <= used && replacement <= limit && used - previous <= limit - replacement;
 };
+
+const copyDirectoryEntry = (memory: ThistleMemory, index: U32, output: Ptr, capacity: U32): I32 => {
+  const entry = dentryAt(memory, index);
+  const inode = loadU32(memory, entry + D_INODE), length = loadU32(memory, entry + D_NAME_LENGTH);
+  if (length === 0 || length > 255) return -5;
+  if (capacity < 16 + length) return -34;
+  storeU32(memory, output, inode);
+  storeU32(memory, output + 4, thistleVfsKind(memory, inode));
+  storeU32(memory, output + 8, index + 1);
+  storeU32(memory, output + 12, length);
+  copyMemory(memory, output + 16, loadU32(memory, entry + D_NAME), length);
+  return wordToI32(word(16 + length));
+};
+
+/** Read one live entry. Caller owns VFS lock and advances the returned cursor. */
+export const thistleVfsReadEntry = (
+  memory: ThistleMemory, proc: Ptr, parent: U32, cursor: U32, output: Ptr, capacity: U32,
+): I32 => {
+  if (thistleVfsKind(memory, parent) !== THISTLE_VFS_KIND_DIRECTORY) return -20;
+  if (!allowed(memory, proc, parent, 4)) return -13;
+  if (!inputContains(memory, output, capacity)) return -14;
+  const count = loadU32(memory, C_VFS_DENTRY_COUNT);
+  let index = cursor;
+  while (index < count) {
+    const entry = dentryAt(memory, index);
+    if (loadU32(memory, entry + D_INODE) !== 0 && loadU32(memory, entry + D_PARENT) === parent)
+      return copyDirectoryEntry(memory, index, output, capacity);
+    index += 1;
+  }
+  return 0;
+};

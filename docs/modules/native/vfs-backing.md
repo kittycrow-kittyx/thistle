@@ -16,7 +16,7 @@ size, timestamps and set-ID bits. Write one replaces content and clears set-ID
 bits. Logical size may exceed resident storage. Quota includes 128 bytes per
 live inode and regular-file resident bytes; open unlinked inodes remain charged
 until final close. Byte transport and immutable payload carriers belong to the
-host adapter. The host adapter supplies byte transport.
+host adapter.
 
 | Boundary result | Meaning |
 | --- | --- |

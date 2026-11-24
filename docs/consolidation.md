@@ -122,3 +122,8 @@ facade still owns its original nodes and requires migration.
 The untagged ABI 11 inode stride changes to 80 bytes for resident accounting and
 payload versions. The VFS image format and process stride remain unchanged.
 No release archive or consumer pin uses this candidate layout.
+
+The host directory reader now consumes canonical dentry cursor records. It has
+no name-to-node map. Shared host access helpers own synchronous lock/lease
+callbacks, with contended lease release retried by the event loop. Existing
+`Dir.ent` consumers still require migration to these canonical snapshots.

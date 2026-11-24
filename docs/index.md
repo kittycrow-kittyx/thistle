@@ -116,3 +116,8 @@ bun run test
 
 - [host/backing](modules/host/backing.md)
 - [test/host-backing.test](modules/test/host-backing.test.md)
+
+- [host/native-access](modules/host/native-access.md)
+- [host/directory](modules/host/directory.md)
+
+- [test/host-native-access.test](modules/test/host-native-access.test.md)

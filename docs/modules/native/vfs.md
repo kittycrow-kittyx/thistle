@@ -24,3 +24,9 @@ and supply validated canonical inode or dentry indices.
 resident payload. `residentFits` checks a byte replacement against the canonical
 quota, with zero retaining the native arena-only policy. Host-backed payload
 reads return EXDEV for explicit host transport.
+
+`thistleVfsReadEntry` enumerates live entries of a directory under the VFS lock.
+The cursor is a dentry slot; EOF returns zero. The reserved output contains
+inode:u32, kind:u32, next-cursor:u32, name-length:u32, followed by UTF-8 bytes.
+The result is the record length. Short buffers return ERANGE; directory read
+permission is checked by the canonical `allowed` function.

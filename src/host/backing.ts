@@ -1,10 +1,10 @@
+import { withVfsLock, withImage } from "./native-access.js";
 import { bad } from "../core/err.js";
 import type { Errno } from "../core/err.js";
 import type { RegSource } from "../fs/vfs.js";
-import { C_VFS_INODE_CAPACITY, C_VFS_LOCK } from "../native/abi.js";
-import { atomicStoreI32, compareExchangeI32, loadU32, storeU32, storeU64 } from "../native/memory.js";
+import { C_VFS_INODE_CAPACITY } from "../native/abi.js";
+import { loadU32, storeU32, storeU64 } from "../native/memory.js";
 import type { ThistleMemory } from "../native/memory.js";
-import { thistleImageRelease, thistleImageReserve } from "../native/kernel.js";
 import { thistleVfsAccess, thistleVfsFileSize } from "../native/vfs.js";
 import { thistleVfsBacking, thistleVfsBackingVersion, thistleVfsCommitBacking } from "../native/vfs-backing.js";
 
@@ -27,42 +27,34 @@ export class HostBacking {
 
   constructor(private readonly memory: ThistleMemory) {}
 
-  private locked<T>(operation: () => T): T {
-    if (compareExchangeI32(this.memory, C_VFS_LOCK, 0, 1) !== 0) bad("EAGAIN", "VFS is busy");
-    try { return operation(); }
-    finally { atomicStoreI32(this.memory, C_VFS_LOCK, 0); }
-  }
-
   private publish(inode: number, proc: number, payload: Payload, size: number, expected: bigint, write: boolean): void {
     if (!Number.isSafeInteger(size) || size < 0) bad("EINVAL", "invalid backing size");
     if (this.sequence > 0xffffffff) bad("ENFILE", "host carrier handles exhausted");
     const handle = this.sequence++;
-    const input = thistleImageReserve(this.memory, 24);
-    if (input === 0xffffffff) bad("EAGAIN", "backing descriptor lease unavailable");
-    try {
+    withImage(this.memory, 24, input => {
       storeU32(this.memory, input, handle); storeU32(this.memory, input + 4, write ? 1 : 0);
       storeU64(this.memory, input + 8, BigInt(size));
       storeU64(this.memory, input + 16, BigInt(payload.bytes === null ? 0 : payload.bytes.byteLength));
-      this.locked(() => {
+      withVfsLock(this.memory, () => {
         check(thistleVfsCommitBacking(this.memory, proc, inode, expected, input, BigInt(Date.now())));
         this.payloads.set(handle, payload);
         this.collectLocked();
       });
-    } finally { check(thistleImageRelease(this.memory, input, 24) === 0 ? 0 : -11); }
+    });
   }
 
   setBytes(inode: number, proc: number, bytes: Uint8Array): void {
-    const version = this.locked(() => thistleVfsBackingVersion(this.memory, inode));
+    const version = withVfsLock(this.memory, () => thistleVfsBackingVersion(this.memory, inode));
     this.publish(inode, proc, { bytes: bytes.slice(), source: null, pending: null }, bytes.byteLength, version, true);
   }
 
   setSource(inode: number, proc: number, source: RegSource): void {
-    const version = this.locked(() => thistleVfsBackingVersion(this.memory, inode));
+    const version = withVfsLock(this.memory, () => thistleVfsBackingVersion(this.memory, inode));
     this.publish(inode, proc, { bytes: null, source, pending: null }, source.size, version, true);
   }
 
   async read(inode: number, proc: number): Promise<Uint8Array> {
-    const snapshot = this.locked(() => {
+    const snapshot = withVfsLock(this.memory, () => {
       if (!thistleVfsAccess(this.memory, proc, inode, 4)) bad("EACCES", "backing read denied");
       const handle = thistleVfsBacking(this.memory, inode);
       const payload = this.payloads.get(handle) ?? bad("EIO", "missing host byte carrier");
@@ -86,5 +78,5 @@ export class HostBacking {
   }
 
   /** Carrier reclamation follows canonical inode references, including open unlinks. */
-  collect(): void { this.locked(() => this.collectLocked()); }
+  collect(): void { withVfsLock(this.memory, () => this.collectLocked()); }
 }

@@ -43,6 +43,9 @@ for (const threaded of [false, true]) {
   data[record + 128] = 102;
   const file = Number(invoke("VfsCreate", 0, proc, 1, record + 128, 1, 1, 0o644, 1n));
   assert.ok(file > 1);
+  assert.equal(invoke("VfsReadEntry", 0, proc, 1, 0, record, 128), 17);
+  assert.equal(view.getUint32(record, true), file);
+  assert.equal(view.getUint8(record + 16), 102);
   assert.equal(invoke("VfsSetQuota", 0, 1024n), 0);
   const previous = invoke("VfsBackingVersion", 0, file);
   view.setUint32(record, 7, true); view.setUint32(record + 4, 1, true);

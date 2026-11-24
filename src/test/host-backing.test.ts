@@ -34,3 +34,4 @@ test("host byte carriers preserve copies and reject stale lazy completion", asyn
   store.collect();
   assert.deepEqual([...await store.read(inode, proc)], [7, 8]);
 });
+
