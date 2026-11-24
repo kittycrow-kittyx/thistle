@@ -372,3 +372,5 @@ host callback phase does not park sibling guest harts.
 | `P_SIGNAL_MASK` | Offset 336, unsigned 64-bit blocked mask |
 
 Candidate ABI 11 uses an 88-byte inode stride. `V_IDENTITY` at byte 80 identifies one incarnation of an inode slot independently of its mutable payload version. The on-disk image retains 56-byte inode records.
+
+`THISTLE_VFS_BUSY` is mount status 6. It reports retained file descriptors or a process working directory below the current root.

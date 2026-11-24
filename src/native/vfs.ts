@@ -27,7 +27,7 @@ import {
   D_PARENT,
   THISTLE_CONTROL_BASE,
   THISTLE_VFS_CAPACITY_ERROR,
-  THISTLE_VFS_CHECKSUM,
+  THISTLE_VFS_CHECKSUM, THISTLE_VFS_BUSY,
   THISTLE_VFS_DENTRY_STRIDE,
   THISTLE_VFS_DUPLICATE,
   THISTLE_VFS_FORMAT,
@@ -483,10 +483,37 @@ function loadDentries(memory: ThistleMemory, start: Ptr, end: Ptr, dentryCount: 
   return word(cursor);
 }
 
+const processHoldsFile = (memory: ThistleMemory, proc: Ptr): boolean => {
+  const table = loadU32(memory, proc + P_DESCRIPTOR_TABLE), capacity = loadU32(memory, proc + P_DESCRIPTOR_CAPACITY);
+  let descriptor: U32 = 0;
+  while (descriptor < capacity) {
+    const at = table + descriptor * THISTLE_DESCRIPTOR_STRIDE;
+    if (loadU32(memory, at + FD_KIND) !== 0 && loadU32(memory, at + FD_INODE) !== 0) return true;
+    descriptor += 1;
+  }
+  return false;
+};
+
+// A root remount must not reinterpret open files or a process's non-root working directory.
+const hasMountReferences = (memory: ThistleMemory): boolean => {
+  if (!thistleVfsLoaded(memory)) return false;
+  const root = thistleVfsRoot(memory), capacity = loadU32(memory, C_PROCESS_CAPACITY);
+  const base = loadU32(memory, C_PROCESS_TABLE_BASE);
+  let index: U32 = 0;
+  while (index < capacity) {
+    const proc = base + index * THISTLE_PROCESS_STRIDE;
+    const cwd = loadU32(memory, proc + P_CWD_INODE);
+    if (loadU32(memory, proc + P_STATE) !== 0 && (cwd !== 0 && cwd !== root || processHoldsFile(memory, proc))) return true;
+    index += 1;
+  }
+  return false;
+};
+
 // Publish the mounted filesystem only when both record tables are validated.
 function publishVfs(memory: ThistleMemory, inodeCount: U32, dentryCount: U32, root: U32): void {
   storeU32(memory, THISTLE_CONTROL_BASE + C_VFS_INODE_COUNT, inodeCount);
   storeU32(memory, THISTLE_CONTROL_BASE + C_VFS_DENTRY_COUNT, dentryCount);
+  const previousRoot = loadU32(memory, THISTLE_CONTROL_BASE + C_VFS_ROOT);
   storeU32(memory, THISTLE_CONTROL_BASE + C_VFS_ROOT, root);
   const processBase = loadU32(memory, THISTLE_CONTROL_BASE + C_PROCESS_TABLE_BASE);
   const processCapacity = loadU32(memory, THISTLE_CONTROL_BASE + C_PROCESS_CAPACITY);
@@ -494,7 +521,7 @@ function publishVfs(memory: ThistleMemory, inodeCount: U32, dentryCount: U32, ro
   while (processIndex < processCapacity) {
     const proc = processBase + processIndex * THISTLE_PROCESS_STRIDE;
     if (loadU32(memory, proc + P_STATE) !== wordToU32(word(THISTLE_PROCESS_EMPTY)) &&
-        loadU32(memory, proc + P_CWD_INODE) === 0) storeU32(memory, proc + P_CWD_INODE, root);
+        (loadU32(memory, proc + P_CWD_INODE) === 0 || loadU32(memory, proc + P_CWD_INODE) === previousRoot)) storeU32(memory, proc + P_CWD_INODE, root);
     processIndex += 1;
   }
   storeU32(memory, THISTLE_CONTROL_BASE + C_VFS_DIRTY, 0);
@@ -519,6 +546,7 @@ export const thistleLoadVfs = (memory: ThistleMemory, image: Ptr, imageLength: U
   if (hashBytes(memory, image + VFS_HEADER_SIZE, imageLength - VFS_HEADER_SIZE) !== loadU32(memory, image + 24)) {
     return THISTLE_VFS_CHECKSUM;
   }
+  if (hasMountReferences(memory)) return THISTLE_VFS_BUSY;
   resetVfs(memory, inodeCapacity, dentryCapacity);
   const end = image + imageLength;
   const inodeResult = loadInodes(memory, image + VFS_HEADER_SIZE, end, inodeCount, inodeCapacity, dataCapacity);

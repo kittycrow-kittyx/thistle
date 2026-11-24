@@ -191,3 +191,7 @@ The candidate inode layout includes a separate incarnation token. Host views rea
 Directory snapshots use the same checked process/inode views. Native path traversal checks search permission for dot components and follows symlinks before resolving subsequent parent components.
 
 Payload restoration reuses the native backing commit operation with a root-only mode. It preserves image metadata while installing resident or lazy storage; ordinary writes retain their set-ID-clearing behaviour.
+
+## Root image restoration
+
+The host root loader reuses the existing native image serializer and backing commit operation. It restores static metadata, hard links, symlinks and lazy providers into canonical tables. Resident-quota and table checks precede mounting. Native remount checks reject retained file descriptors and non-root working directories. Existing public object VFS and persistence callers still require migration to this loader.

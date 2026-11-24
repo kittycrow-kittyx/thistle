@@ -246,6 +246,7 @@ export const THISTLE_VFS_FORMAT: I32 = 2;
 export const THISTLE_VFS_CHECKSUM: I32 = 3;
 export const THISTLE_VFS_CAPACITY_ERROR: I32 = 4;
 export const THISTLE_VFS_DUPLICATE: I32 = 5;
+export const THISTLE_VFS_BUSY: I32 = 6;
 
 export const THISTLE_PARSER_BASE: U32 = 3328;
 export const THISTLE_PARSER_STRING: U32 = 0;

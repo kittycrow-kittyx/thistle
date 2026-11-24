@@ -55,6 +55,12 @@ for (const threaded of [false, true]) {
   assert.ok(file > 1);
   const inodeIdentity = invoke("VfsIdentity", 0, file);
   assert.notEqual(inodeIdentity, 0n);
+  const mountedFile = Number(invoke("OpenPath", 0, 0, 1, record + 128, 1, 0));
+  assert.ok(mountedFile >= 3);
+  data.set(image, record + 32);
+  assert.equal(invoke("LoadVfs", 0, record + 32, image.length), 6);
+  assert.equal(invoke("VfsIdentity", 0, file), inodeIdentity);
+  assert.equal(invoke("CloseDescriptor", 0, 0, mountedFile), 0);
   assert.equal(invoke("VfsReadEntry", 0, proc, 1, 0, record, 128), 17);
   assert.equal(view.getUint32(record, true), file);
   assert.equal(view.getUint8(record + 16), 102);

@@ -25,3 +25,7 @@ Operations take a `HostProcess` view. Provider completion checks process and ino
 | Reader reaped or its hart rebound | `ESRCH` |
 | Inode unlinked and its slot recycled | `ENOENT` |
 | Payload replaced during the read | `EAGAIN` |
+
+The registry is bound to its root inode incarnation. A remount expires the registry; `collect` then discards its old byte carriers.
+
+`installLocked` is the mount transaction entry: the caller supplies a validated process record and reserved input buffer while holding the process, credential and VFS locks. It shares the backing commit implementation with ordinary operations.

@@ -34,3 +34,5 @@ permission is checked by the canonical `allowed` function.
 `thistleVfsIdentity` returns the immutable incarnation token of a live inode, or zero for a missing inode. Content and metadata edits preserve identity; slot reuse and remount assign a new token.
 
 Path resolution checks that the current component is a searchable directory before processing `.` or `..`. Symlink targets determine traversal before a following parent component.
+
+`thistleLoadVfs` returns `THISTLE_VFS_BUSY` before mutation when open inode descriptors or non-root process working directories retain the current filesystem. A successful root replacement redirects root working directories to the new root inode. Callers hold the process, credential and VFS locks during host mounting.
