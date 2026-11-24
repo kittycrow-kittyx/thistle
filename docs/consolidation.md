@@ -154,10 +154,10 @@ Consumers must use checked syscall operations or trusted loader metadata.
 
 ## Canonical host lifecycle and readiness
 
-Hosted `Proc.state` and live exit status now read the native process record.
-`Sched.ready` is a snapshot of ready native PIDs; its independently maintained
-array has been removed. The Bun driver retains callback closures and dispatch
-counts. Native hart events determine per-thread CPU readiness.
+Hosted `Proc.state` and live exit status read the native process record.
+`Sched.ready` snapshots ready native PIDs. The Bun driver retains callback
+closures and dispatch counts. Native hart events determine per-thread CPU
+readiness.
 
 Host completion follows I/O cleanup. A process may be a native zombie before
 its host completion promise resolves; the hosted reaper waits for completion
