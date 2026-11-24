@@ -9,6 +9,3 @@
 These are trusted embedding operations. They hold the process lock and every
 bound hart lock. Contention returns EAGAIN before mutation. Only the process
 leader can change the image lifecycle; peer processes retain their state.
-
-Initialisation rejects an already bound hart. Replacing an image retains its
-process identity and uses the image loader to recycle old frames.

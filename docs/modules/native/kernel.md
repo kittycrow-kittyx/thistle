@@ -62,3 +62,8 @@ Image loading requires a quiescent process controlled by the embedding driver.
 `thistleImageBegin` returns old guest pages through the shared allocator before
 resetting image metadata. Contended allocation or remaining host-file mappings
 return THISTLE_THX_BUSY; invalid frame metadata returns THISTLE_THX_MEMORY.
+
+`thistleProcessPark`, `thistleProcessPrepareImage` and `thistleProcessRunImage`
+are the trusted host lifecycle operations in [process-host](process-host.md).
+They park callbacks, quiesce replacement images and activate loaded images
+under process and hart locks.

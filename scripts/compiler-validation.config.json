@@ -262,7 +262,10 @@
       "thistleVfsResidentUsage": "tetoVfsResidentUsage",
       "thistleVfsReadEntry": "tetoVfsReadEntry",
       "thistleProcessAttach": "tetoProcessAttach",
-      "thistleProcessInstallCredentials": "tetoProcessInstallCredentials"
+      "thistleProcessInstallCredentials": "tetoProcessInstallCredentials",
+      "thistleProcessPark": "tetoProcessPark",
+      "thistleProcessPrepareImage": "tetoProcessPrepareImage",
+      "thistleProcessRunImage": "tetoProcessRunImage"
     }
   },
   "memory": {
