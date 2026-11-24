@@ -111,7 +111,7 @@ export class HostBacking {
   /** Mount transaction only: caller holds process, credential and VFS locks and a 24-byte input lease. */
   installLocked(inode: number, proc: number, input: number, source: RegSource | Uint8Array): void {
     const { payload, size } = restoredPayload(source);
-    this.commit({ inode, payload, size, expected: thistleVfsBackingVersion(this.memory, inode), operation: 2 }, proc, input);
+    this.commit({ inode, payload, size, expected: thistleVfsBackingVersion(this.memory, inode), operation: 2 }, { record: proc, length: null }, input);
   }
 
   /** Export the existing carrier without loading a lazy provider or changing inode state. */
