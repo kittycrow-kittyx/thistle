@@ -45,6 +45,7 @@ bun run test
 - [core/kernel-memory](modules/core/kernel-memory.md)
 - [core/native-types](modules/core/native-types.md)
 - [core/proc](modules/core/proc.md)
+- [core/fd](modules/core/fd.md)
 - [core/release](modules/core/release.md)
 - [core/rv64-arithmetic](modules/core/rv64-arithmetic.md)
 - [core/rv64-branch](modules/core/rv64-branch.md)
@@ -145,6 +146,7 @@ bun run test
 - [test/native-host-map.test](modules/test/native-host-map.test.md)
 
 - [test/host-lifecycle.test](modules/test/host-lifecycle.test.md)
+- [test/host-descriptor.test](modules/test/host-descriptor.test.md)
 
 - [test/native-signals.test](modules/test/native-signals.test.md)
 

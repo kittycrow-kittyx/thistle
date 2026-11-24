@@ -5,8 +5,7 @@ delivery. Its `native` property is a non-owning `HostProcess` view. PID, parent
 PID, process group, credentials, filesystem IDs and umask read canonical memory.
 `PState` and `Sig` describe the remaining host lifecycle and signal interface.
 
-`Fd` currently holds host stream endpoints, file path, cursor and flags.
-Descriptor ownership and signal-state migration remain pending.
+`Fd` and `FdTable` attach host stream endpoints to canonical descriptor slots. Live offsets and flags reside in native memory. The legacy path binding remains until inode-backed file opens replace it.
 
 `FdFlags` names descriptor access and inheritance flags. `Io` carries standard
 streams. `ProcInit` contains host image metadata and streams; construction also

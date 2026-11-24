@@ -1056,7 +1056,7 @@ export class Rv64 {
     this.vf = null;
   }
 
-  private copyFds(src: Map<number, Fd>, hold = false): Map<number, Fd> {
+  private copyFds(src: Iterable<[number, Fd]>, hold = false): Map<number, Fd> {
     const out = new Map<number, Fd>();
     for (const [n, f] of src) {
       if (hold) { withValue(withValue(f.input ?? null, value => value.holdR) ?? null, callable => callable.call(f.input)); withValue(withValue(f.output ?? null, value => value.hold) ?? null, callable => callable.call(f.output)); }

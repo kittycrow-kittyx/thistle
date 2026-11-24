@@ -1,4 +1,7 @@
 import type { In, Out } from "../io/stream.js";
+import { Fd, FdTable } from "./fd.js";
+export { Fd, FdTable } from "./fd.js";
+export type { FdFlags } from "./fd.js";
 import type { HostProcess, HostProcessState, HostSignal } from "../host/process.js";
 import type { ProcCred } from "../fs/vfs.js";
 
@@ -26,34 +29,6 @@ export class ExecReplace extends Error {
   }
 }
 
-export interface FdFlags { rd: boolean; wr: boolean; add: boolean; clo: boolean }
-
-export class Fd {
-  pos = 0;
-
-  constructor(
-    public input: In | null = null,
-    public output: Out | null = null,
-    public path: string | null = null,
-    flags: FdFlags = { rd: false, wr: false, add: false, clo: false },
-  ) { this.rd = flags.rd; this.wr = flags.wr; this.add = flags.add; this.clo = flags.clo; }
-
-  rd: boolean;
-  wr: boolean;
-  add: boolean;
-  clo: boolean;
-
-  hold(): void {
-    if (this.input !== null) this.input.holdR();
-    if (this.output !== null) this.output.hold();
-  }
-
-  release(): void {
-    if (this.input !== null) this.input.releaseR();
-    if (this.output !== null) this.output.close();
-  }
-}
-
 export interface ProcInit {
   pgid: number;
   cmd: string;
@@ -74,7 +49,7 @@ export class Proc {
   get sig(): Sig | null { return this.completed ? this.finishedSignal : this.native.lastSignal; }
   readonly born = Date.now();
   readonly ac = new AbortController();
-  readonly fds = new Map<number, Fd>();
+  readonly fds: FdTable;
   get kids(): ReadonlySet<number> { return this.native.children; }
   allHeld = false;
   get signalMask(): bigint { return this.native.signalMask; }
@@ -98,6 +73,7 @@ export class Proc {
 
   constructor(init: ProcInit, readonly native: HostProcess) {
     const { pgid, cmd, argv, cwd, env, io } = init;
+    this.fds = new FdTable(native);
     this.pgid = pgid;
     this.cmd = cmd; this.argv = argv; this.cwd = cwd;
     this.env = env;

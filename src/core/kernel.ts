@@ -383,8 +383,7 @@ export class Kern {
   }
 
   fd(p: Proc): number {
-    for (let n = 3; n < 256; n++) if (!p.fds.has(n)) return n;
-    return bad("EMFILE", "descriptor table full");
+    return p.fds.next();
   }
 
   cloneFd(p: Proc, old: number, nu: number | null = null): number {
@@ -394,7 +393,9 @@ export class Kern {
     const q = p.fds.get(n) ?? null;
     if (q !== null) q.release();
     f.hold();
-    p.fds.set(n, new Fd(f.input, f.output, f.path, { rd: f.rd, wr: f.wr, add: f.add, clo: false }));
+    const copy = new Fd(f.input, f.output, f.path, { rd: f.rd, wr: f.wr, add: f.add, clo: false });
+    copy.pos = f.pos;
+    p.fds.set(n, copy);
     return n;
   }
 }
