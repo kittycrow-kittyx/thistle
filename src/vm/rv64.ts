@@ -327,6 +327,7 @@ export class Rv64 {
       return await this.runThistleCore(exe, argv, image, { memory, exports, label: "Thistle native source" }, physicalBytes);
     } finally {
       this.executionActive = false;
+      this.events.dispose();
       interrupt.dispose();
       this.interrupted = null;
       for (const waiters of this.thistleFutexWaiters.values()) {

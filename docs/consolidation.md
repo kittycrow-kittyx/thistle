@@ -219,3 +219,9 @@ Character-device opens retain native inode and descriptor authority. The explici
 ## Production hosted root cutover
 
 `Kern` mounts its root in the existing canonical memory at construction. `Vfs` is a request facade over that mount and `VNode` subclasses are non-owning inode views. `Sys` uses native inode descriptors for all ordinary files; `Proc.cwd` reads and changes the native cwd reference. `TreeFs` delegates root images to the canonical serializer and loader. RV64 file mapping retention, vfork descriptor snapshots and live overlay reconciliation remain explicit parity gates before promotion.
+
+The RV64 Linux event compatibility bridge now expires pending eventfd and epoll
+operations on process cancellation or image disposal. Waiters remove their abort
+listeners and timers, and resumed operations check descriptor incarnation before
+accessing guest memory. This fixes host callback lifetime only; it does not yet
+move Linux event semantics into the canonical kernel.

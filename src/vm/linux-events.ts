@@ -37,6 +37,18 @@ export class RvLinuxEvents {
   private readonly devices = new Map<number, Device>();
   private readonly waiters = new Set<() => void>();
   private readonly pipeSubscriptions = new Map<Pipe, () => void>();
+  private disposed = false;
+
+  private get interrupted(): boolean { return this.disposed || this.sys.p.ac.signal.aborted; }
+
+  /** Expire pending operations before the guest image or its hart can be reused. */
+  dispose(): void {
+    this.disposed = true;
+    for (const unsubscribe of this.pipeSubscriptions.values()) unsubscribe();
+    this.pipeSubscriptions.clear();
+    for (const wake of this.waiters) wake();
+    this.devices.clear();
+  }
 
   constructor(
     private readonly sys: Sys,
@@ -119,11 +131,13 @@ export class RvLinuxEvents {
     const device = (this.devices.get(fd) ?? null);
     if (!device) return null;
     if (device.kind !== "eventfd" || length < 8) return -22n;
+    if (this.interrupted) return -4n;
     this.check(at, 8, true);
     while (device.value === 0n) {
       if (device.nonblock) return -11n;
       await this.waitChange(-1);
-      if (!this.devices.has(fd)) return -9n;
+      if (this.interrupted) return -4n;
+      if ((this.devices.get(fd) ?? null) !== device) return -9n;
     }
     const result = device.semaphore ? 1n : device.value;
     device.value = device.semaphore ? device.value - 1n : 0n;
@@ -136,13 +150,15 @@ export class RvLinuxEvents {
     const device = (this.devices.get(fd) ?? null);
     if (!device) return null;
     if (device.kind !== "eventfd" || length < 8) return -22n;
+    if (this.interrupted) return -4n;
     this.check(at, 8, false);
     const value = this.memory().u64(at);
     if (value === 0xffffffffffffffffn) return -22n;
     while (value > MAX_COUNTER - device.value) {
       if (device.nonblock) return -11n;
       await this.waitChange(-1);
-      if (!this.devices.has(fd)) return -9n;
+      if (this.interrupted) return -4n;
+      if ((this.devices.get(fd) ?? null) !== device) return -9n;
     }
     device.value += value;
     this.changed();
@@ -225,12 +241,14 @@ export class RvLinuxEvents {
     if (!poller || poller.kind !== "epoll") return -9;
     if (limit < 1 || limit > 4096 || timeout < -1) return -22;
     if (!at) return -14;
+    if (this.interrupted) return -4;
     this.check(at, limit * 12, true);
-    let count = this.collect(poller, at, limit);
+    const count = this.collect(poller, at, limit);
     if (count || timeout === 0) return count;
     await this.waitChange(timeout);
-    count = this.collect(poller, at, limit);
-    return (this.devices.get(epfd) ?? null) === poller ? count : -9;
+    if (this.interrupted) return -4;
+    if ((this.devices.get(epfd) ?? null) !== poller) return -9;
+    return this.collect(poller, at, limit);
   }
 
   private refreshPipeWatches(): void {
@@ -265,14 +283,18 @@ export class RvLinuxEvents {
   }
 
   private async waitChange(timeout: number): Promise<void> {
+    if (this.interrupted) return;
+    const signal = this.sys.p.ac.signal;
     await new Promise<void>(resolve => {
       let timer: ReturnType<typeof setTimeout> | null = null;
       const finish = (): void => {
         this.waiters.delete(finish);
+        signal.removeEventListener("abort", finish);
         if (timer !== null) clearTimeout(timer);
         resolve();
       };
       this.waiters.add(finish);
+      signal.addEventListener("abort", finish, { once: true });
       if (timeout >= 0) timer = setTimeout(finish, timeout);
     });
   }
