@@ -224,7 +224,6 @@ import {
   THISTLE_VFS_MAX_DENTRY_CAPACITY,
   THISTLE_VFS_MAX_DATA_CAPACITY,
   THISTLE_VFS_KIND_DIRECTORY,
-  THISTLE_VFS_KIND_FILE,
   THISTLE_VFS_PATH_CAPACITY,
   THISTLE_START_FORMAT,
   THISTLE_START_MEMORY,
@@ -291,7 +290,7 @@ import {
   unsignedWordToFloat,
 } from "./word.js";
 import {
-  descriptorAt, releaseDescriptor, freeDescriptor, installDescriptor,
+  descriptorAt, releaseDescriptor, installDescriptor, thistleVfsOpenInode,
   thistleVfsAccess,
   thistleVfsFileSize,
   thistleVfsKind,
@@ -646,18 +645,7 @@ const openPathLocked = (
   if ((flags & OPEN_DIRECTORY) !== 0 && kind !== THISTLE_VFS_KIND_DIRECTORY) {
     return -20;
   }
-  if (kind !== THISTLE_VFS_KIND_FILE && kind !== THISTLE_VFS_KIND_DIRECTORY) {
-    return -22;
-  }
-  if (!thistleVfsAccess(memory, proc, inode, kind === THISTLE_VFS_KIND_DIRECTORY ? 5 : 4)) {
-    return -13;
-  }
-  const descriptor = freeDescriptor(memory, proc, 3);
-  if (descriptor < 0) return descriptor;
-  const state = descriptorAt(memory, proc, wordToU32(word(descriptor)));
-  const installed = installDescriptor(memory, state, kind === THISTLE_VFS_KIND_DIRECTORY ? THISTLE_FD_DIRECTORY : THISTLE_FD_FILE,
-    THISTLE_FD_READ | ((flags & OPEN_CLOEXEC) !== 0 ? THISTLE_FD_CLOEXEC : 0), inode);
-  return installed < 0 ? installed : descriptor;
+  return thistleVfsOpenInode(memory, proc, inode, THISTLE_FD_READ | ((flags & OPEN_CLOEXEC) !== 0 ? THISTLE_FD_CLOEXEC : 0), 3);
 };
 
 export const thistleReadDescriptor = (

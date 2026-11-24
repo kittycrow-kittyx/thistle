@@ -42,3 +42,5 @@ Path resolution checks that the current component is a searchable directory befo
 `thistleVfsChdir` resolves from the live cwd inode, checks directory search access and updates the process record. `thistleVfsCwdPath` returns a NUL-terminated path in a reserved image, including the terminator in its length. `thistleVfsCwdHeld` detects live cwd references; directory removal or replacement returns `EBUSY` while referenced.
 
 `freeDescriptor` locates a reusable slot. `installDescriptor` establishes its next incarnation and initial state; both native file open and standard host descriptor initialization use it. `releaseDescriptor` retains the incarnation counter while clearing live state.
+
+`thistleVfsOpenInode` validates file or directory access, finds a descriptor and binds its inode. Append opens start at the current file size. Native read-only path opens use this same allocator and permission check.

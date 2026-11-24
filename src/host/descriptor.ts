@@ -1,9 +1,10 @@
 import { bad } from "../core/err.js";
-import { FD_FLAGS, FD_IDENTITY, FD_KIND, FD_OFFSET, P_DESCRIPTOR_CAPACITY, THISTLE_FD_EMPTY, THISTLE_FD_HOST } from "../native/abi.js";
+import { C_CREDENTIAL_LOCK, FD_FLAGS, FD_IDENTITY, FD_INODE, FD_KIND, FD_OFFSET, P_DESCRIPTOR_CAPACITY, THISTLE_FD_EMPTY, THISTLE_FD_HOST } from "../native/abi.js";
 import { loadU32, loadU64, storeU32, storeU64 } from "../native/memory.js";
-import { descriptorAt, freeDescriptor, installDescriptor, releaseDescriptor } from "../native/vfs.js";
-import { checkNative, withVfsLock } from "./native-access.js";
+import { descriptorAt, freeDescriptor, installDescriptor, releaseDescriptor, thistleVfsIdentity, thistleVfsOpenInode } from "../native/vfs.js";
+import { checkNative, withVfsLock, withNativeLock } from "./native-access.js";
 import type { HostProcess } from "./process.js";
+import type { HostInode } from "./inode.js";
 
 const slot = (process: HostProcess, record: number, number: number): number => {
   if (!Number.isInteger(number) || number < 0 || number >= loadU32(process.memory, record + P_DESCRIPTOR_CAPACITY)) bad("EBADF", "descriptor outside canonical table");
@@ -14,7 +15,7 @@ const validOffset = (offset: number): void => {
   if (!Number.isSafeInteger(offset) || offset < 0) bad("EINVAL", "invalid descriptor offset");
 };
 
-/** A non-owning view of a host capability descriptor in canonical memory. */
+/** Non-owning descriptor view in canonical memory, including inode and host capability slots. */
 export class HostDescriptor {
   private constructor(readonly process: HostProcess, readonly number: number, readonly identity: number) {}
 
@@ -41,14 +42,38 @@ export class HostDescriptor {
     return new HostDescriptor(process, number, identity);
   }
 
+  static attach(process: HostProcess, number: number): HostDescriptor {
+    const identity = process.withDescriptors(record => {
+      const state = slot(process, record, number);
+      if (loadU32(process.memory, state + FD_KIND) === THISTLE_FD_EMPTY) bad("EBADF", "descriptor is closed");
+      return loadU32(process.memory, state + FD_IDENTITY);
+    });
+    return new HostDescriptor(process, number, identity);
+  }
+
+  static open(process: HostProcess, inode: HostInode, flags: number, minimum = 3): HostDescriptor {
+    const memory = process.memory;
+    if (inode.memory !== memory) bad("EINVAL", "descriptor filesystem instance mismatch");
+    const number = process.withDescriptors(record => withNativeLock(memory, C_CREDENTIAL_LOCK, () => withVfsLock(memory, () => {
+      if (thistleVfsIdentity(memory, inode.ino) !== inode.identity) bad("ENOENT", "inode view expired");
+      const result = thistleVfsOpenInode(memory, record, inode.ino, flags, minimum);
+      checkNative(result);
+      return result;
+    })));
+    return HostDescriptor.attach(process, number);
+  }
+
   private access<T>(operation: (state: number) => T): T {
     const memory = this.process.memory;
     return this.process.withDescriptors(record => {
       const state = slot(this.process, record, this.number);
-      if (loadU32(memory, state + FD_KIND) !== THISTLE_FD_HOST || loadU32(memory, state + FD_IDENTITY) !== this.identity) bad("EBADF", "descriptor incarnation expired");
+      if (loadU32(memory, state + FD_KIND) === THISTLE_FD_EMPTY || loadU32(memory, state + FD_IDENTITY) !== this.identity) bad("EBADF", "descriptor incarnation expired");
       return operation(state);
     });
   }
+
+  get kind(): number { return this.access(state => loadU32(this.process.memory, state + FD_KIND)); }
+  get inode(): number { return this.access(state => loadU32(this.process.memory, state + FD_INODE)); }
 
   get flags(): number { return this.access(state => loadU32(this.process.memory, state + FD_FLAGS)); }
 

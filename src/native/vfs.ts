@@ -2,7 +2,7 @@ import { readGroup } from "./credentials.js";
 import { inputContains } from "./arena.js";
 import {
   C_PROCESS_CAPACITY,
-  FD_INODE, FD_KIND, FD_FLAGS, FD_IDENTITY, THISTLE_FD_EMPTY, P_DESCRIPTOR_CAPACITY, P_DESCRIPTOR_TABLE, THISTLE_DESCRIPTOR_STRIDE,
+  FD_INODE, FD_KIND, FD_FLAGS, FD_IDENTITY, FD_OFFSET, THISTLE_FD_EMPTY, THISTLE_FD_READ, THISTLE_FD_WRITE, THISTLE_FD_APPEND, THISTLE_FD_CLOEXEC, THISTLE_FD_FILE, THISTLE_FD_DIRECTORY, P_DESCRIPTOR_CAPACITY, P_DESCRIPTOR_TABLE, THISTLE_DESCRIPTOR_STRIDE,
   C_PROCESS_TABLE_BASE,
   C_VFS_DATA_BASE,
   C_VFS_DATA_END,
@@ -404,6 +404,27 @@ export const thistleVfsResolve = (
 
 export const thistleVfsAccess = (memory: ThistleMemory, proc: Ptr, inode: U32, bits: U32): boolean =>
   thistleVfsKind(memory, inode) !== THISTLE_VFS_KIND_EMPTY && bits <= 7 && allowed(memory, proc, inode, bits);
+
+/** Open a canonical inode under the process descriptor, credential and VFS locks. */
+export const thistleVfsOpenInode = (memory: ThistleMemory, proc: Ptr, inode: U32, flags: U32, minimum: U32): I32 => {
+  if ((flags & ~(THISTLE_FD_READ | THISTLE_FD_WRITE | THISTLE_FD_APPEND | THISTLE_FD_CLOEXEC)) !== 0 ||
+      (flags & (THISTLE_FD_READ | THISTLE_FD_WRITE)) === 0 ||
+      ((flags & THISTLE_FD_APPEND) !== 0 && (flags & THISTLE_FD_WRITE) === 0)) return -22;
+  const kind = thistleVfsKind(memory, inode);
+  if (kind === THISTLE_VFS_KIND_EMPTY) return -2;
+  if (kind !== THISTLE_VFS_KIND_DIRECTORY && kind !== THISTLE_VFS_KIND_FILE) return -22;
+  if (kind === THISTLE_VFS_KIND_DIRECTORY && (flags & THISTLE_FD_WRITE) !== 0) return -21;
+  const bits: U32 = kind === THISTLE_VFS_KIND_DIRECTORY ? 5 :
+    ((flags & THISTLE_FD_READ) !== 0 ? 4 : 0) | ((flags & THISTLE_FD_WRITE) !== 0 ? 2 : 0);
+  if (!allowed(memory, proc, inode, bits)) return -13;
+  const descriptor = freeDescriptor(memory, proc, minimum);
+  if (descriptor < 0) return descriptor;
+  const state = descriptorAt(memory, proc, wordToU32(word(descriptor)));
+  const result = installDescriptor(memory, state, kind === THISTLE_VFS_KIND_DIRECTORY ? THISTLE_FD_DIRECTORY : THISTLE_FD_FILE, flags, inode);
+  if (result !== 0) return result;
+  if ((flags & THISTLE_FD_APPEND) !== 0) storeU64(memory, state + FD_OFFSET, thistleVfsFileSize(memory, inode));
+  return descriptor;
+};
 
 /** Change cwd using the same traversal and search policy as native open. Caller holds VFS lock. */
 export const thistleVfsChdir = (memory: ThistleMemory, proc: Ptr, path: Ptr, length: U32): I32 => {
