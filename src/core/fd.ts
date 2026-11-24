@@ -29,6 +29,20 @@ export class Fd {
     this.draft = null;
   }
 
+  /** Transfer a live reference or an uninstalled host request into a fresh slot. */
+  copyTo(process: HostProcess, number: number, cloexec: boolean): Fd {
+    const copy = new Fd(this.input, this.output, this.path, { rd: this.rd, wr: this.wr, add: this.add, clo: cloexec });
+    const native = this.native;
+    if (native === null) {
+      copy.pos = this.pos;
+      copy.bind(process, number);
+      return copy;
+    }
+    copy.native = native.copyTo(process, number, cloexec);
+    copy.draft = null;
+    return copy;
+  }
+
   static fromNative(native: HostDescriptor): Fd {
     const descriptor = new Fd();
     descriptor.native = native;
@@ -132,6 +146,19 @@ export class FdTable {
     descriptor.bind(this.process, number);
     this.capabilities.set(number, descriptor);
     return this;
+  }
+
+  /** Inherit a descriptor and its optional stream capability into this table. */
+  inherit(number: number, source: Fd, cloexec = source.clo): void {
+    const previous = this.get(number);
+    source.hold();
+    try {
+      this.capabilities.set(number, source.copyTo(this.process, number, cloexec));
+    } catch (error) {
+      source.release();
+      throw error instanceof Error ? error : new Error("descriptor inheritance failed");
+    }
+    if (previous !== null) previous.release();
   }
 
   delete(number: number): boolean {

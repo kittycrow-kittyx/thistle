@@ -11,3 +11,5 @@ Signal delivery consults the canonical mask before completing a sleeping callbac
 Sessions retain standard-stream references so child exit leaves the parent's inherited input open.
 
 Construction requires `KernelOptions`; there is no implicit host service discovery or default transport in the kernel graph. JavaScript callers may use `createHostKernel` outside that graph.
+
+`cloneFd` and explicit child descriptor inheritance delegate to `FdTable.inherit` instead of reconstructing a path-based descriptor.

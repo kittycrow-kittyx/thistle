@@ -41,3 +41,5 @@ metadata; `queueSignal` and `changeSignalMask` marshal the native operations.
 `withFilesystem` holds process, credential and VFS locks while an adapter invokes canonical filesystem operations. An expired process view fails before the operation.
 
 `withDescriptors` holds the process lifetime and descriptor locks during slot access. Working-directory marshalling resides in [cwd](cwd.md).
+
+`withDescriptorPair` validates both live process records under the same process lock and holds their descriptor locks for synchronous inheritance. For the same record it acquires the descriptor lock once.

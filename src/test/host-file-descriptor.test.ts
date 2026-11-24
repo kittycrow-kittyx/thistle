@@ -6,8 +6,8 @@ import { HostInode } from "../host/inode.js";
 import { HostProcess } from "../host/process.js";
 import { mountedKernel } from "./vfs-fixture.js";
 import { withImage } from "../host/native-access.js";
-import { THISTLE_FD_READ, THISTLE_FD_WRITE, THISTLE_FD_APPEND } from "../native/abi.js";
-import { thistleReadDescriptor, thistleCloseDescriptor } from "../native/kernel.js";
+import { THISTLE_FD_READ, THISTLE_FD_WRITE, THISTLE_FD_APPEND, THISTLE_FD_CLOEXEC } from "../native/abi.js";
+import { thistleReadDescriptor, thistleCloseDescriptor, thistleHartInit, thistleProcessInit } from "../native/kernel.js";
 
 test("host inode descriptors share native reads and survive unlink", () => {
   const memory = mountedKernel(), process = new HostProcess(memory, 0);
@@ -62,5 +62,31 @@ test("native file descriptor writes and seeks preserve access after unlink and c
   append.close();
   assert.equal(file.metadata().nlink, 0);
   fd.close();
+  assert.throws(() => file.metadata(), { code: "ENOENT" });
+});
+
+test("descriptor inheritance retains unlinked inodes across processes", () => {
+  const memory = mountedKernel(2), parent = new HostProcess(memory, 0);
+  assert.equal(thistleHartInit(memory, 1, 0x10000000n, 0n), 0);
+  assert.equal(thistleProcessInit(memory, 1, 2, 1, 1000, 1000, 1000, 1000, 1000, 1000), 0);
+  const child = new HostProcess(memory, 1);
+  const root = HostInode.resolve(parent, "/"), file = root.create(parent, "secret", 1, 0o600);
+  file.write(parent, Uint8Array.of(1, 2, 3), 0, true);
+  const fd = HostDescriptor.open(parent, file, THISTLE_FD_READ | THISTLE_FD_CLOEXEC);
+  assert.equal(fd.readFile(1)[0], 1);
+  root.unlink(parent, "secret");
+  const source = new FdTable(parent), target = new FdTable(child);
+  const view = source.get(fd.number);
+  assert.ok(view);
+  target.inherit(7, view, false);
+  const inherited = target.get(7);
+  assert.ok(inherited);
+  assert.equal(inherited.inode, file.ino);
+  assert.equal(inherited.clo, false);
+  assert.equal(inherited.pos, 1);
+  fd.close();
+  assert.deepEqual([...inherited.readFile(2)], [2, 3]);
+  assert.throws(() => target.inherit(8, view), { code: "EBADF" });
+  target.delete(7);
   assert.throws(() => file.metadata(), { code: "ENOENT" });
 });

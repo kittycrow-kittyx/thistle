@@ -2,7 +2,7 @@ import { readGroup } from "./credentials.js";
 import { inputContains } from "./arena.js";
 import {
   C_PROCESS_CAPACITY, C_FLAGS, THISTLE_FLAG_HOST_TRANSPORT, THISTLE_FD_HOST, THISTLE_VFS_KIND_CHARACTER,
-  FD_INODE, FD_KIND, FD_FLAGS, FD_IDENTITY, FD_OFFSET, THISTLE_FD_EMPTY, THISTLE_FD_READ, THISTLE_FD_WRITE, THISTLE_FD_APPEND, THISTLE_FD_CLOEXEC, THISTLE_FD_FILE, THISTLE_FD_DIRECTORY, P_DESCRIPTOR_CAPACITY, P_DESCRIPTOR_TABLE, THISTLE_DESCRIPTOR_STRIDE,
+  FD_INODE, FD_KIND, FD_FLAGS, FD_IDENTITY, FD_OFFSET, FD_CURSOR, THISTLE_FD_EMPTY, THISTLE_FD_READ, THISTLE_FD_WRITE, THISTLE_FD_APPEND, THISTLE_FD_CLOEXEC, THISTLE_FD_FILE, THISTLE_FD_DIRECTORY, P_DESCRIPTOR_CAPACITY, P_DESCRIPTOR_TABLE, THISTLE_DESCRIPTOR_STRIDE,
   C_PROCESS_TABLE_BASE,
   C_VFS_DATA_BASE,
   C_VFS_DATA_END,
@@ -126,6 +126,21 @@ export const installDescriptor = (memory: ThistleMemory, state: Ptr, kind: U32, 
   storeU32(memory, state + FD_KIND, kind);
   storeU32(memory, state + FD_FLAGS, flags);
   storeU32(memory, state + FD_INODE, inode);
+  return 0;
+};
+
+/** Duplicate a live slot without pathname lookup or a second permission check. */
+export const copyDescriptor = (memory: ThistleMemory, source: Ptr, destination: Ptr, cloexec: boolean): I32 => {
+  const kind = loadU32(memory, source + FD_KIND);
+  if (kind === THISTLE_FD_EMPTY) return -9;
+  if (source === destination) return 0;
+  const flags = loadU32(memory, source + FD_FLAGS);
+  const inode = loadU32(memory, source + FD_INODE);
+  const result = installDescriptor(memory, destination, kind,
+    cloexec ? flags | THISTLE_FD_CLOEXEC : flags & ~THISTLE_FD_CLOEXEC, inode);
+  if (result !== 0) return result;
+  storeU64(memory, destination + FD_OFFSET, loadU64(memory, source + FD_OFFSET));
+  storeU32(memory, destination + FD_CURSOR, loadU32(memory, source + FD_CURSOR));
   return 0;
 };
 

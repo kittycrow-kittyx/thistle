@@ -3,7 +3,7 @@ import { HostBacking } from "./backing.js";
 import { readDevice, writeDevice } from "./devices.js";
 import { C_CREDENTIAL_LOCK, FD_FLAGS, FD_IDENTITY, FD_INODE, FD_KIND, FD_OFFSET, P_DESCRIPTOR_CAPACITY, THISTLE_FD_EMPTY, THISTLE_FD_HOST } from "../native/abi.js";
 import { loadU32, loadU64, storeU32, storeU64 } from "../native/memory.js";
-import { descriptorAt, freeDescriptor, installDescriptor, releaseDescriptor, thistleVfsIdentity, thistleVfsOpenInode, thistleVfsReadDescriptor, thistleVfsSeekDescriptor, thistleVfsWriteDescriptor, thistleVfsOpenPath } from "../native/vfs-api.js";
+import { descriptorAt, freeDescriptor, installDescriptor, copyDescriptor, releaseDescriptor, thistleVfsIdentity, thistleVfsOpenInode, thistleVfsReadDescriptor, thistleVfsSeekDescriptor, thistleVfsWriteDescriptor, thistleVfsOpenPath } from "../native/vfs-api.js";
 import { checkNative, withVfsLock, withNativeLock, withImage } from "./native-access.js";
 import type { HostProcess } from "./process.js";
 import type { HostInode } from "./inode.js";
@@ -97,6 +97,19 @@ export class HostDescriptor {
         checkNative(number);
         return new HostDescriptor(process, number, loadU32(memory, descriptorAt(memory, record, number) + FD_IDENTITY));
       }))));
+  }
+
+  /** Copy an open slot into another live process, retaining its canonical inode reference. */
+  copyTo(process: HostProcess, number: number, cloexec: boolean): HostDescriptor {
+    const memory = this.process.memory;
+    return this.process.withDescriptorPair(process, (from, to) => withVfsLock(memory, () => {
+      const source = slot(this.process, from, this.number);
+      const destination = slot(process, to, number);
+      if (loadU32(memory, source + FD_KIND) === THISTLE_FD_EMPTY ||
+          loadU32(memory, source + FD_IDENTITY) !== this.identity) bad("EBADF", "descriptor incarnation expired");
+      checkNative(copyDescriptor(memory, source, destination, cloexec));
+      return new HostDescriptor(process, number, loadU32(memory, destination + FD_IDENTITY));
+    }));
   }
 
   private access<T>(operation: (state: number) => T): T {

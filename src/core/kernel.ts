@@ -6,8 +6,8 @@ import type { In, Out } from "../io/stream.js";
 import { Reg, Vfs } from "../fs/vfs.js";
 import { credGid, credUid, fullCred } from "../fs/vfs.js";
 import type { Cred, ProcCred } from "../fs/vfs.js";
-import { ExecReplace, Fd, Proc } from "./proc.js";
-import type { Io, Sig } from "./proc.js";
+import { ExecReplace, Proc } from "./proc.js";
+import type { Fd, Io, Sig } from "./proc.js";
 import { Sched } from "./sched.js";
 import { accountIdentity } from "./host-options.js";
 import type { HostAccount, KernelOptions } from "./host-options.js";
@@ -230,10 +230,7 @@ export class Kern {
     const p = new Proc({ pgid: opt.pgid ?? pid, cmd: path, argv: [name, ...argv], cwd: opt.cwd ?? par.cwd, env: new Map(opt.env ?? par.env), io }, this.canonical.create(pid, par.pid, cred));
     if (opt.fds) {
       p.fds.clear(); p.allHeld = true;
-      for (const [n, f] of opt.fds) {
-        f.hold();
-        const q = new Fd(f.input, f.output, f.path, { rd: f.rd, wr: f.wr, add: f.add, clo: f.clo }); q.pos = f.pos; p.fds.set(n, q);
-      }
+      for (const [n, f] of opt.fds) p.fds.inherit(n, f);
     }
     p.mask = par.mask;
     this.procs.set(pid, p);
@@ -391,12 +388,7 @@ export class Kern {
     const f = p.fds.get(old) ?? bad("EBADF", String(old));
     const n = nu ?? this.fd(p);
     if (n === old) return n;
-    const q = p.fds.get(n) ?? null;
-    const copy = new Fd(f.input, f.output, f.path, { rd: f.rd, wr: f.wr, add: f.add, clo: false });
-    copy.pos = f.pos;
-    p.fds.set(n, copy);
-    f.hold();
-    if (q !== null) q.release();
+    p.fds.inherit(n, f, false);
     return n;
   }
 }

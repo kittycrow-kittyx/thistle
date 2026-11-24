@@ -60,11 +60,25 @@ export class HostProcess {
     });
   }
 
+  private recordLocked(): number {
+    const record = thistleProcessRecord(this.memory, this.hart);
+    if (record === 0xffffffff || loadU32(this.memory, record + P_PID) !== this.pid) bad("ESRCH", "canonical process view expired");
+    return record;
+  }
+
   private withRecord<T>(operation: (record: number) => T): T {
-    return withNativeLock(this.memory, C_PROCESS_LOCK, () => {
-      const record = thistleProcessRecord(this.memory, this.hart);
-      if (record === 0xffffffff || loadU32(this.memory, record + P_PID) !== this.pid) bad("ESRCH", "canonical process view expired");
-      return operation(record);
+    return withNativeLock(this.memory, C_PROCESS_LOCK, () => operation(this.recordLocked()));
+  }
+
+  /** Hold both live process descriptor tables for a synchronous inheritance operation. */
+  withDescriptorPair<T>(other: HostProcess, operation: (source: number, destination: number) => T): T {
+    if (other.memory !== this.memory) bad("EXDEV", "descriptor process instance mismatch");
+    return this.withRecord(source => {
+      const destination = other.recordLocked();
+      return withNativeLock(this.memory, source + P_LOCK, () => {
+        if (source === destination) return operation(source, destination);
+        return withNativeLock(this.memory, destination + P_LOCK, () => operation(source, destination));
+      });
     });
   }
 
