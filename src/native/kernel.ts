@@ -202,7 +202,6 @@ import {
   THISTLE_MAP_BACKING_HOST_FILE,
   THISTLE_MAP_CAPACITY,
   THISTLE_MAP_STRIDE,
-  FD_CURSOR,
   FD_FLAGS,
   FD_INODE,
   FD_KIND,
@@ -292,7 +291,7 @@ import {
   unsignedWordToFloat,
 } from "./word.js";
 import {
-  descriptorAt, releaseDescriptor,
+  descriptorAt, releaseDescriptor, freeDescriptor, installDescriptor,
   thistleVfsAccess,
   thistleVfsFileSize,
   thistleVfsKind,
@@ -565,12 +564,9 @@ export const thistleProcessInit = (
   atomicStoreI32(memory, proc + P_UMASK, 0o022);
   atomicStoreI32(memory, proc + P_DESCRIPTOR_TABLE, wordToI32(word(descriptorTable)));
   atomicStoreI32(memory, proc + P_DESCRIPTOR_CAPACITY, wordToI32(word(descriptorCapacity)));
-  storeU32(memory, descriptorAt(memory, proc, 0) + FD_KIND, THISTLE_FD_HOST);
-  storeU32(memory, descriptorAt(memory, proc, 0) + FD_FLAGS, THISTLE_FD_READ);
-  storeU32(memory, descriptorAt(memory, proc, 1) + FD_KIND, THISTLE_FD_HOST);
-  storeU32(memory, descriptorAt(memory, proc, 1) + FD_FLAGS, THISTLE_FD_WRITE);
-  storeU32(memory, descriptorAt(memory, proc, 2) + FD_KIND, THISTLE_FD_HOST);
-  storeU32(memory, descriptorAt(memory, proc, 2) + FD_FLAGS, THISTLE_FD_WRITE);
+  installDescriptor(memory, descriptorAt(memory, proc, 0), THISTLE_FD_HOST, THISTLE_FD_READ, 0);
+  installDescriptor(memory, descriptorAt(memory, proc, 1), THISTLE_FD_HOST, THISTLE_FD_WRITE, 0);
+  installDescriptor(memory, descriptorAt(memory, proc, 2), THISTLE_FD_HOST, THISTLE_FD_WRITE, 0);
   atomicStoreI32(memory, proc + P_STATE, THISTLE_PROCESS_RUNNABLE);
   bindProcess(memory, hart, slot);
   storeU32(memory, THISTLE_CONTROL_BASE + C_PROCESS_COUNT, loadU32(memory, THISTLE_CONTROL_BASE + C_PROCESS_COUNT) + 1);
@@ -656,22 +652,12 @@ const openPathLocked = (
   if (!thistleVfsAccess(memory, proc, inode, kind === THISTLE_VFS_KIND_DIRECTORY ? 5 : 4)) {
     return -13;
   }
-  const capacity = loadU32(memory, proc + P_DESCRIPTOR_CAPACITY);
-  let descriptor: U32 = 3;
-  while (descriptor < capacity && loadU32(memory, descriptorAt(memory, proc, descriptor) + FD_KIND) !== THISTLE_FD_EMPTY) {
-    descriptor += 1;
-  }
-  if (descriptor === capacity) {
-    return -24;
-  }
-  const state = descriptorAt(memory, proc, descriptor);
-  fill(memory, state, THISTLE_DESCRIPTOR_STRIDE, 0);
-  storeU32(memory, state + FD_KIND, kind === THISTLE_VFS_KIND_DIRECTORY ? THISTLE_FD_DIRECTORY : THISTLE_FD_FILE);
-  storeU32(memory, state + FD_FLAGS, THISTLE_FD_READ | ((flags & OPEN_CLOEXEC) !== 0 ? THISTLE_FD_CLOEXEC : 0));
-  storeU32(memory, state + FD_INODE, inode);
-  storeU64(memory, state + FD_OFFSET, 0n);
-  storeU32(memory, state + FD_CURSOR, 0);
-  return wordToI32(word(descriptor));
+  const descriptor = freeDescriptor(memory, proc, 3);
+  if (descriptor < 0) return descriptor;
+  const state = descriptorAt(memory, proc, wordToU32(word(descriptor)));
+  const installed = installDescriptor(memory, state, kind === THISTLE_VFS_KIND_DIRECTORY ? THISTLE_FD_DIRECTORY : THISTLE_FD_FILE,
+    THISTLE_FD_READ | ((flags & OPEN_CLOEXEC) !== 0 ? THISTLE_FD_CLOEXEC : 0), inode);
+  return installed < 0 ? installed : descriptor;
 };
 
 export const thistleReadDescriptor = (

@@ -2,7 +2,7 @@ import { readGroup } from "./credentials.js";
 import { inputContains } from "./arena.js";
 import {
   C_PROCESS_CAPACITY,
-  FD_INODE, FD_KIND, P_DESCRIPTOR_CAPACITY, P_DESCRIPTOR_TABLE, THISTLE_DESCRIPTOR_STRIDE,
+  FD_INODE, FD_KIND, FD_FLAGS, FD_IDENTITY, THISTLE_FD_EMPTY, P_DESCRIPTOR_CAPACITY, P_DESCRIPTOR_TABLE, THISTLE_DESCRIPTOR_STRIDE,
   C_PROCESS_TABLE_BASE,
   C_VFS_DATA_BASE,
   C_VFS_DATA_END,
@@ -99,9 +99,34 @@ export const descriptorAt = (memory: ThistleMemory, proc: Ptr, descriptor: U32):
 
 /** Caller owns descriptor and VFS locks; release an inode after clearing its reference. */
 export const releaseDescriptor = (memory: ThistleMemory, state: Ptr): void => {
-  const inode = loadU32(memory, state + FD_INODE);
+  const inode = loadU32(memory, state + FD_INODE), identity = loadU32(memory, state + FD_IDENTITY);
   fill(memory, state, THISTLE_DESCRIPTOR_STRIDE, 0);
+  storeU32(memory, state + FD_IDENTITY, identity);
   thistleVfsRelease(memory, inode);
+};
+
+/** Return the first reusable slot at or above minimum, under the descriptor lock. */
+export const freeDescriptor = (memory: ThistleMemory, proc: Ptr, minimum: U32): I32 => {
+  const capacity = loadU32(memory, proc + P_DESCRIPTOR_CAPACITY);
+  let descriptor = minimum;
+  while (descriptor < capacity) {
+    const state = descriptorAt(memory, proc, descriptor);
+    if (loadU32(memory, state + FD_KIND) === THISTLE_FD_EMPTY && loadU32(memory, state + FD_IDENTITY) !== 0xffffffff) return wordToI32(word(descriptor));
+    descriptor += 1;
+  }
+  return -24;
+};
+
+/** Install a descriptor incarnation. Caller holds descriptor/VFS locks or owns a new process. */
+export const installDescriptor = (memory: ThistleMemory, state: Ptr, kind: U32, flags: U32, inode: U32): I32 => {
+  const previous = loadU32(memory, state + FD_IDENTITY);
+  if (previous === 0xffffffff) return -23;
+  if (loadU32(memory, state + FD_KIND) !== THISTLE_FD_EMPTY) releaseDescriptor(memory, state);
+  storeU32(memory, state + FD_IDENTITY, previous + 1);
+  storeU32(memory, state + FD_KIND, kind);
+  storeU32(memory, state + FD_FLAGS, flags);
+  storeU32(memory, state + FD_INODE, inode);
+  return 0;
 };
 
 const align4 = (value: U32): U32 => (value + 3) & -4;

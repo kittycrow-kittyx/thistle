@@ -40,3 +40,5 @@ Path resolution checks that the current component is a searchable directory befo
 `descriptorAt` locates a validated descriptor slot in a native process. `releaseDescriptor` clears the slot before checking final inode release. The exported close ABI, mounted RV64 close syscall and process reaper share this operation under descriptor and VFS locks.
 
 `thistleVfsChdir` resolves from the live cwd inode, checks directory search access and updates the process record. `thistleVfsCwdPath` returns a NUL-terminated path in a reserved image, including the terminator in its length. `thistleVfsCwdHeld` detects live cwd references; directory removal or replacement returns `EBUSY` while referenced.
+
+`freeDescriptor` locates a reusable slot. `installDescriptor` establishes its next incarnation and initial state; both native file open and standard host descriptor initialization use it. `releaseDescriptor` retains the incarnation counter while clearing live state.

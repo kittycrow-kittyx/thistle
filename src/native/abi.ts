@@ -167,10 +167,11 @@ export const P_SIGNAL_LAST: U32 = 332;
 export const P_SIGNAL_MASK: U32 = 336;
 
 export const THISTLE_DESCRIPTOR_STRIDE: U32 = 32;
-export const THISTLE_DESCRIPTOR_CAPACITY: U32 = 64;
+export const THISTLE_DESCRIPTOR_CAPACITY: U32 = 256;
 export const FD_KIND: U32 = 0;
 export const FD_FLAGS: U32 = 4;
 export const FD_INODE: U32 = 8;
+export const FD_IDENTITY: U32 = 12;
 export const FD_OFFSET: U32 = 16;
 export const FD_CURSOR: U32 = 24;
 export const THISTLE_FD_EMPTY: U32 = 0;

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { loadU32, storeU32 } from "../native/memory.js";
 import { thistleCloseDescriptor, thistleImageRelease, thistleImageReserve, thistleOpenPath, thistleReadDescriptor } from "../native/kernel.js";
-import { C_PROCESS_TABLE_BASE, C_VFS_DIRTY, C_VFS_GENERATION, P_FSUID, P_FSGID, P_DESCRIPTOR_TABLE, THISTLE_DESCRIPTOR_STRIDE, FD_KIND, THISTLE_VFS_KIND_DIRECTORY, THISTLE_VFS_KIND_FILE } from "../native/abi.js";
+import { C_PROCESS_TABLE_BASE, C_VFS_DIRTY, C_VFS_GENERATION, P_FSUID, P_FSGID, P_DESCRIPTOR_TABLE, THISTLE_DESCRIPTOR_STRIDE, FD_KIND, FD_IDENTITY, THISTLE_VFS_KIND_DIRECTORY, THISTLE_VFS_KIND_FILE } from "../native/abi.js";
 import { thistleVfsFileSize, thistleVfsKind, thistleVfsLookup, thistleVfsNlink, thistleVfsReadData } from "../native/vfs.js";
 import { thistleVfsCreate, thistleVfsWrite, thistleVfsLink, thistleVfsUnlink, thistleVfsCanMove, thistleVfsRename, thistleVfsChmod, thistleVfsChown, thistleVfsUtime } from "../native/vfs-edit.js";
 
@@ -114,7 +114,15 @@ test("host descriptors retain unlinked inode storage until close", () => {
   storeU32(memory, descriptor + FD_KIND, 1);
   assert.equal(thistleVfsUnlink(memory, proc, 1, input, 1, false, 2n), 0);
   assert.equal(thistleVfsKind(memory, inode), THISTLE_VFS_KIND_FILE);
+  const identity = loadU32(memory, descriptor + FD_IDENTITY);
+  assert.ok(identity > 0);
   assert.equal(thistleCloseDescriptor(memory, 0, fd), 0);
+  assert.equal(loadU32(memory, descriptor + FD_IDENTITY), identity);
   assert.equal(thistleVfsKind(memory, inode), 0);
+  const next = thistleVfsCreate(memory, proc, 1, input, 1, THISTLE_VFS_KIND_FILE, 0o644, 3n);
+  assert.equal(next, inode);
+  assert.equal(thistleOpenPath(memory, 0, 1, input, 1, 0), fd);
+  assert.equal(loadU32(memory, descriptor + FD_IDENTITY), identity + 1);
+  assert.equal(thistleCloseDescriptor(memory, 0, fd), 0);
   assert.equal(thistleImageRelease(memory, input, 1), 0);
 });

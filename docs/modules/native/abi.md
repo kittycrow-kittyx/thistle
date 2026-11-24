@@ -172,6 +172,7 @@ Offsets within one descriptor record.
 - `FD_KIND`
 - `FD_FLAGS`
 - `FD_INODE`
+- `FD_IDENTITY`
 - `FD_OFFSET`
 - `FD_CURSOR`
 
@@ -376,3 +377,5 @@ Candidate ABI 11 uses an 88-byte inode stride. `V_IDENTITY` at byte 80 identifie
 `THISTLE_VFS_BUSY` is mount status 6. It reports retained file descriptors or a process working directory below the current root.
 
 Default VFS: 8192 inode slots, 16384 directory-entry slots. Reference mikuOS root: 4668 inodes, maximum ID 4679. `thistleKernelInitWithVfs` accepts explicit capacities.
+
+Each process has 256 descriptor slots of 32 bytes. The identity at offset 12 changes on allocation and survives close until the slot is reused. Exhausted identities are not recycled within a process lifetime.
