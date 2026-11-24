@@ -156,6 +156,7 @@ export const P_STACK_POINTER: U32 = 264;
 export const P_MAP_TABLE: U32 = 272;
 export const P_MAP_COUNT: U32 = 276;
 export const P_MAP_CAPACITY: U32 = 280;
+export const P_SHARED_FILE_MAPS: U32 = 284;
 export const P_BRK_BASE: U32 = 288;
 export const P_BRK: U32 = 296;
 export const P_MAP_NEXT: U32 = 304;

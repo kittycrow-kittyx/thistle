@@ -386,3 +386,5 @@ Each process has 256 descriptor slots of 32 bytes. The identity at offset 12 cha
 `M_INODE` retains the mapped inode independently of the original descriptor. `M_FILE_RIGHTS` records the open read/write rights. Both occupy reserved words; the map stride is unchanged.
 
 `PAGE_DIRTY_FRAME` is the auxiliary bitmap-frame pointer in a sparse guest page entry. Zero means no bitmap has been allocated.
+
+`P_SHARED_FILE_MAPS` records whether any writable shared file mapping is present. It is refreshed by mapping mutation and cleared on image reset.

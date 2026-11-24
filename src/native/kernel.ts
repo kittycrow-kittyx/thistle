@@ -171,6 +171,7 @@ import {
   P_DESCRIPTOR_CAPACITY,
   P_LOCK, P_LEADER_HART,
   P_MAP_CAPACITY,
+  P_SHARED_FILE_MAPS,
   P_MAP_COUNT,
   P_MAP_NEXT,
   P_MAP_TABLE,
@@ -556,6 +557,7 @@ export const thistleProcessInit = (
   atomicStoreI32(memory, proc + P_SEGMENT_COUNT, 0);
   atomicStoreI32(memory, proc + P_MAP_TABLE, wordToI32(word(mapTable)));
   atomicStoreI32(memory, proc + P_MAP_COUNT, 0);
+  atomicStoreI32(memory, proc + P_SHARED_FILE_MAPS, 0);
   atomicStoreI32(memory, proc + P_MAP_CAPACITY, wordToI32(word(mapCapacity)));
   atomicStoreU64(memory, proc + P_MAP_NEXT, 0x4000000000n);
   atomicStoreI32(memory, proc + P_CWD_INODE, wordToI32(word(thistleVfsRoot(memory))));
@@ -1049,6 +1051,7 @@ const markMappedSpan = (memory: ThistleMemory, hart: U32, start: U64, end: U64):
 const markGuestWrite = (memory: ThistleMemory, hart: U32, address: U64, size: U32): boolean => {
   const proc = processForHart(memory, hart);
   if (proc === INVALID_POINTER) return false;
+  if (atomicLoadI32(memory, proc + P_SHARED_FILE_MAPS) === 0) return true;
   const end = address + ux(word(size));
   const count = loadU32(memory, proc + P_MAP_COUNT);
   let index: U32 = 0;
@@ -1068,7 +1071,7 @@ const markGuestWrite = (memory: ThistleMemory, hart: U32, address: U64, size: U3
 export const thistleMarkGuestWrite = (memory: ThistleMemory, hart: U32, address: U64, size: U32): I32 => {
   if (!validKernel(memory) || !validHart(memory, hart) || !guestRange(memory, hart, address, size)) return -14;
   if (!acquire(memory, hartAt(hart) + H_LOCK)) return -11;
-  const result = markGuestWrite(memory, hart, address, size) ? 0 : -12;
+  const result: I32 = markGuestWrite(memory, hart, address, size) ? 0 : -12;
   release(memory, hartAt(hart) + H_LOCK);
   return result;
 };
@@ -1279,6 +1282,7 @@ const mapDescriptorLocked = (
   storeU32(memory, mapping + M_INODE, loadU32(memory, state + FD_INODE));
   storeU32(memory, mapping + M_FILE_RIGHTS, rights);
   storeU64(memory, mapping + M_FILE_OFFSET, offset);
+  if ((flags & 3n) === 1n && (rights & THISTLE_FD_WRITE) !== 0) atomicStoreI32(memory, proc + P_SHARED_FILE_MAPS, 1);
   return result;
 };
 
@@ -1367,6 +1371,20 @@ const eraseMapEntry = (memory: ThistleMemory, proc: Ptr, index: U32, count: U32)
   return count - 1;
 };
 
+const refreshSharedFileMaps = (memory: ThistleMemory, proc: Ptr, count: U32): void => {
+  let index: U32 = 0;
+  while (index < count) {
+    const mapping = mapAt(memory, proc, index);
+    if (loadU32(memory, mapping + M_INODE) !== 0 && (loadU32(memory, mapping + M_FLAGS) & 3) === 1 &&
+        (loadU32(memory, mapping + M_FILE_RIGHTS) & THISTLE_FD_WRITE) !== 0) {
+      atomicStoreI32(memory, proc + P_SHARED_FILE_MAPS, 1);
+      return;
+    }
+    index += 1;
+  }
+  atomicStoreI32(memory, proc + P_SHARED_FILE_MAPS, 0);
+};
+
 const applyUnmap = (memory: ThistleMemory, proc: Ptr, address: U64, end: U64): void => {
   let count = loadU32(memory, proc + P_MAP_COUNT);
   let index: U32 = 0;
@@ -1405,6 +1423,7 @@ const applyUnmap = (memory: ThistleMemory, proc: Ptr, address: U64, end: U64): v
     index += 1;
   }
   atomicStoreI32(memory, proc + P_MAP_COUNT, wordToI32(word(count)));
+  refreshSharedFileMaps(memory, proc, count);
 };
 
 const anonymousUnmap = (memory: ThistleMemory, proc: Ptr, address: U64, length: U64): I64 => {
@@ -1773,6 +1792,7 @@ export const thistleImageBegin = (
   atomicStoreI32(memory, proc + P_PAGE_COUNT, 0);
   atomicStoreI32(memory, proc + P_SEGMENT_COUNT, 0);
   atomicStoreI32(memory, proc + P_MAP_COUNT, 0);
+  atomicStoreI32(memory, proc + P_SHARED_FILE_MAPS, 0);
   atomicStoreU64(memory, proc + P_MAP_NEXT, 0x4000000000n);
   atomicStoreU64(memory, proc + P_VIRTUAL_TOP, virtualTop);
   atomicStoreU64(memory, proc + P_IMAGE_FLOOR, 0n);
