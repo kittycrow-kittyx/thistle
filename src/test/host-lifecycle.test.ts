@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Kern } from "../core/kernel.js";
+import { createHostKernel } from "../core/host-kernel.js";
 import { Sys } from "../core/sys.js";
 import { FnApp } from "../apps/base.js";
 import { MemIn, MemOut } from "../io/stream.js";
@@ -8,7 +8,7 @@ import { thistleProcessSetHostState } from "../native/process-host.js";
 import { THISTLE_PROCESS_RUNNING, THISTLE_PROCESS_WAITING } from "../native/abi.js";
 
 test("host callback phases and ready snapshots read canonical process state", async () => {
-  const kernel = new Kern(), output = new MemOut();
+  const kernel = createHostKernel(), output = new MemOut();
   const parent = kernel.session({ sin: new MemIn(), sout: output, serr: output });
   const sys = new Sys(kernel, parent);
   const latch = {
@@ -60,7 +60,7 @@ test("host callback phases and ready snapshots read canonical process state", as
 });
 
 test("child membership follows native allocation without a hosted registration", () => {
-  const kernel = new Kern(), output = new MemOut();
+  const kernel = createHostKernel(), output = new MemOut();
   const parent = kernel.session({ sin: new MemIn(), sout: output, serr: output });
   const child = kernel.canonical.create(kernel.canonical.nextPid(), parent.pid, parent.cred);
   assert.ok(!kernel.procs.has(child.pid));
@@ -71,7 +71,7 @@ test("child membership follows native allocation without a hosted registration",
 });
 
 test("unblocked canonical signals reach the host abort capability", () => {
-  const kernel = new Kern(), output = new MemOut(), term = 1n << 14n;
+  const kernel = createHostKernel(), output = new MemOut(), term = 1n << 14n;
   const process = kernel.session({ sin: new MemIn(), sout: output, serr: output });
   assert.equal(process.setSignalMask(0, term), 0n);
   assert.equal(process.signal(15), false);

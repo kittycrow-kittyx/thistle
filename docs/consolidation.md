@@ -207,3 +207,7 @@ The exported close operation and mounted RV64 close syscall share descriptor tea
 Reaping shares descriptor teardown with both close entry points and waits for the process descriptor lock. Unmapping separates range validation, split-capacity checks and mutation; partial-range fixtures cover preserved bytes and file offsets.
 
 Canonical directory changes and path reconstruction use dentries and process cwd inode references. Removing or replacing a referenced directory returns EBUSY. Renaming preserves its inode. The hosted `Proc.cwd` field remains a migration target.
+
+## Explicit host capability boundary
+
+`Kern` no longer imports host defaults. Its constructor accepts explicit limits, network and WASI capabilities. RAM discovery and environment overrides moved from `core/cap.ts` to `host/limits.ts`; the `createHostKernel` entry owns host defaults. mikuOS will obtain these services at its host boundary during repinning. The original native kernel graph and the supported host capability implementations remain intact.

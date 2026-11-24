@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Kern } from "../core/kernel.js";
+import { createHostKernel } from "../core/host-kernel.js";
 import { Sys } from "../core/sys.js";
 import { FnApp } from "../apps/base.js";
 import { enc, MemOut, Pipe } from "../io/stream.js";
@@ -40,7 +40,7 @@ test("terminal cancellation preserves canonical EOF and the following input", as
 });
 
 test("a killed callback cannot consume the next process's shared input", async () => {
-  const kernel = new Kern(), input = new Pipe(), output = new MemOut();
+  const kernel = createHostKernel(), input = new Pipe(), output = new MemOut();
   const parent = kernel.session({ sin: input, sout: output, serr: output }), sys = new Sys(kernel, parent);
   const latch = { entered: (): void => { throw new Error("entry latch not initialised"); } };
   let entered = new Promise<void>(resolve => { latch.entered = resolve; });
@@ -64,7 +64,7 @@ test("a killed callback cannot consume the next process's shared input", async (
 });
 
 test("a blocked signal cannot end a sleeping callback", async () => {
-  const kernel = new Kern(), input = new Pipe(), output = new MemOut();
+  const kernel = createHostKernel(), input = new Pipe(), output = new MemOut();
   const parent = kernel.session({ sin: input, sout: output, serr: output }), sys = new Sys(kernel, parent);
   const latch = { entered: (): void => { throw new Error("entry latch not initialised"); } };
   const entered = new Promise<void>(resolve => { latch.entered = resolve; });

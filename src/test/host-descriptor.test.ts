@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Kern } from "../core/kernel.js";
+import { createHostKernel } from "../core/host-kernel.js";
 import { Sys } from "../core/sys.js";
 import { MemIn, MemOut } from "../io/stream.js";
 import { FD_FLAGS, FD_IDENTITY, FD_OFFSET, THISTLE_FD_CLOEXEC, THISTLE_FD_READ } from "../native/abi.js";
@@ -9,7 +9,7 @@ import { loadU32, loadU64, storeU64 } from "../native/memory.js";
 import { thistleDescriptorKind } from "../native/kernel.js";
 
 test("hosted file descriptor allocation and live metadata use canonical records", () => {
-  const kernel = new Kern(), output = new MemOut();
+  const kernel = createHostKernel(), output = new MemOut();
   const process = kernel.session({ sin: new MemIn(), sout: output, serr: output });
   const sys = new Sys(kernel, process), memory = process.native.memory;
   sys.mkfile("/file", "abcdef");

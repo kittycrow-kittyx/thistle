@@ -9,7 +9,7 @@ import type { Cred, ProcCred } from "../fs/vfs.js";
 import { ExecReplace, Fd, Proc } from "./proc.js";
 import type { Io, Sig } from "./proc.js";
 import { Sched } from "./sched.js";
-import { accountIdentity, defaultKernelOptions } from "./host-options.js";
+import { accountIdentity } from "./host-options.js";
 import type { HostAccount, KernelOptions } from "./host-options.js";
 import { executeImage, validateExecutable } from "./guest.js";
 export type { KernelOptions } from "./host-options.js";
@@ -105,7 +105,7 @@ export class Kern {
   readonly setId: boolean;
   readonly wasiGuest: KernelOptions["wasiGuest"];
 
-  constructor(options: KernelOptions = defaultKernelOptions()) {
+  constructor(options: KernelOptions) {
     const { net, lim, config, setId, wasiGuest } = options;
     this.net = net; this.lim = lim; this.config = config; this.setId = setId; this.wasiGuest = wasiGuest;
     this.fs = new Vfs(lim.fs);

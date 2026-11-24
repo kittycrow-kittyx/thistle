@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Kern } from "../core/kernel.js";
+import { createHostKernel } from "../core/host-kernel.js";
+import type { Kern } from "../core/kernel.js";
 import { emptyStart } from "../core/kernel.js";
 import { Sys } from "../core/sys.js";
-import { defaultKernelOptions } from "../core/host-options.js";
 import { MemIn, MemOut, FnOut, Pipe, enc } from "../io/stream.js";
 import { Exe, codec } from "../../thistle-asm/fmt.js";
 import { thistleProcessCount, thistleProcessIdentity, thistleHartStatus } from "../native/kernel.js";
@@ -22,7 +22,7 @@ const executable = (words: number[], data = new Uint8Array(), dataFlags = "r"): 
 };
 
 test("hosted Kern executes RV64 through the canonical native core", async () => {
-  const kernel = new Kern(defaultKernelOptions());
+  const kernel = createHostKernel();
   const output = new MemOut(), error = new MemOut();
   const process = kernel.session({ sin: new MemIn(), sout: output, serr: error });
   const sys = new Sys(kernel, process);
@@ -40,7 +40,7 @@ test("hosted Kern executes RV64 through the canonical native core", async () => 
 });
 
 test("host and guest credentials share one process record across repeated execution", async () => {
-  const kernel = new Kern(defaultKernelOptions()), output = new MemOut();
+  const kernel = createHostKernel(), output = new MemOut();
   const parent = kernel.session({ sin: new MemIn(), sout: output, serr: output });
   const sys = new Sys(kernel, parent), memory = kernel.canonical.memory;
   const initial = loadU32(memory, C_PHYSICAL_NEXT);
@@ -63,7 +63,7 @@ test("host and guest credentials share one process record across repeated execut
 });
 
 test("hosted identity operations reuse native permission policy", () => {
-  const kernel = new Kern(defaultKernelOptions()), output = new MemOut();
+  const kernel = createHostKernel(), output = new MemOut();
   const process = kernel.session({ sin: new MemIn(), sout: output, serr: output });
   const sys = new Sys(kernel, process), memory = kernel.canonical.memory;
   assert.equal(thistleProcessIdentity(memory, process.native.hart, 0, 1000, 1000, 0), 0n);
@@ -85,7 +85,7 @@ test("hosted identity operations reuse native permission policy", () => {
 });
 
 test("concurrent guests retain independent pages in one kernel instance", async () => {
-  const kernel = new Kern(defaultKernelOptions()), errors = new MemOut();
+  const kernel = createHostKernel(), errors = new MemOut();
   const parent = kernel.session({ sin: new MemIn(), sout: errors, serr: errors });
   const sys = new Sys(kernel, parent), firstOutput = new MemOut(), secondOutput = new MemOut();
   const words = [0x00100513, 0x000205b7, 0x00100613, 0x04000893, 0x73,
@@ -105,7 +105,7 @@ test("concurrent guests retain independent pages in one kernel instance", async 
 });
 
 test("exec replaces an image in the existing canonical process", async () => {
-  const kernel = new Kern(defaultKernelOptions()), output = new MemOut();
+  const kernel = createHostKernel(), output = new MemOut();
   const parent = kernel.session({ sin: new MemIn(), sout: output, serr: output });
   const sys = new Sys(kernel, parent), memory = kernel.canonical.memory;
   const initial = loadU32(memory, C_PHYSICAL_NEXT);
@@ -124,7 +124,7 @@ test("exec replaces an image in the existing canonical process", async () => {
 });
 
 test("delayed I/O from a killed guest cannot resume a reused hart", async () => {
-  const kernel = new Kern(), errors = new MemOut();
+  const kernel = createHostKernel(), errors = new MemOut();
   const parent = kernel.session({ sin: new MemIn(), sout: errors, serr: errors });
   const sys = new Sys(kernel, parent), memory = kernel.canonical.memory;
   const latch = {
@@ -162,7 +162,7 @@ test("delayed I/O from a killed guest cannot resume a reused hart", async () => 
 
 
 test("killing a blocked RV64 reader preserves inherited input", async () => {
-  const kernel = new Kern(), input = new Pipe(), errors = new MemOut();
+  const kernel = createHostKernel(), input = new Pipe(), errors = new MemOut();
   const parent = kernel.session({ sin: input, sout: errors, serr: errors }), sys = new Sys(kernel, parent);
   const memory = kernel.canonical.memory;
   sys.mkfile("/read.thx", executable([
