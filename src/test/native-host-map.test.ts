@@ -3,13 +3,13 @@ import { test } from "node:test";
 import { mountedKernel } from "./vfs-fixture.js";
 import { thistleImageBegin, thistleImageSegment, thistleImageFinish, thistleStackPrepare,
   thistleMapHostFile, thistleUnmapHostFile, thistleRemapHostFile,
-  thistleHartSetX, thistleGuestPage, thistleGuestAccess, thistleProcessMapCount } from "../native/kernel.js";
+  thistleHartSetX, thistleGuestPage, thistleGuestAccess, thistleProcessMapCount, thistleProcessRecord, thistleProcessMapAddress, thistleProcessMapEnd } from "../native/kernel.js";
 import { withImage } from "../host/native-access.js";
-import { H_LOCK } from "../native/abi.js";
+import { H_LOCK, P_MAP_CAPACITY, P_MAP_TABLE, THISTLE_MAP_STRIDE, M_FILE_OFFSET } from "../native/abi.js";
 import { hartAt } from "../native/state.js";
-import { storeU32 } from "../native/memory.js";
+import { storeU32, loadU32, loadU64 } from "../native/memory.js";
 
-test("host mappings reuse canonical resize policy and preserve moved bytes", () => {
+const mappingKernel = () => {
   const memory = mountedKernel();
   withImage(memory, 4, input => {
     storeU32(memory, input, 0x73);
@@ -18,6 +18,11 @@ test("host mappings reuse canonical resize policy and preserve moved bytes", () 
     assert.equal(thistleImageFinish(memory, 0, 4), 0);
   });
   assert.equal(thistleStackPrepare(memory, 0, 0xf000000n, 0xfffff00n), 0);
+  return memory;
+};
+
+test("host mappings reuse canonical resize policy and preserve moved bytes", () => {
+  const memory = mappingKernel();
   const original = thistleMapHostFile(memory, 0, 0x400000n, 4096n, 3n, 0x100022n);
   assert.equal(original, 0x400000n);
   const page = thistleGuestPage(memory, 0, original, true);
@@ -46,5 +51,38 @@ test("host mappings reuse canonical resize policy and preserve moved bytes", () 
   storeU32(memory, hartAt(0) + H_LOCK, 0);
   assert.equal(thistleUnmapHostFile(memory, 0, moved, 4096n), 0n);
   assert.equal(thistleUnmapHostFile(memory, 0, blocker, 4096n), 0n);
+  assert.equal(thistleProcessMapCount(memory, 0), 0);
+});
+
+
+test("partial unmaps preflight capacity and preserve surviving ranges and file offsets", () => {
+  const memory = mappingKernel(), proc = thistleProcessRecord(memory, 0), address = 0x400000n;
+  assert.equal(thistleMapHostFile(memory, 0, address, 24576n, 3n, 0x100022n), address);
+  const page = thistleGuestPage(memory, 0, address, true);
+  for (let index = 0; index < 6; index++) memory.bytes.fill(index + 1, page + index * 4096, page + (index + 1) * 4096);
+  const capacity = loadU32(memory, proc + P_MAP_CAPACITY);
+  storeU32(memory, proc + P_MAP_CAPACITY, 1);
+  assert.equal(thistleUnmapHostFile(memory, 0, address + 4096n, 4096n), -12n);
+  assert.equal(thistleProcessMapCount(memory, 0), 1);
+  assert.equal(memory.view.getUint8(page + 4096), 2);
+  assert.equal(thistleGuestAccess(memory, 0, 1, address + 4096n, 1, 1), 0);
+  storeU32(memory, proc + P_MAP_CAPACITY, capacity);
+  assert.equal(thistleUnmapHostFile(memory, 0, address + 4096n, 4096n), 0n);
+  assert.equal(thistleProcessMapCount(memory, 0), 2);
+  assert.equal(thistleProcessMapEnd(memory, 0, 0), address + 4096n);
+  assert.equal(thistleProcessMapAddress(memory, 0, 1), address + 8192n);
+  assert.equal(memory.view.getUint8(page + 4096), 0);
+  assert.equal(memory.view.getUint8(page), 1);
+  const right = loadU32(memory, proc + P_MAP_TABLE) + THISTLE_MAP_STRIDE;
+  assert.equal(loadU64(memory, right + M_FILE_OFFSET), 8192n);
+  assert.equal(thistleUnmapHostFile(memory, 0, address + 20480n, 4096n), 0n);
+  assert.equal(thistleProcessMapEnd(memory, 0, 1), address + 20480n);
+  assert.equal(thistleUnmapHostFile(memory, 0, address + 8192n, 4096n), 0n);
+  assert.equal(thistleProcessMapAddress(memory, 0, 1), address + 12288n);
+  assert.equal(loadU64(memory, right + M_FILE_OFFSET), 12288n);
+  assert.equal(memory.view.getUint8(page + 12288), 4);
+  assert.equal(thistleUnmapHostFile(memory, 0, address + 12288n, 8192n), 0n);
+  assert.equal(thistleProcessMapCount(memory, 0), 1);
+  assert.equal(thistleUnmapHostFile(memory, 0, address, 4096n), 0n);
   assert.equal(thistleProcessMapCount(memory, 0), 0);
 });

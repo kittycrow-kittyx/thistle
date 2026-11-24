@@ -292,8 +292,8 @@ import {
   unsignedWordToFloat,
 } from "./word.js";
 import {
+  descriptorAt, releaseDescriptor,
   thistleVfsAccess,
-  thistleVfsRelease,
   thistleVfsFileSize,
   thistleVfsKind,
   thistleVfsReadData,
@@ -379,8 +379,6 @@ const sharedProcessThread = (memory: ThistleMemory, hart: U32): boolean => {
   return proc !== INVALID_POINTER && loadU32(memory, proc + P_LEADER_HART) !== hart;
 };
 
-const descriptorAt = (memory: ThistleMemory, proc: Ptr, descriptor: U32): Ptr =>
-  loadU32(memory, proc + P_DESCRIPTOR_TABLE) + descriptor * THISTLE_DESCRIPTOR_STRIDE;
 const workerAt = (worker: U32): Ptr => C_WORKER_BASE + worker * THISTLE_WORKER_STRIDE;
 
 
@@ -753,13 +751,6 @@ export const thistleSeekDescriptor = (
   return next;
 };
 
-// Shared by the exported host ABI and the mounted guest close syscall under descriptor/VFS locks.
-const closeDescriptorLocked = (memory: ThistleMemory, state: Ptr): void => {
-  const inode = loadU32(memory, state + FD_INODE);
-  fill(memory, state, THISTLE_DESCRIPTOR_STRIDE, 0);
-  thistleVfsRelease(memory, inode);
-};
-
 export const thistleCloseDescriptor = (memory: ThistleMemory, hart: U32, descriptor: U32): I32 => {
   if (!thistleKernelValid(memory) || !validHart(memory, hart)) return -22;
   const proc = processForHart(memory, hart);
@@ -775,7 +766,7 @@ export const thistleCloseDescriptor = (memory: ThistleMemory, hart: U32, descrip
     release(memory, proc + P_LOCK);
     return -11;
   }
-  closeDescriptorLocked(memory, state);
+  releaseDescriptor(memory, state);
   release(memory, lock);
   release(memory, proc + P_LOCK);
   return 0;
@@ -1303,29 +1294,35 @@ const overlapsHostFile = (memory: ThistleMemory, proc: Ptr, address: U64, length
   return false;
 };
 
-const anonymousUnmap = (memory: ThistleMemory, proc: Ptr, address: U64, length: U64): I64 => {
-  const top = atomicLoadU64(memory, proc + P_VIRTUAL_TOP);
-  if (length === 0n || (address & (MAP_PAGE - 1n)) !== 0n || address >= top || length > top - address) return -22n;
-  const size = length + MAP_PAGE - 1n & -MAP_PAGE;
-  if (size === 0n || size > top - address) return -22n;
-  const end = address + size;
-  let count = loadU32(memory, proc + P_MAP_COUNT);
-  const capacity = loadU32(memory, proc + P_MAP_CAPACITY);
+const unmapSplitCount = (memory: ThistleMemory, proc: Ptr, address: U64, end: U64): I32 => {
+  const count = loadU32(memory, proc + P_MAP_COUNT);
   let index: U32 = 0;
-  let splits: U32 = 0;
+  let splits: I32 = 0;
   let hit = false;
   while (index < count) {
     const mapping = mapAt(memory, proc, index);
-    const start = loadU64(memory, mapping + M_ADDRESS);
-    const stop = loadU64(memory, mapping + M_END);
+    const start = loadU64(memory, mapping + M_ADDRESS), stop = loadU64(memory, mapping + M_END);
     const overlaps = address < stop && end > start;
     if (overlaps) hit = true;
     if (overlaps && address > start && end < stop) splits += 1;
     index += 1;
   }
-  if (!hit) return MAP_NOT_OWNED;
-  if (splits > capacity - count) return -12n;
-  index = 0;
+  return hit ? splits : -1;
+};
+
+const eraseMapEntry = (memory: ThistleMemory, proc: Ptr, index: U32, count: U32): U32 => {
+  let move = index;
+  while (move + 1 < count) {
+    copyMap(memory, mapAt(memory, proc, move), mapAt(memory, proc, move + 1));
+    move += 1;
+  }
+  fill(memory, mapAt(memory, proc, count - 1), THISTLE_MAP_STRIDE, 0);
+  return count - 1;
+};
+
+const applyUnmap = (memory: ThistleMemory, proc: Ptr, address: U64, end: U64): void => {
+  let count = loadU32(memory, proc + P_MAP_COUNT);
+  let index: U32 = 0;
   while (index < count) {
     const mapping = mapAt(memory, proc, index);
     const start = loadU64(memory, mapping + M_ADDRESS);
@@ -1338,13 +1335,7 @@ const anonymousUnmap = (memory: ThistleMemory, proc: Ptr, address: U64, length: 
     const high = end < stop ? end : stop;
     clearMappedRange(memory, proc, low, high);
     if (address <= start && end >= stop) {
-      let move = index;
-      while (move + 1 < count) {
-        copyMap(memory, mapAt(memory, proc, move), mapAt(memory, proc, move + 1));
-        move += 1;
-      }
-      count -= 1;
-      fill(memory, mapAt(memory, proc, count), THISTLE_MAP_STRIDE, 0);
+      count = eraseMapEntry(memory, proc, index, count);
       continue;
     }
     if (address <= start) {
@@ -1367,6 +1358,18 @@ const anonymousUnmap = (memory: ThistleMemory, proc: Ptr, address: U64, length: 
     index += 1;
   }
   atomicStoreI32(memory, proc + P_MAP_COUNT, wordToI32(word(count)));
+};
+
+const anonymousUnmap = (memory: ThistleMemory, proc: Ptr, address: U64, length: U64): I64 => {
+  const top = atomicLoadU64(memory, proc + P_VIRTUAL_TOP);
+  if (length === 0n || (address & (MAP_PAGE - 1n)) !== 0n || address >= top || length > top - address) return -22n;
+  const size = length + MAP_PAGE - 1n & -MAP_PAGE;
+  if (size === 0n || size > top - address) return -22n;
+  const end = address + size;
+  const splits = unmapSplitCount(memory, proc, address, end);
+  if (splits < 0) return MAP_NOT_OWNED;
+  if (splits > loadU32(memory, proc + P_MAP_CAPACITY) - loadU32(memory, proc + P_MAP_COUNT)) return -12n;
+  applyUnmap(memory, proc, address, end);
   return 0n;
 };
 
@@ -2541,7 +2544,7 @@ const mountedFileLocked = (memory: ThistleMemory, hart: U32, proc: Ptr, number: 
   const state = descriptorAt(memory, proc, wordToU32(word(descriptor)));
   const kind = loadU32(memory, state + FD_KIND);
   if (kind === THISTLE_FD_EMPTY) return -9n;
-  if (number === 57) { closeDescriptorLocked(memory, state); return 0n; }
+  if (number === 57) { releaseDescriptor(memory, state); return 0n; }
   if (number === 63) return mountedRead(memory, hart, state, kind, scratch);
   return -38n;
 };

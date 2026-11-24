@@ -9,3 +9,5 @@ frames are reusable and that the physical high-water mark returns to its
 initial value. This checks resource lifetime without timing thresholds.
 
 Repeated process cleanup also frees supplementary-group extension frames.
+
+The lifecycle fixture holds a process descriptor lock while attempting reaping and checks that the lock, process count and guest bytes remain intact.

@@ -92,6 +92,17 @@ export const inodeAt = (memory: ThistleMemory, inode: U32): Ptr =>
 export const dentryAt = (memory: ThistleMemory, index: U32): Ptr =>
   loadU32(memory, THISTLE_CONTROL_BASE + C_VFS_DENTRY_BASE) + index * THISTLE_VFS_DENTRY_STRIDE;
 
+/** Locate an already validated descriptor slot in a canonical process record. */
+export const descriptorAt = (memory: ThistleMemory, proc: Ptr, descriptor: U32): Ptr =>
+  loadU32(memory, proc + P_DESCRIPTOR_TABLE) + descriptor * THISTLE_DESCRIPTOR_STRIDE;
+
+/** Caller owns descriptor and VFS locks; release an inode after clearing its reference. */
+export const releaseDescriptor = (memory: ThistleMemory, state: Ptr): void => {
+  const inode = loadU32(memory, state + FD_INODE);
+  fill(memory, state, THISTLE_DESCRIPTOR_STRIDE, 0);
+  thistleVfsRelease(memory, inode);
+};
+
 const align4 = (value: U32): U32 => (value + 3) & -4;
 
 export const hashBytes = (memory: ThistleMemory, at: Ptr, size: U32): U32 => {

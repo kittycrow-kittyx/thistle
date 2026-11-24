@@ -134,6 +134,13 @@ for (const threaded of [false, true]) {
   assert.equal(invoke("RemapHostFile", 0, 0), 0x400000n);
   assert.equal(invoke("GuestAccess", 0, 0, 1, 0x401000n, 1, 2), 0);
   assert.equal(invoke("UnmapHostFile", 0, 0, 0x400000n, 8192n), 0n);
+  assert.equal(invoke("MapHostFile", 0, 0, 0x600000n, 12288n, 3n, 0x100022n), 0x600000n);
+  assert.equal(invoke("UnmapHostFile", 0, 0, 0x601000n, 4096n), 0n);
+  assert.equal(invoke("ProcessMapCount", 0, 0), 2);
+  assert.equal(invoke("GuestAccess", 0, 0, 1, 0x601000n, 1, 1), -14);
+  assert.equal(invoke("GuestAccess", 0, 0, 1, 0x600000n, 1, 1), 0);
+  assert.equal(invoke("UnmapHostFile", 0, 0, 0x600000n, 12288n), 0n);
+  assert.equal(invoke("ProcessMapCount", 0, 0), 0);
   const closeName = Number(invoke("ImageReserve", 0, 1));
   data[closeName] = 102;
   const openUnlinked = Number(invoke("OpenPath", 0, 0, 1, closeName, 1, 0));

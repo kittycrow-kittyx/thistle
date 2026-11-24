@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { directMemory, loadU8, loadU32, storeU32 } from "../native/memory.js";
-import { C_PHYSICAL_FREE, C_PHYSICAL_NEXT, H_LOCK, THISTLE_HART_BASE, THISTLE_HART_STRIDE } from "../native/abi.js";
+import { C_PHYSICAL_FREE, C_PHYSICAL_NEXT, H_LOCK, P_LOCK, THISTLE_HART_BASE, THISTLE_HART_STRIDE } from "../native/abi.js";
 import {
   thistleExitHart, thistleGuestPage, thistleHartInit, thistleKernelInitWithVfs,
-  thistleProcessCount, thistleProcessInit, thistleProcessReap, thistleProcessSetGroup,
+  thistleProcessRecord, thistleProcessCount, thistleProcessInit, thistleProcessReap, thistleProcessSetGroup,
 } from "../native/kernel.js";
 
 test("canonical process reaping retains live frames and zeroes recycled storage", () => {
@@ -24,6 +24,13 @@ test("canonical process reaping retains live frames and zeroes recycled storage"
   assert.equal(thistleProcessReap(memory, 0, 2), -11);
   assert.equal(thistleProcessCount(memory), 3);
   storeU32(memory, THISTLE_HART_BASE + THISTLE_HART_STRIDE + H_LOCK, 0);
+  const proc = thistleProcessRecord(memory, 1);
+  storeU32(memory, proc + P_LOCK, 1);
+  assert.equal(thistleProcessReap(memory, 0, 2), -11);
+  assert.equal(loadU32(memory, proc + P_LOCK), 1);
+  assert.equal(thistleProcessCount(memory), 3);
+  assert.equal(loadU8(memory, first), 42);
+  storeU32(memory, proc + P_LOCK, 0);
   assert.equal(thistleProcessReap(memory, 0, 2), 0);
   assert.equal(thistleProcessCount(memory), 2);
   assert.equal(loadU32(memory, C_PHYSICAL_FREE), first);

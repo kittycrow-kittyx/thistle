@@ -36,3 +36,5 @@ permission is checked by the canonical `allowed` function.
 Path resolution checks that the current component is a searchable directory before processing `.` or `..`. Symlink targets determine traversal before a following parent component.
 
 `thistleLoadVfs` returns `THISTLE_VFS_BUSY` before mutation when open inode descriptors or non-root process working directories retain the current filesystem. A successful root replacement redirects root working directories to the new root inode. Callers hold the process, credential and VFS locks during host mounting.
+
+`descriptorAt` locates a validated descriptor slot in a native process. `releaseDescriptor` clears the slot before checking final inode release. The exported close ABI, mounted RV64 close syscall and process reaper share this operation under descriptor and VFS locks.
