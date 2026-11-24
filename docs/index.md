@@ -139,3 +139,5 @@ bun run test
 - [host/context](modules/host/context.md)
 
 - [test/native-guest-access.test](modules/test/native-guest-access.test.md)
+
+- [test/native-host-map.test](modules/test/native-host-map.test.md)

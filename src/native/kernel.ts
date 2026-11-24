@@ -1234,32 +1234,56 @@ const anonymousMap = (memory: ThistleMemory, proc: Ptr, address: U64, length: U6
   return sx(candidate, 64);
 };
 
+// Hart locking keeps the canonical binding live while host mapping operations hold P_LOCK.
+const lockHostMapping = (memory: ThistleMemory, hart: U32): I64 => {
+  if (!validKernel(memory) || !validHart(memory, hart)) return -22n;
+  const at = hartAt(hart);
+  if (!acquire(memory, at + H_LOCK)) return -11n;
+  const proc = processForHart(memory, hart);
+  if (proc === INVALID_POINTER) { release(memory, at + H_LOCK); return -3n; }
+  if (!acquire(memory, proc + P_LOCK)) { release(memory, at + H_LOCK); return -11n; }
+  return word(proc);
+};
+
+const unlockHostMapping = (memory: ThistleMemory, hart: U32, proc: Ptr): void => {
+  release(memory, proc + P_LOCK);
+  release(memory, hartAt(hart) + H_LOCK);
+};
+
 /** Reserve a hosted file mapping in the canonical address-space tables. */
 export const thistleMapHostFile = (
   memory: ThistleMemory, hart: U32, address: U64, length: U64, protection: U64, flags: U64,
 ): I64 => {
-  const proc = processForHart(memory, hart);
-  if (proc === INVALID_POINTER) return -3n;
-  const lock = proc + P_LOCK;
-  if (!acquire(memory, lock)) return -11n;
+  const locked = lockHostMapping(memory, hart);
+  if (locked < 0n) return locked;
+  const proc = wordToPtr(locked);
   const result = anonymousMap(memory, proc, address, length, protection, flags | 0x20n);
   if (result >= 0n) {
     const count = loadU32(memory, proc + P_MAP_COUNT);
     storeU32(memory, mapAt(memory, proc, count - 1) + M_BACKING, THISTLE_MAP_BACKING_HOST_FILE);
   }
-  release(memory, lock);
+  unlockHostMapping(memory, hart, proc);
   return result;
 };
 
 /** Release a hosted mapping after its shared file data has been flushed. */
 export const thistleUnmapHostFile = (memory: ThistleMemory, hart: U32, address: U64, length: U64): I64 => {
-  const proc = processForHart(memory, hart);
-  if (proc === INVALID_POINTER) return -3n;
-  const lock = proc + P_LOCK;
-  if (!acquire(memory, lock)) return -11n;
+  const locked = lockHostMapping(memory, hart);
+  if (locked < 0n) return locked;
+  const proc = wordToPtr(locked);
   const result = anonymousUnmap(memory, proc, address, length);
-  release(memory, lock);
+  unlockHostMapping(memory, hart, proc);
   return result;
+};
+
+/** Resize the hosted mapping described by this hart's mremap syscall registers. */
+export const thistleRemapHostFile = (memory: ThistleMemory, hart: U32): I64 => {
+  const locked = lockHostMapping(memory, hart);
+  if (locked < 0n) return locked;
+  const proc = wordToPtr(locked);
+  const result = remapMapping(memory, hart, proc, THISTLE_MAP_BACKING_HOST_FILE);
+  unlockHostMapping(memory, hart, proc);
+  return result === MAP_NOT_OWNED ? -22n : result;
 };
 
 const overlapsHostFile = (memory: ThistleMemory, proc: Ptr, address: U64, length: U64): boolean => {
@@ -1506,7 +1530,28 @@ const advanceMapCursor = (memory: ThistleMemory, proc: Ptr, next: U64): void => 
   if (next > atomicLoadU64(memory, proc + P_MAP_NEXT)) atomicStoreU64(memory, proc + P_MAP_NEXT, next);
 };
 
-const remapAnonymous = (memory: ThistleMemory, hart: U32, proc: Ptr): I64 => {
+// Publish a replacement only after its backing pages have been copied; allocation failure retains the source.
+const moveMapping = (memory: ThistleMemory, hart: U32, proc: Ptr, mapping: Ptr, newSize: U64): I64 => {
+  const oldAddress = loadU64(memory, mapping + M_ADDRESS);
+  const oldSize = loadU64(memory, mapping + M_END) - oldAddress;
+  const mapFlags = loadU32(memory, mapping + M_FLAGS) & ~0x100010;
+  const moved = anonymousMap(memory, proc, 0n, newSize, ux(word(loadU32(memory, mapping + M_PROTECTION))), ux(word(mapFlags)));
+  if (moved < 0n) return moved;
+  const destination = ux(moved);
+  if (!copyAllocatedRange(memory, hart, proc, oldAddress, destination, oldSize)) {
+    anonymousUnmap(memory, proc, destination, newSize);
+    return -12n;
+  }
+  const target = mapAt(memory, proc, loadU32(memory, proc + P_MAP_COUNT) - 1);
+  storeU32(memory, target + M_BACKING, loadU32(memory, mapping + M_BACKING));
+  storeI32(memory, target + M_FILE_DESCRIPTOR, loadI32(memory, mapping + M_FILE_DESCRIPTOR));
+  storeU64(memory, target + M_FILE_OFFSET, loadU64(memory, mapping + M_FILE_OFFSET));
+  const removed = anonymousUnmap(memory, proc, oldAddress, oldSize);
+  if (removed !== 0n) return -12n;
+  return sx(destination, 64);
+};
+
+const remapMapping = (memory: ThistleMemory, hart: U32, proc: Ptr, backing: U32): I64 => {
   const oldAddress = ux(x(memory, hart, 10));
   const oldLength = ux(x(memory, hart, 11));
   const newLength = ux(x(memory, hart, 12));
@@ -1525,7 +1570,7 @@ const remapAnonymous = (memory: ThistleMemory, hart: U32, proc: Ptr): I64 => {
   while (index < count) {
     const mapping = mapAt(memory, proc, index);
     if (loadU64(memory, mapping + M_ADDRESS) === oldAddress && loadU64(memory, mapping + M_END) === oldAddress + oldSize &&
-        loadU32(memory, mapping + M_BACKING) === THISTLE_MAP_BACKING_ANONYMOUS) found = index;
+        loadU32(memory, mapping + M_BACKING) === backing) found = index;
     index += 1;
   }
   if (found === count) return MAP_NOT_OWNED;
@@ -1544,17 +1589,7 @@ const remapAnonymous = (memory: ThistleMemory, hart: U32, proc: Ptr): I64 => {
     return sx(oldAddress, 64);
   }
   if ((wordToU32(flagsWide) & 1) === 0) return -12n;
-  const mapFlags = loadU32(memory, mapping + M_FLAGS) & ~0x100010;
-  const moved = anonymousMap(memory, proc, 0n, newSize, ux(word(loadU32(memory, mapping + M_PROTECTION))), ux(word(mapFlags)));
-  if (moved < 0n) return moved;
-  const destination = ux(moved);
-  if (!copyAllocatedRange(memory, hart, proc, oldAddress, destination, oldSize)) {
-    anonymousUnmap(memory, proc, destination, newSize);
-    return -12n;
-  }
-  const removed = anonymousUnmap(memory, proc, oldAddress, oldSize);
-  if (removed !== 0n) return -12n;
-  return sx(destination, 64);
+  return moveMapping(memory, hart, proc, mapping, newSize);
 };
 
 const syncAnonymous = (memory: ThistleMemory, proc: Ptr, address: U64, length: U64, flagsWide: U64): I64 => {
@@ -2631,7 +2666,7 @@ const modifyMappingSyscall = (memory: ThistleMemory, hart: U32, proc: Ptr, numbe
     setPc(memory, hart, loadU64(memory, at + H_PC) - 4n);
     return THISTLE_BATCH_CONTENDED;
   }
-  const result = number === 216 ? remapAnonymous(memory, hart, proc) : number === 226 ?
+  const result = number === 216 ? remapMapping(memory, hart, proc, THISTLE_MAP_BACKING_ANONYMOUS) : number === 226 ?
     protectMappings(memory, proc, ux(x(memory, hart, 10)), ux(x(memory, hart, 11)), ux(x(memory, hart, 12))) :
     syncAnonymous(memory, proc, ux(x(memory, hart, 10)), ux(x(memory, hart, 11)), ux(x(memory, hart, 12)));
   traceMappingOperation(memory, hart, number, result);

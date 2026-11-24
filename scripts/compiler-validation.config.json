@@ -150,7 +150,10 @@
       "thistleProcessPrepareImage",
       "thistleProcessRunImage",
       "thistleProcessFinish",
-      "thistleGuestAccess"
+      "thistleGuestAccess",
+      "thistleMapHostFile",
+      "thistleUnmapHostFile",
+      "thistleRemapHostFile"
     ],
     "verify": {
       "init": "tetoKernelInit",
@@ -269,7 +272,10 @@
       "thistleProcessPrepareImage": "tetoProcessPrepareImage",
       "thistleProcessRunImage": "tetoProcessRunImage",
       "thistleProcessFinish": "tetoProcessFinish",
-      "thistleGuestAccess": "tetoGuestAccess"
+      "thistleGuestAccess": "tetoGuestAccess",
+      "thistleMapHostFile": "tetoMapHostFile",
+      "thistleUnmapHostFile": "tetoUnmapHostFile",
+      "thistleRemapHostFile": "tetoRemapHostFile"
     }
   },
   "memory": {

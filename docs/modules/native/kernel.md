@@ -75,3 +75,9 @@ process-host. The allocated PID must still match the hart binding.
 read/write/execute permission bits. It checks canonical mappings under the hart
 lock. Success returns zero; EFAULT denies inaccessible memory, ESRCH rejects
 an expired binding and EAGAIN reports contention.
+
+`thistleRemapHostFile` reads the calling hart's mremap arguments from a0-a4
+and applies the shared canonical mapping resize policy to hosted file mappings.
+The embedding flushes truncated shared bytes before calling it and updates
+its byte-carrier routing after success. Reservation, release and resize hold
+both hart and process locks against reaping or concurrent execution.

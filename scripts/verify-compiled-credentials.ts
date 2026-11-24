@@ -104,6 +104,14 @@ for (const threaded of [false, true]) {
     assert.equal(view.getUint8(page + 100), 0);
     assert.equal(view.getUint32(C_PHYSICAL_NEXT, true), highWater);
   }
+  assert.equal(invoke("StackPrepare", 0, 0, 0xf000000n, 0xfffff00n), 0);
+  assert.equal(invoke("MapHostFile", 0, 0, 0x400000n, 4096n, 3n, 0x100022n), 0x400000n);
+  for (const [register, value] of [[10, 0x400000n], [11, 4096n], [12, 8192n], [13, 1n], [14, 0n]] as const) {
+    assert.equal(invoke("HartSetX", 0, 0, register, value), 0);
+  }
+  assert.equal(invoke("RemapHostFile", 0, 0), 0x400000n);
+  assert.equal(invoke("GuestAccess", 0, 0, 1, 0x401000n, 1, 2), 0);
+  assert.equal(invoke("UnmapHostFile", 0, 0, 0x400000n, 8192n), 0n);
   assert.equal(invoke("ProcessFinish", 0, 0, 999, 9), -3);
   assert.equal(invoke("ProcessFinish", 0, 0, 1, 9), 0);
   assert.equal(invoke("HartExitCode", 0, 0), 9);

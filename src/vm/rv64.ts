@@ -48,6 +48,7 @@ import {
   thistleHostOperation,
   thistleKernelInit,
   thistleMapHostFile,
+  thistleRemapHostFile,
   thistleUnmapHostFile,
   thistleImageRelease,
   thistleImageReserve,
@@ -939,9 +940,8 @@ export class Rv64 {
         ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1504")),
         this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1505"), "socket address length", 4096),
       );
-      case 214: return this.doBrk(ux(requireValue(a[10] ?? null, "src/vm/rv64.ts:1507")));
       case 215: this.unmap(ux(requireValue(a[10] ?? null, "src/vm/rv64.ts:1508")), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1508"), "mapping length", Number.MAX_SAFE_INTEGER)); return 0n;
-      case 216: return this.remap(requireValue(a[10] ?? null, "src/vm/rv64.ts:1509"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1509"), requireValue(a[12] ?? null, "src/vm/rv64.ts:1509"), requireValue(a[13] ?? null, "src/vm/rv64.ts:1509"), requireValue(a[14] ?? null, "src/vm/rv64.ts:1509"));
+      case 216: return this.remap(requireValue(a[10] ?? null, "mremap address"), requireValue(a[11] ?? null, "mremap old length"), requireValue(a[12] ?? null, "mremap new length"));
       case 220: return this.thistleThreads
         ? this.thistleCloneThread(requireValue(a[10] ?? null, "src/vm/rv64.ts:1511"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1511"), requireValue(a[12] ?? null, "src/vm/rv64.ts:1511"), requireValue(a[13] ?? null, "src/vm/rv64.ts:1511"), requireValue(a[14] ?? null, "src/vm/rv64.ts:1511"))
         : this.clone(requireValue(a[10] ?? null, "src/vm/rv64.ts:1512"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1512"), requireValue(a[13] ?? null, "src/vm/rv64.ts:1512"));
@@ -1658,13 +1658,6 @@ default: { q = [MASK, MASK]; }
     return done;
   }
 
-  private doBrk(n: bigint): bigint {
-    if (!n) return this.brk;
-    if (n < this.floor || n + 1024n * 1024n >= this.stackAt) return this.brk;
-    if (n < this.brk) this.m.drop(n, this.nat(this.brk - n, "released break range", Number.MAX_SAFE_INTEGER));
-    this.brk = n; return n;
-  }
-
   private mmap(addr0: bigint, len0: bigint, prot0: bigint, flags0: bigint, fd0: bigint, off0: bigint): bigint {
     // Fixed ranges cannot collide with the image; flexible mappings search free space and retain backing-file metadata for shared flushes.
     const z0 = this.nat(len0, "mapping length", Number.MAX_SAFE_INTEGER), z = al(BigInt(z0));
@@ -1692,26 +1685,16 @@ default: { q = [MASK, MASK]; }
     return at;
   }
 
-  private remap(old0: bigint, oz0: bigint, nz0: bigint, fl0: bigint, fixed0: bigint): bigint {
-    const old = ux(old0), on = this.nat(oz0, "old mapping length", Number.MAX_SAFE_INTEGER), nn = this.nat(nz0, "new mapping length", Number.MAX_SAFE_INTEGER);
-    const oz = al(BigInt(on)), nz = al(BigInt(nn)), fl = this.nat(fl0, "remap flags", 3);
-    if (!on || !nn || old & (PAGE - 1n) || fl & ~3 || fl & 2) bad("EINVAL", "invalid mremap arguments");
-    if (fixed0) bad("EINVAL", "fixed mremap is not supported");
-    const q = this.maps.find(x => x.at === old && x.end === old + oz) ?? bad("EINVAL", "mremap range is not one mapping");
-    if (nz === oz) return old;
-    if (nz < oz) { this.flushShared(old + nz, this.nat(oz - nz, "released mapping range", Number.MAX_SAFE_INTEGER)); this.m.drop(old + nz, this.nat(oz - nz, "released mapping range", Number.MAX_SAFE_INTEGER)); q.end = old + nz; return old; }
-
-    const end = old + nz, hit = this.maps.some(x => x !== q && old < x.end && end > x.at);
-    if (!hit && end + 1024n * 1024n < this.stackAt) { q.end = end; (end > this.mapAt) && (this.mapAt = al(end)); return old; }
-    if (!(fl & 1)) bad("ENOMEM", "mapping cannot grow in place");
-
-    const to = this.mmap(0n, nz, BigInt(q.prot), 0x22n, -1n, 0n), copy = on < nn ? on : nn;
-    try {
-      for (let n = 0; n < copy; n += 65536) {
-        const z = Math.min(65536, copy - n); this.m.write(to + BigInt(n), this.m.read(old + BigInt(n), z));
-      }
-    } catch (caughtValue) { const e = caughtValue instanceof Error ? caughtValue : new Error(typeof caughtValue === "undefined" ? "undefined" : String(caughtValue));  this.unmap(to, nn); throw e; }
-    this.unmap(old, on); return to;
+  private remap(old0: bigint, oz0: bigint, nz0: bigint): bigint {
+    const old = ux(old0), oldSize = al(ux(oz0)), newSize = al(ux(nz0));
+    const carrier = this.maps.find(mapping => mapping.path !== null && mapping.at === old && mapping.end === old + oldSize)
+      ?? bad("EINVAL", "missing host mapping carrier");
+    if (newSize < oldSize) this.flushShared(old + newSize, this.nat(oldSize - newSize, "truncated mapping", Number.MAX_SAFE_INTEGER));
+    const result = thistleRemapHostFile(requireValue(this.nativeMemory, "canonical memory"), this.thistleActiveHart);
+    if (result < 0n) return result;
+    carrier.at = ux(result);
+    carrier.end = ux(result) + newSize;
+    return result;
   }
 
   private unmap(at0: bigint, len: number): void {
