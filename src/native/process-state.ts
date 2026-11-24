@@ -1,4 +1,4 @@
-import { readGroup, replaceGroups, writeGroup, updateIdentity } from "./credentials.js";
+import { installCredentials, readGroup, replaceGroups, writeGroup, updateIdentity } from "./credentials.js";
 import {
   C_MAX_HARTS, C_PROCESS_LOCK, C_CREDENTIAL_LOCK, C_VFS_LOCK, C_NEXT_PID, P_EUID, P_FSUID, P_FSGID, P_GROUP_COUNT, THISTLE_BATCH_CONTENDED, THISTLE_FAULT_BAD_STATE, THISTLE_FAULT_MEMORY,
   H_LOCK, H_PROCESS_SLOT, H_STATUS, THISTLE_HART_RUNNABLE, THISTLE_PROCESS_RUNNABLE, THISTLE_PROCESS_WAITING,
@@ -160,5 +160,27 @@ export const thistleProcessAttach = (memory: ThistleMemory, hart: U32, pid: U32)
   const result = attachLocked(memory, hart, pid);
   atomicStoreI32(memory, at + H_LOCK, 0);
   atomicStoreI32(memory, C_PROCESS_LOCK, 0);
+  return result;
+};
+
+const validCredentialInput = (memory: ThistleMemory, input: Ptr): boolean => {
+  if (!inputContains(memory, input, 36)) return false;
+  let field: U32 = 0;
+  while (field < 32) {
+    if (loadU32(memory, input + field) === KEEP) return false;
+    field += 4;
+  }
+  return validGroups(memory, input + 36, loadU32(memory, input + 32));
+};
+
+/** Trusted embedding/exec loader, not a guest privilege-changing syscall. */
+export const thistleProcessInstallCredentials = (memory: ThistleMemory, hart: U32, input: Ptr): I32 => {
+  const proc = thistleProcessRecord(memory, hart);
+  if (proc === INVALID_POINTER) return -3;
+  if (compareExchangeI32(memory, C_CREDENTIAL_LOCK, 0, 1) !== 0) return -11;
+  let result: I32 = -3;
+  if (thistleProcessRecord(memory, hart) === proc) result = validCredentialInput(memory, input)
+    ? installCredentials(memory, proc, input) : -22;
+  atomicStoreI32(memory, C_CREDENTIAL_LOCK, 0);
   return result;
 };

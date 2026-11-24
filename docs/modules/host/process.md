@@ -14,3 +14,7 @@ ESRCH.
 
 Snapshots contain copies. Mutating them does not change native state. The
 legacy `Proc` constructor has not been switched to this view yet.
+
+`installIdentity` marshals constructor or validated-exec metadata through the
+native loader batch. Permission checks for guest requests remain in the set-ID
+operations.

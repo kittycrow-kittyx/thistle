@@ -91,23 +91,38 @@ const writeLocked = (memory: ThistleMemory, proc: Ptr, index: U32, gid: U32): I3
   return 0;
 };
 
-const updateGroups = (memory: ThistleMemory, proc: Ptr, input: Ptr, count: U32, gid: U32, replace: boolean): I32 => {
+const installLocked = (memory: ThistleMemory, proc: Ptr, input: Ptr): I32 => {
+  const count = loadU32(memory, input + 32);
+  const result = replaceLocked(memory, proc, input + 36, count);
+  if (result !== 0) return result;
+  let field: U32 = 0;
+  while (field < 32) {
+    storeIdentity(memory, proc + P_RUID + field, loadU32(memory, input + field));
+    field += 4;
+  }
+  return 0;
+};
+
+// Memory/VFS locks cover allocation and publication of both groups and loader IDs.
+// Failed allocation leaves the live record untouched.
+const updateGroups = (memory: ThistleMemory, proc: Ptr, input: Ptr, count: U32, gid: U32, operation: U32): I32 => {
   if (compareExchangeI32(memory, C_MEMORY_LOCK, 0, 1) !== 0) return -11;
   if (compareExchangeI32(memory, C_VFS_LOCK, 0, 1) !== 0) {
     atomicStoreI32(memory, C_MEMORY_LOCK, 0); return -11;
   }
-  const result = replace ? replaceLocked(memory, proc, input, count) : writeLocked(memory, proc, count, gid);
+  const result = operation === 0 ? writeLocked(memory, proc, count, gid) : operation === 1
+    ? replaceLocked(memory, proc, input, count) : installLocked(memory, proc, input);
   atomicStoreI32(memory, C_VFS_LOCK, 0); atomicStoreI32(memory, C_MEMORY_LOCK, 0);
   return result;
 };
 
 /** Caller holds the credential lock; memory and VFS locks protect publication. */
 export const replaceGroups = (memory: ThistleMemory, proc: Ptr, input: Ptr, count: U32): I32 =>
-  updateGroups(memory, proc, input, count, 0, true);
+  updateGroups(memory, proc, input, count, 0, 1);
 
 /** Initialise or replace one group in canonical state. */
 export const writeGroup = (memory: ThistleMemory, proc: Ptr, index: U32, gid: U32): I32 =>
-  updateGroups(memory, proc, 0, index, gid, false);
+  updateGroups(memory, proc, 0, index, gid, 0);
 
 /** Caller holds credential, memory and VFS locks. */
 export const releaseGroups = (memory: ThistleMemory, proc: Ptr): void => {
@@ -119,6 +134,10 @@ export const releaseGroups = (memory: ThistleMemory, proc: Ptr): void => {
 
 const KEEP: U32 = 0xffffffff;
 const validIdentity = (value: U32): boolean => value >= 0 && value <= KEEP && floatFloor(value) === value;
+
+// Lockless get-ID syscalls read these words atomically.
+const storeIdentity = (memory: ThistleMemory, at: Ptr, value: U32): void =>
+  atomicStoreI32(memory, at, wordToI32(word(value)));
 
 const identityBase = (group: boolean): U32 => group ? P_RGID : P_RUID;
 
@@ -133,10 +152,10 @@ const setResIds = (memory: ThistleMemory, proc: Ptr, group: boolean, real: U32, 
   if (!canSetIdentity(memory, proc, group, real) || !canSetIdentity(memory, proc, group, effective) ||
       !canSetIdentity(memory, proc, group, saved)) return -1;
   const base = proc + identityBase(group);
-  if (real !== KEEP) storeU32(memory, base, real);
-  if (effective !== KEEP) storeU32(memory, base + 4, effective);
-  if (saved !== KEEP) storeU32(memory, base + 8, saved);
-  storeU32(memory, proc + (group ? P_FSGID : P_FSUID), loadU32(memory, base + 4));
+  if (real !== KEEP) storeIdentity(memory, base, real);
+  if (effective !== KEEP) storeIdentity(memory, base + 4, effective);
+  if (saved !== KEEP) storeIdentity(memory, base + 8, saved);
+  storeIdentity(memory, proc + (group ? P_FSGID : P_FSUID), loadU32(memory, base + 4));
   return 0;
 };
 
@@ -156,7 +175,7 @@ const setId = (memory: ThistleMemory, proc: Ptr, group: boolean, value: U32): I3
 const setFsId = (memory: ThistleMemory, proc: Ptr, group: boolean, value: U32): I64 => {
   const at = proc + (group ? P_FSGID : P_FSUID);
   const previous = loadU32(memory, at);
-  if (validIdentity(value) && value !== KEEP && canSetIdentity(memory, proc, group, value)) storeU32(memory, at, value);
+  if (validIdentity(value) && value !== KEEP && canSetIdentity(memory, proc, group, value)) storeIdentity(memory, at, value);
   return word(previous);
 };
 
@@ -170,3 +189,7 @@ export const updateIdentity = (memory: ThistleMemory, proc: Ptr, operation: U32,
   return setFsId(memory, proc, group, first);
 };
 
+
+/** Trusted loader batch; input validated by the ABI wrapper, caller holds credential lock. */
+export const installCredentials = (memory: ThistleMemory, proc: Ptr, input: Ptr): I32 =>
+  updateGroups(memory, proc, input, 0, 0, 2);

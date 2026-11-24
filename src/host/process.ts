@@ -7,7 +7,7 @@ import {
 import { loadU32, storeU32 } from "../native/memory.js";
 import type { ThistleMemory } from "../native/memory.js";
 import { readGroup } from "../native/credentials.js";
-import { thistleProcessRecord, thistleProcessIdentity, thistleProcessGroups, thistleProcessUmask } from "../native/process-state.js";
+import { thistleProcessInstallCredentials, thistleProcessRecord, thistleProcessIdentity, thistleProcessGroups, thistleProcessUmask } from "../native/process-state.js";
 import { withNativeLock, withImage, checkNative } from "./native-access.js";
 
 export interface HostIdentity {
@@ -68,6 +68,21 @@ export class HostProcess {
         storeU32(this.memory, input + index * 4, valid ? gid : 0xffffffff);
       }
       checkNative(thistleProcessGroups(this.memory, this.hart, input, groups.length));
+    }));
+  }
+
+  /** Trusted constructor/validated-exec metadata, never a guest set-ID operation. */
+  installIdentity(credentials: ProcCred, fsuid = credentials.euid, fsgid = credentials.egid): void {
+    const ids = [credentials.ruid, credentials.euid, credentials.suid, fsuid,
+      credentials.rgid, credentials.egid, credentials.sgid, fsgid];
+    withImage(this.memory, 36 + credentials.groups.length * 4, input => this.withRecord(() => {
+      const values = [...ids, credentials.groups.length, ...credentials.groups];
+      for (let index = 0; index < values.length; index++) {
+        const value = values[index] ?? 0xffffffff;
+        const valid = Number.isInteger(value) && value >= 0 && value < 0xffffffff;
+        storeU32(this.memory, input + index * 4, valid ? value : 0xffffffff);
+      }
+      checkNative(thistleProcessInstallCredentials(this.memory, this.hart, input));
     }));
   }
 

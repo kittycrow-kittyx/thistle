@@ -34,3 +34,11 @@ It preserves the process count, credentials, descriptors and guest pages. The
 process lock stabilises slot ownership, and all existing process harts are
 locked during binding. A bound destination returns EBUSY; missing/zombie
 processes return ESRCH; contention returns EAGAIN.
+
+| Loader export | Contract |
+| --- | --- |
+| `thistleProcessInstallCredentials` | Install constructor or validated-exec metadata from a reserved input buffer. Validate all IDs and allocate group storage before publication. |
+
+The loader record contains eight u32 IDs in process-record order, a u32 group
+count and the group vector. Guest privilege changes use the checked
+`thistleProcessIdentity` operations.

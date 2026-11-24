@@ -17,6 +17,7 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v5
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           submodules: recursive
 
       - name: Set up Bun

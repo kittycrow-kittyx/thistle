@@ -64,5 +64,24 @@ for (const threaded of [false, true]) {
   assert.equal(invoke("VfsReadData", 0, file, 0n, record + 128, 1), -18);
   assert.equal(invoke("VfsCommitBacking", 0, proc, file, previous, record, 2n), -11);
   assert.equal(invoke("ImageRelease", 0, record, 256), 0);
+  const identity = Number(invoke("ImageReserve", 0, 64));
+  data.fill(0, identity, identity + 64);
+  view.setUint32(identity, 0xfffffffe, true);
+  view.setUint32(identity + 4, 1000, true);
+  view.setUint32(identity + 32, 1, true); view.setUint32(identity + 36, 42, true);
+  assert.equal(invoke("ProcessInstallCredentials", 0, 0, identity), 0);
+  assert.equal(invoke("ProcessReadGroups", 0, 0, identity + 40, 1), 1);
+  assert.equal(view.getUint32(identity + 40, true), 42);
+  assert.equal(invoke("ProcessIdentity", 0, 0, 4, 0, 0xffffffff, 0xffffffff), 0n);
+  assert.equal(invoke("ImageRelease", 0, identity, 64), 0);
+  const code = Number(invoke("ImageReserve", 0, 4));
+  view.setUint32(code, 0x73, true);
+  assert.equal(invoke("ImageBegin", 0, 0, 0x10000000n, 0x200000n, 0n, 0, 0), 0);
+  assert.equal(invoke("ImageSegment", 0, 0, 1, 1, 0x200000n, 4n, 5, code, 4), 0);
+  assert.equal(invoke("ImageFinish", 0, 0, 4), 0);
+  assert.equal(invoke("ImageRelease", 0, code, 4), 0);
+  assert.equal(invoke("HartSetX", 0, 0, 17, 174n), 0);
+  assert.equal(invoke("RunRv64Batch", 0, 0, 1, 0n, -1), 0);
+  assert.equal(invoke("HartGetX", 0, 0, 10), 0xfffffffen);
   console.log(name + ": ABI " + THISTLE_ABI_VERSION + ", extended groups, identity and frame reuse passed");
 }

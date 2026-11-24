@@ -29,6 +29,10 @@ test("host process views read shared native credentials and reject expired ident
   assert.throws(() => second.setGroups([0.5]), { code: "EINVAL" });
   assert.equal(second.setUmask(0o077), 0o022);
   assert.equal(first.identity().umask, 0o077);
+  const imageIdentity = first.identity();
+  first.installIdentity({ ...imageIdentity.credentials, euid: 2000, uid: 2000 }, 2000, 0);
+  assert.equal(second.identity().credentials.euid, 2000);
+  assert.equal(second.identity().fsuid, 2000);
   assert.equal(thistleExitHart(memory, 2, 0), 0);
   assert.equal(thistleExitHart(memory, 1, 0), 0);
   assert.equal(thistleProcessReap(memory, 0, 2), 0);

@@ -11,3 +11,8 @@
 RV64 syscalls and the host ABI share identity policy. Invalid native single
 or filesystem IDs return EINVAL; the host filesystem API returns the unchanged
 old ID. VFS permission checks read the canonical group records.
+
+`installCredentials` installs a validated loader record under the credential,
+memory and VFS locks. Group replacement precedes ID publication; failed
+allocation retains the previous identity and groups. ID stores are atomic
+for native get-ID syscalls that read without the credential lock.

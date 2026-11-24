@@ -2628,14 +2628,15 @@ const lockedCredentialSyscall = (memory: ThistleMemory, hart: U32, proc: Ptr, nu
   return internalSyscall(memory, hart, result);
 };
 
+// These single-word queries are lockless; retain atomic reads and unsigned ID bits.
 const getProcessId = (memory: ThistleMemory, hart: U32, proc: Ptr, number: U32): I32 => {
   if (proc === INVALID_POINTER) return internalSyscall(memory, hart, -3n);
-  if (number === 172 || number === 178) return internalSyscall(memory, hart, word(atomicLoadI32(memory, proc + P_PID)));
-  if (number === 173) return internalSyscall(memory, hart, word(atomicLoadI32(memory, proc + P_PPID)));
-  if (number === 174) return internalSyscall(memory, hart, word(atomicLoadI32(memory, proc + P_RUID)));
-  if (number === 175) return internalSyscall(memory, hart, word(atomicLoadI32(memory, proc + P_EUID)));
-  if (number === 176) return internalSyscall(memory, hart, word(atomicLoadI32(memory, proc + P_RGID)));
-  if (number === 177) return internalSyscall(memory, hart, word(atomicLoadI32(memory, proc + P_EGID)));
+  if (number === 172 || number === 178) return internalSyscall(memory, hart, procId(memory, proc, P_PID));
+  if (number === 173) return internalSyscall(memory, hart, procId(memory, proc, P_PPID));
+  if (number === 174) return internalSyscall(memory, hart, procId(memory, proc, P_RUID));
+  if (number === 175) return internalSyscall(memory, hart, procId(memory, proc, P_EUID));
+  if (number === 176) return internalSyscall(memory, hart, procId(memory, proc, P_RGID));
+  if (number === 177) return internalSyscall(memory, hart, procId(memory, proc, P_EGID));
   return fallbackSyscall(memory, hart);
 };
 
@@ -3062,5 +3063,5 @@ export { thistleVfsCreate, thistleVfsWrite, thistleVfsLink, thistleVfsUnlink, th
 
 
 export { thistleProcessReap } from "./process-reap.js";
-export { thistleProcessAttach, thistleProcessSetGroup, thistleProcessReadGroups, thistleProcessRecord, thistleNextPid, thistleProcessIdentity, thistleProcessGroups, thistleProcessUmask } from "./process-state.js";
+export { thistleProcessInstallCredentials, thistleProcessAttach, thistleProcessSetGroup, thistleProcessReadGroups, thistleProcessRecord, thistleNextPid, thistleProcessIdentity, thistleProcessGroups, thistleProcessUmask } from "./process-state.js";
 export { thistleVfsBacking, thistleVfsBackingVersion, thistleVfsCommitBacking, thistleVfsSetQuota } from "./vfs-backing.js";

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  C_PHYSICAL_END, C_PHYSICAL_NEXT, C_VFS_LOCK, P_GROUP_COUNT, P_GROUP_DATA,
+  P_EUID, C_PHYSICAL_END, C_PHYSICAL_NEXT, C_VFS_LOCK, P_GROUP_COUNT, P_GROUP_DATA,
   P_FSUID, P_FSGID, THISTLE_BATCH_BUDGET, THISTLE_SEGMENT_READ,
   THISTLE_SEGMENT_WRITE, THISTLE_SEGMENT_EXECUTE, THISTLE_VFS_KIND_FILE,
 } from "../native/abi.js";
@@ -11,7 +11,7 @@ import {
   thistleImageFinish, thistleHartSetPc, thistleHartSetX, thistleHartGetX,
   thistleRunRv64Batch, thistleGuestPage,
 } from "../native/kernel.js";
-import { thistleProcessGroups, thistleProcessIdentity, thistleProcessReadGroups, thistleProcessRecord, thistleProcessSetGroup } from "../native/process-state.js";
+import { thistleProcessInstallCredentials, thistleProcessGroups, thistleProcessIdentity, thistleProcessReadGroups, thistleProcessRecord, thistleProcessSetGroup } from "../native/process-state.js";
 import { readGroup } from "../native/credentials.js";
 import { thistleVfsAccess } from "../native/vfs.js";
 import { thistleVfsCreate, thistleVfsChown } from "../native/vfs-edit.js";
@@ -88,6 +88,8 @@ test("RV64 credential syscalls share host policy and transfer extended group vec
   assert.equal(call(158, 0n), 40n);
   assert.equal(call(158, 40n, 0x210100n), 40n);
   assert.equal(loadU32(memory, page + 0x100 + 39 * 4), 139);
+  assert.equal(call(147, 0xfffffffen, 0n, 0n), 0n);
+  assert.equal(call(174, 0n), 0xfffffffen);
   assert.equal(call(147, 1000n, 0n, 0n), 0n);
   assert.equal(thistleProcessIdentity(memory, 0, 2, 0xffffffff, 1000, 0xffffffff), 0n);
   assert.equal(call(146, 2000n), -1n);
@@ -96,4 +98,34 @@ test("RV64 credential syscalls share host policy and transfer extended group vec
   assert.equal(call(146, 0n), 0n);
   assert.equal(call(159, 0n), 0n);
   assert.equal(loadU32(memory, proc + P_GROUP_DATA), 0);
+});
+
+test("trusted credential installation publishes IDs and groups as one batch", () => {
+  const memory = mountedKernel(), proc = thistleProcessRecord(memory, 0);
+  const input = thistleImageReserve(memory, 196);
+  for (let index = 0; index < 8; index++) storeU32(memory, input + index * 4, 100 + index);
+  storeU32(memory, input + 32, 40);
+  for (let index = 0; index < 40; index++) storeU32(memory, input + 36 + index * 4, 1000 + index);
+  assert.equal(thistleProcessInstallCredentials(memory, 0, input), 0);
+  assert.equal(loadU32(memory, proc + P_EUID), 101);
+  assert.equal(loadU32(memory, proc + P_FSUID), 103);
+  assert.equal(readGroup(memory, proc, 39), 1039);
+  storeU32(memory, input + 4, 200);
+  storeU32(memory, input + 36 + 39 * 4, 0xffffffff);
+  assert.equal(thistleProcessInstallCredentials(memory, 0, input), -22);
+  assert.equal(loadU32(memory, proc + P_EUID), 101);
+  assert.equal(readGroup(memory, proc, 39), 1039);
+  assert.equal(thistleImageRelease(memory, input, 196), 0);
+  const end = loadU32(memory, C_PHYSICAL_END), next = loadU32(memory, C_PHYSICAL_NEXT);
+  storeU32(memory, C_PHYSICAL_END, next + 224);
+  const limited = thistleImageReserve(memory, 196);
+  assert.notEqual(limited, 0xffffffff);
+  for (let index = 0; index < 8; index++) storeU32(memory, limited + index * 4, 200 + index);
+  storeU32(memory, limited + 32, 40);
+  for (let index = 0; index < 40; index++) storeU32(memory, limited + 36 + index * 4, 2000 + index);
+  assert.equal(thistleProcessInstallCredentials(memory, 0, limited), -12);
+  assert.equal(loadU32(memory, proc + P_EUID), 101);
+  assert.equal(readGroup(memory, proc, 39), 1039);
+  assert.equal(thistleImageRelease(memory, limited, 196), 0);
+  storeU32(memory, C_PHYSICAL_END, end);
 });
