@@ -9,3 +9,5 @@
 `readFile`, `writeFile` and `seekFile` invoke native descriptor operations while retaining the slot and VFS locks. Host-backed payloads return `EXDEV` until the carrier transport is selected. Host calls transfer at most 1 MiB per read or write.
 
 `withStorage` lends a validated descriptor record to a synchronous byte transport under the descriptor and VFS locks. Do not retain the pointer or await inside the callback.
+
+`readFile` and `writeFile` select the registered byte carrier for host-backed inodes, otherwise use the native arena. `materialiseFile` awaits the carrier when needed and does not move the descriptor offset.

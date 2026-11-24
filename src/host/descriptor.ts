@@ -1,4 +1,5 @@
 import { bad } from "../core/err.js";
+import { HostBacking } from "./backing.js";
 import { C_CREDENTIAL_LOCK, FD_FLAGS, FD_IDENTITY, FD_INODE, FD_KIND, FD_OFFSET, P_DESCRIPTOR_CAPACITY, THISTLE_FD_EMPTY, THISTLE_FD_HOST } from "../native/abi.js";
 import { loadU32, loadU64, storeU32, storeU64 } from "../native/memory.js";
 import { descriptorAt, freeDescriptor, installDescriptor, releaseDescriptor, thistleVfsIdentity, thistleVfsOpenInode, thistleVfsReadDescriptor, thistleVfsSeekDescriptor } from "../native/vfs.js";
@@ -124,6 +125,8 @@ export class HostDescriptor {
 
   readFile(length: number): Uint8Array {
     if (!Number.isSafeInteger(length) || length < 0) bad("EINVAL", "invalid descriptor read length");
+    const backing = HostBacking.forDescriptor(this);
+    if (backing !== null) return backing.readDescriptor(this, length);
     const memory = this.process.memory, amount = Math.min(length, 1048576);
     return withImage(memory, Math.max(1, amount), input => this.access(state => withVfsLock(memory, () => {
       const count = thistleVfsReadDescriptor(memory, state, input, amount);
@@ -133,6 +136,8 @@ export class HostDescriptor {
   }
 
   writeFile(bytes: Uint8Array): number {
+    const backing = HostBacking.forDescriptor(this);
+    if (backing !== null) return backing.writeDescriptor(this, bytes);
     const memory = this.process.memory, amount = Math.min(bytes.length, 1048576);
     return withImage(memory, Math.max(1, amount), input => this.access(state => withVfsLock(memory, () => {
       memory.bytes.set(bytes.subarray(0, amount), input);
@@ -140,6 +145,12 @@ export class HostDescriptor {
       checkNative(count);
       return count;
     })));
+  }
+
+  /** Await byte transport before synchronous file I/O, without changing the cursor. */
+  async materialiseFile(): Promise<void> {
+    const backing = HostBacking.forDescriptor(this);
+    if (backing !== null) await backing.materialiseDescriptor(this);
   }
 
   seekFile(offset: number, whence: number): number {

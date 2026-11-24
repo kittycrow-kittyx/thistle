@@ -43,6 +43,7 @@ interface Payload {
 
 /** Byte carriers only. Kernel memory owns all inode, permission and quota state. */
 export class HostBacking {
+  private static readonly mounts = new WeakMap<ThistleMemory, HostBacking>();
   private readonly payloads = new Map<number, Payload>();
   private sequence = 1;
   private readonly root: { readonly ino: number; readonly identity: bigint };
@@ -53,6 +54,20 @@ export class HostBacking {
       return { ino, identity: thistleVfsIdentity(memory, ino) };
     }) : { ino: root.ino, identity: root.identity };
     if (this.root.identity === 0n) bad("ENOENT", "missing backing storage mount");
+    const previous = HostBacking.mounts.get(memory) ?? null;
+    if (previous !== null && previous.root.ino === this.root.ino && previous.root.identity === this.root.identity) bad("EBUSY", "mount already has a byte carrier registry");
+    HostBacking.mounts.set(memory, this);
+  }
+
+  /** Find the host transport only when the live descriptor refers to a carrier. */
+  static forDescriptor(descriptor: CarrierDescriptor): HostBacking | null {
+    const memory = descriptor.process.memory;
+    return descriptor.withStorage(state => {
+      if (thistleVfsBacking(memory, loadU32(memory, state + FD_INODE)) === 0) return null;
+      const backing = HostBacking.mounts.get(memory) ?? bad("EIO", "mount has no byte carrier registry");
+      backing.checkMountLocked();
+      return backing;
+    });
   }
 
   private mountedLocked(): boolean {

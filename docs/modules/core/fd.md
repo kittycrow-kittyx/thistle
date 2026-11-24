@@ -5,3 +5,5 @@
 `keys`, `values` and `entries` return snapshots of occupied native slots, including inode descriptors allocated directly by native syscalls. `attachment` and `attachments` expose host endpoints for cleanup after reaping. The attachment map does not determine slot membership.
 
 Inode-bound `Fd` views expose native `readFile`, `writeFile` and `seekFile` operations.
+
+`materialiseFile` prepares deferred bytes through the descriptor's registered host transport. RV64 read/write callbacks await this method before using the synchronous descriptor operations.

@@ -18,13 +18,13 @@ test("carrier descriptor writes share native append, quota and unlink lifetime",
   const append = HostDescriptor.open(process, file, THISTLE_FD_WRITE | THISTLE_FD_APPEND);
   file.chmod(process, 0);
   root.unlink(process, "carrier");
-  assert.deepEqual([...backing.readDescriptor(fd, 2)], [1, 2]);
-  assert.equal(backing.writeDescriptor(fd, Uint8Array.of(9)), 1);
+  assert.deepEqual([...fd.readFile(2)], [1, 2]);
+  assert.equal(fd.writeFile(Uint8Array.of(9)), 1);
   append.seekFile(0, 0);
-  assert.equal(backing.writeDescriptor(append, Uint8Array.of(4)), 1);
+  assert.equal(append.writeFile(Uint8Array.of(4)), 1);
   assert.equal(append.offset, 4);
   fd.seekFile(0, 0);
-  assert.deepEqual([...backing.readDescriptor(fd, 8)], [1, 2, 9, 4]);
+  assert.deepEqual([...fd.readFile(8)], [1, 2, 9, 4]);
   assert.throws(() => backing.readDescriptor(append, 1), { code: "EBADF" });
   fd.seekFile(1024, 0);
   assert.throws(() => backing.writeDescriptor(fd, Uint8Array.of(5)), { code: "ENOSPC" });
@@ -43,13 +43,30 @@ test("lazy descriptor completion rejects a closed and reused slot", async () => 
   backing.setSource(file.ino, process, { size: 2, sum: "", head: null,
     load: () => new Promise(resolve => { finish = resolve; }) });
   const fd = HostDescriptor.open(process, file, THISTLE_FD_READ);
-  const pending = backing.materialiseDescriptor(fd);
+  const pending = fd.materialiseFile();
   fd.close();
   const next = HostDescriptor.open(process, file, THISTLE_FD_READ);
   assert.equal(next.number, fd.number);
   finish(Uint8Array.of(7, 8));
   await assert.rejects(pending, { code: "EBADF" });
   assert.equal(next.offset, 0);
-  assert.throws(() => backing.readDescriptor(next, 2), { code: "EAGAIN" });
+  assert.throws(() => next.readFile(2), { code: "EAGAIN" });
   next.close();
+});
+
+test("a lazy descriptor materialises through the installed mount registry", async () => {
+  const memory = mountedKernel(), process = new HostProcess(memory, 0);
+  assert.equal(thistleVfsSetQuota(memory, 1024n), 0);
+  const root = HostInode.resolve(process, "/"), file = root.create(process, "provider", 1, 0o600);
+  const backing = new HostBacking(memory);
+  let loads = 0;
+  backing.setSource(file.ino, process, { size: 2, sum: "", head: null,
+    load: async () => { loads++; return Uint8Array.of(4, 5); } });
+  assert.throws(() => new HostBacking(memory), { code: "EBUSY" });
+  const fd = HostDescriptor.open(process, file, THISTLE_FD_READ);
+  await fd.materialiseFile();
+  assert.equal(fd.offset, 0);
+  assert.deepEqual([...fd.readFile(2)], [4, 5]);
+  assert.equal(loads, 1);
+  fd.close();
 });
