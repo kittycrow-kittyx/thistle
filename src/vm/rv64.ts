@@ -852,11 +852,11 @@ export class Rv64 {
       case 46: { const f = this.s.p.fds.get(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1396"))) ?? bad("EBADF", String((a[10] ?? null))); this.trunc(f.path ?? bad("EBADF", String((a[10] ?? null))), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1396"), "file length", this.s.k.fs.cap)); return 0n; }
       case 48: this.s.stat(this.path(requireValue(a[10] ?? null, "src/vm/rv64.ts:1397"), this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1397")))); return 0n;
       case 49: this.s.cd(this.str(requireValue(a[10] ?? null, "src/vm/rv64.ts:1398"))); return 0n;
-      case 50: { this.s.fdChdir(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1399")); return 0n; }
-      case 52: { this.s.fdChmod(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1400"), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1400"), "mode", 0xffff)); return 0n; }
+      case 50: { this.s.fdChdir(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1399"))); return 0n; }
+      case 52: { this.s.fdChmod(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1400")), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1400"), "mode", 0xffff)); return 0n; }
       case 53: this.s.chmod(this.path(requireValue(a[10] ?? null, "src/vm/rv64.ts:1401"), this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1401"))), this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1401"), "mode", 0xffff)); return 0n;
       case 54: this.s.chown(this.path(requireValue(a[10] ?? null, "src/vm/rv64.ts:1402"), this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1402"))), this.owner(requireValue(a[12] ?? null, "src/vm/rv64.ts:1402"), "uid"), this.owner(requireValue(a[13] ?? null, "src/vm/rv64.ts:1402"), "gid")); return 0n;
-      case 55: { this.s.fdChown(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1403"), this.owner(requireValue(a[11] ?? null, "src/vm/rv64.ts:1403"), "uid"), this.owner(requireValue(a[12] ?? null, "src/vm/rv64.ts:1403"), "gid")); return 0n; }
+      case 55: { this.s.fdChown(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1403")), this.owner(requireValue(a[11] ?? null, "src/vm/rv64.ts:1403"), "uid"), this.owner(requireValue(a[12] ?? null, "src/vm/rv64.ts:1403"), "gid")); return 0n; }
       case 56: return BigInt(await this.openat(requireValue(a[10] ?? null, "src/vm/rv64.ts:1404"), this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1404")), this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1404"), "open flags", 0xffffffff), this.nat(requireValue(a[13] ?? null, "src/vm/rv64.ts:1404"), "open mode", 0xffff)));
       case 57: {
         const fd = this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1406"));
