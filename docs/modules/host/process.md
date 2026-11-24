@@ -30,3 +30,6 @@ the credential lock, avoiding supplementary-group copies for scalar getters.
 `HostProcessState` names the hosted phase labels. `HostProcessPhase` is a
 state/exit-code snapshot read by `phase` under the process lock. `setState`
 updates the canonical phase through the PID-checked native operation.
+
+`children` snapshots live child PIDs from native parent fields under the
+process lock, including processes allocated without hosted callback metadata.

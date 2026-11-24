@@ -144,7 +144,6 @@ export class Kern {
     const p = new Proc({ pgid: pid, cmd: "thsh", argv: ["thsh"], cwd: home, env, io }, this.canonical.create(pid, 1, cred));
     p.state = "run";
     this.procs.set(pid, p);
-    requireValue(this.procs.get(1) ?? null, "this.procs.get(1)").kids.add(pid);
     this.log(`tty: session pid=${pid} uid=${credUid(cred)}`);
     return p;
   }
@@ -237,7 +236,6 @@ export class Kern {
     }
     p.mask = par.mask;
     this.procs.set(pid, p);
-    par.kids.add(pid);
     this.sched.add(p, () => this.runMaterialised(p, path, node, argv));
     return p;
   }
@@ -343,7 +341,6 @@ export class Kern {
     const parent = requireValue(par ?? owner ?? init, "canonical reaper");
     this.canonical.reap(parent.native, pid);
     this.procs.delete(pid);
-    parent.kids.delete(pid);
   }
 
   kill(id: number, sig: Sig, by: Proc): number {

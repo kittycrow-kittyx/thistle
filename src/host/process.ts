@@ -2,7 +2,7 @@ import { thistleProcessFinish, thistleProcessSetHostState } from "../native/proc
 import { bad } from "../core/err.js";
 import type { ProcCred } from "../fs/vfs.js";
 import {
-  C_PROCESS_LOCK, C_CREDENTIAL_LOCK, P_PID, P_RUID, P_EUID, P_SUID,
+  C_PROCESS_LOCK, C_PROCESS_CAPACITY, C_CREDENTIAL_LOCK, P_PID, P_RUID, P_EUID, P_SUID,
   P_RGID, P_EGID, P_SGID, P_FSUID, P_FSGID, P_GROUP_COUNT, P_UMASK, P_PPID, P_PGID, P_STATE, P_EXIT_CODE,
   THISTLE_PROCESS_RUNNABLE, THISTLE_PROCESS_WAITING, THISTLE_PROCESS_ZOMBIE,
   THISTLE_PROCESS_RUNNING, THISTLE_PROCESS_STOPPED,
@@ -10,6 +10,7 @@ import {
 import { atomicStoreI32, loadI32, loadU32, storeU32 } from "../native/memory.js";
 import type { ThistleMemory } from "../native/memory.js";
 import { readGroup } from "../native/credentials.js";
+import { processAt } from "../native/state.js";
 import { thistleProcessInstallCredentials, thistleProcessRecord, thistleProcessIdentity, thistleProcessGroups, thistleProcessUmask } from "../native/process-state.js";
 import { withNativeLock, withImage, checkNative } from "./native-access.js";
 
@@ -62,6 +63,17 @@ export class HostProcess {
 
   get parentPid(): number { return this.withRecord(record => loadU32(this.memory, record + P_PPID)); }
   get groupId(): number { return this.withRecord(record => loadU32(this.memory, record + P_PGID)); }
+
+  get children(): ReadonlySet<number> {
+    return this.withRecord(() => {
+      const children = new Set<number>(), count = loadU32(this.memory, C_PROCESS_CAPACITY);
+      for (let slot = 0; slot < count; slot++) {
+        const proc = processAt(this.memory, slot);
+        if (loadU32(this.memory, proc + P_STATE) !== 0 && loadU32(this.memory, proc + P_PPID) === this.pid) children.add(loadU32(this.memory, proc + P_PID));
+      }
+      return children;
+    });
+  }
 
   set groupId(value: number) {
     if (!Number.isInteger(value) || value < 1 || value >= 0xffffffff) bad("EINVAL", "process group ID");

@@ -18,3 +18,5 @@ Credential getters return snapshots. Use `Sys` or the trusted constructor/valida
 `state` and `code` read canonical process lifecycle fields. `completed` reports
 that host cleanup and the completion promise have finished, which can occur
 after native exit. The completed exit receipt remains readable after reaping.
+
+`kids` is a read-only snapshot of canonical child membership.

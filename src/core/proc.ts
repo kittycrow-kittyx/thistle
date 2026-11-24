@@ -74,7 +74,7 @@ export class Proc {
   readonly born = Date.now();
   readonly ac = new AbortController();
   readonly fds = new Map<number, Fd>();
-  readonly kids = new Set<number>();
+  get kids(): ReadonlySet<number> { return this.native.children; }
   allHeld = false;
   signalMask = 0n;
   private pending: Sig | null = null;

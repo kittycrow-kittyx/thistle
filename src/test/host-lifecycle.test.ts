@@ -26,6 +26,7 @@ test("host callback phases and ready snapshots read canonical process state", as
   }));
   const child = sys.start("phase", []), memory = kernel.canonical.memory;
   assert.equal(child.state, "ready");
+  assert.ok(parent.kids.has(child.pid));
   const ready = kernel.sched.ready;
   assert.ok(ready.includes(child.pid));
   ready.length = 0;
@@ -52,7 +53,19 @@ test("host callback phases and ready snapshots read canonical process state", as
   child.end(99);
   assert.equal(child.code, 7);
   assert.equal(await sys.wait(child.pid), 7);
+  assert.ok(!parent.kids.has(child.pid));
   assert.equal(child.code, 7);
   assert.throws(() => child.native.phase, { code: "ESRCH" });
   assert.equal(thistleProcessSetHostState(memory, child.native.hart, child.pid, THISTLE_PROCESS_RUNNING), -3);
+});
+
+test("child membership follows native allocation without a hosted registration", () => {
+  const kernel = new Kern(), output = new MemOut();
+  const parent = kernel.session({ sin: new MemIn(), sout: output, serr: output });
+  const child = kernel.canonical.create(kernel.canonical.nextPid(), parent.pid, parent.cred);
+  assert.ok(!kernel.procs.has(child.pid));
+  assert.ok(parent.kids.has(child.pid));
+  child.finish(0);
+  kernel.canonical.reap(parent.native, child.pid);
+  assert.ok(!parent.kids.has(child.pid));
 });
