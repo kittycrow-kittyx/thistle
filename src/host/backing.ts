@@ -321,9 +321,7 @@ export class HostBacking {
 
   /** Select the byte registry associated with the process's canonical mount. */
   static forMapping(process: HostProcess): HostBacking {
-    const backing = HostBacking.mounts.get(process.memory) ?? null;
-    if (backing === null) bad("EIO", "mount has no byte carrier registry");
-    return backing;
+    return HostBacking.mounts.get(process.memory) ?? bad("EIO", "mount has no byte carrier registry");
   }
 
   private mappingStorage<T>(process: HostProcess, index: number, write: boolean,
