@@ -502,12 +502,29 @@ export const thistleVfsReadData = (memory: ThistleMemory, inode: U32, offset: U6
 };
 
 /** Descriptor read policy is independent of the output transport. */
-export const descriptorReadStatus = (memory: ThistleMemory, state: Ptr): I32 => {
+export const descriptorAccessStatus = (memory: ThistleMemory, state: Ptr, rights: U32): I32 => {
   const kind = loadU32(memory, state + FD_KIND);
   if (kind === THISTLE_FD_DIRECTORY) return -21;
-  if (kind !== THISTLE_FD_FILE || (loadU32(memory, state + FD_FLAGS) & THISTLE_FD_READ) === 0) return -9;
+  if (kind !== THISTLE_FD_FILE || (loadU32(memory, state + FD_FLAGS) & rights) === 0) return -9;
   return 0;
 };
+
+export const descriptorReadStatus = (memory: ThistleMemory, state: Ptr): I32 =>
+  descriptorAccessStatus(memory, state, THISTLE_FD_READ);
+
+/** Bound the transfer by the file's current size, independent of byte storage. */
+export const descriptorReadCount = (memory: ThistleMemory, state: Ptr, requested: U32): U32 => {
+  const offset = loadU64(memory, state + FD_OFFSET);
+  const size = thistleVfsFileSize(memory, loadU32(memory, state + FD_INODE));
+  if (offset >= size) return 0;
+  const available = size - offset;
+  return available < ux(word(requested)) ? wordToU32(available) : requested;
+};
+
+/** Append selects EOF at the time of the write. Caller holds the VFS lock. */
+export const descriptorWriteOffset = (memory: ThistleMemory, state: Ptr): U64 =>
+  (loadU32(memory, state + FD_FLAGS) & THISTLE_FD_APPEND) !== 0
+    ? thistleVfsFileSize(memory, loadU32(memory, state + FD_INODE)) : loadU64(memory, state + FD_OFFSET);
 
 /** Read arena bytes through a live descriptor and advance only on success. */
 export const thistleVfsReadDescriptor = (memory: ThistleMemory, state: Ptr, output: Ptr, length: U32): I32 => {

@@ -49,3 +49,5 @@ Path resolution checks that the current component is a searchable directory befo
 
 `arenaInodeStatus` checks payload inode kind and rejects host-backed storage
 with `-EXDEV`; native arena reads and writes share this check.
+
+`descriptorAccessStatus` checks an open regular file for any of the requested access bits. `descriptorReadCount` bounds a requested transfer by EOF. `descriptorWriteOffset` chooses the current EOF for append or the live cursor otherwise.

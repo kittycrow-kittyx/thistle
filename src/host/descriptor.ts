@@ -93,6 +93,12 @@ export class HostDescriptor {
     });
   }
 
+  /** Storage transports borrow a live descriptor and the VFS lock synchronously. */
+  withStorage<T>(operation: (state: number) => T): T {
+    const memory = this.process.memory;
+    return this.access(state => withVfsLock(memory, () => operation(state)));
+  }
+
   get kind(): number { return this.access(state => loadU32(this.process.memory, state + FD_KIND)); }
   get inode(): number { return this.access(state => loadU32(this.process.memory, state + FD_INODE)); }
 

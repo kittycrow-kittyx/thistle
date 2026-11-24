@@ -1,7 +1,7 @@
 import {
   C_VFS_DENTRY_CAPACITY, C_VFS_DENTRY_COUNT, C_VFS_DIRTY, C_VFS_GENERATION,
   C_VFS_INODE_CAPACITY, C_VFS_INODE_COUNT, D_INODE, D_NAME, D_NAME_HASH,
-  D_NAME_LENGTH, D_PARENT, FD_KIND, FD_FLAGS, FD_INODE, FD_OFFSET, THISTLE_FD_FILE, THISTLE_FD_DIRECTORY, THISTLE_FD_WRITE, THISTLE_FD_APPEND, P_FSGID, P_FSUID, THISTLE_CONTROL_BASE,
+  D_NAME_LENGTH, D_PARENT, FD_INODE, FD_OFFSET, THISTLE_FD_WRITE, P_FSGID, P_FSUID, THISTLE_CONTROL_BASE,
   THISTLE_VFS_INODE_STRIDE, THISTLE_VFS_KIND_CHARACTER, THISTLE_VFS_KIND_DIRECTORY,
   THISTLE_VFS_KIND_FILE, THISTLE_VFS_KIND_LINK, V_ATIME, V_CAPACITY, V_CTIME,
   V_DATA, V_FLAGS, V_VERSION, V_IDENTITY, THISTLE_VFS_HOST_BACKING, V_GID, V_KIND, V_MODE, V_MTIME, V_NLINK, V_SIZE, V_UID,
@@ -13,7 +13,7 @@ import type { ThistleMemory } from "./memory.js";
 import type { I32, Ptr, U32, U64 } from "./types.js";
 import {
   allocateData, allowed, arenaInodeStatus, residentFits, growData, dentryAt, findChild, hashBytes, inodeAt, parentOf,
-  sameName, thistleVfsKind, thistleVfsRelease, thistleVfsCwdHeld, thistleVfsFileSize, validName,
+  sameName, thistleVfsKind, thistleVfsRelease, thistleVfsCwdHeld, descriptorAccessStatus, descriptorWriteOffset, validName,
 } from "./vfs.js";
 
 // These operations run while the canonical kernel's VFS lock is held.
@@ -188,14 +188,13 @@ const writeInodeData = (
 
 /** Descriptor authority comes from open flags, including after rename or unlink. */
 export const thistleVfsWriteDescriptor = (memory: ThistleMemory, state: Ptr, input: Ptr, length: U32, now: U64): I32 => {
-  const kind = loadU32(memory, state + FD_KIND), flags = loadU32(memory, state + FD_FLAGS);
-  if (kind === THISTLE_FD_DIRECTORY) return -21;
-  if (kind !== THISTLE_FD_FILE || (flags & THISTLE_FD_WRITE) === 0) return -9;
+  const status = descriptorAccessStatus(memory, state, THISTLE_FD_WRITE);
+  if (status !== 0) return status;
   if (length === 0) return 0;
   if (!inputContains(memory, input, length)) return -14;
   const inode = loadU32(memory, state + FD_INODE);
   if ((loadU32(memory, inodeAt(memory, inode) + V_FLAGS) & THISTLE_VFS_HOST_BACKING) !== 0) return -18;
-  const offset = (flags & THISTLE_FD_APPEND) !== 0 ? thistleVfsFileSize(memory, inode) : loadU64(memory, state + FD_OFFSET);
+  const offset = descriptorWriteOffset(memory, state);
   if (offset > 0x7fffffffn) return -27;
   const amount = writeInodeData(memory, inode, input, length, wordToU32(offset), false, now);
   if (amount > 0) storeU64(memory, state + FD_OFFSET, offset + ux(word(amount)));

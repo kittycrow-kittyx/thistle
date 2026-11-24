@@ -7,3 +7,5 @@
 `find` returns a live slot view or null; `active` captures occupied slots and identities under the descriptor lock.
 
 `readFile`, `writeFile` and `seekFile` invoke native descriptor operations while retaining the slot and VFS locks. Host-backed payloads return `EXDEV` until the carrier transport is selected. Host calls transfer at most 1 MiB per read or write.
+
+`withStorage` lends a validated descriptor record to a synchronous byte transport under the descriptor and VFS locks. Do not retain the pointer or await inside the callback.
