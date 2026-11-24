@@ -19,3 +19,5 @@ Character descriptor reads and writes delegate only byte transport to the regist
 `copyTo` copies a live native slot to a target process and descriptor number, checking both lifetimes and preserving the inode reference even after unlink.
 
 `inodeView` captures a live inode and incarnation from a descriptor under its native lock. Stream-only descriptors return null.
+
+`replaceFile` replaces a regular file through the open descriptor and preserves its offset. A registered byte transport may promote an arena inode without changing the inode or open slot.

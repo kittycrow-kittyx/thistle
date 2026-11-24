@@ -26,3 +26,5 @@ host adapter.
 The descriptor operation selects materialisation (`0`), ordinary writing (`1`) or trusted restoration (`2`). Restoration requires filesystem UID zero and preserves the inode's image metadata while installing its resident bytes or lazy logical size. Version, quota and range checks apply to all three operations.
 
 `thistleVfsCommitDescriptorBacking` publishes a materialisation or write using an open descriptor's rights, while holding the descriptor and VFS locks. Materialisation preserves its cursor; a successful write advances it from the canonical write offset by the transferred length. Trusted restoration is not available through descriptors.
+
+Descriptor operation `3` replaces the complete resident payload, clears set-ID bits, updates timestamps and preserves the descriptor cursor. It requires write rights; size and resident length must match. Ordinary descriptor writes may promote an arena inode to a carrier without changing inode identity.

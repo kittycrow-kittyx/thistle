@@ -166,6 +166,13 @@ export class HostInode {
     return process.withFilesystem(record => { this.recordLocked(); return operation(record); });
   }
 
+  /** Check access against live canonical filesystem credentials. */
+  need(process: HostProcess, bits: number): void {
+    this.access(process, record => {
+      if (!thistleVfsAccess(this.memory, record, this.ino, bits)) bad("EACCES", "inode access denied");
+    });
+  }
+
   read(process: HostProcess, offset: bigint, length: number): Uint8Array {
     if (offset < 0n || offset > 0xffffffffffffffffn || !Number.isSafeInteger(length) || length < 0 || length > 0x7fffffff) bad("EINVAL", "invalid inode read range");
     return withImage(this.memory, Math.max(1, length), input => this.access(process, record => {

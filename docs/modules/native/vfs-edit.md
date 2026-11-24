@@ -39,3 +39,5 @@ Removing or replacing a directory held as a process cwd returns `EBUSY`. Renamin
 `thistleVfsOpenPath` resolves the original path and validates Linux access, creation, exclusive, truncate, append, directory, no-follow and close-on-exec flags. Creation applies the canonical umask and checks slot capacity before mutation. Truncating an existing writable file discards its payload and invalidates its revision without loading a lazy provider. Dangling final symlink creation follows the target when allowed.
 
 `thistleVfsCreateSymlink` accepts a reserved buffer containing two 32-bit lengths followed by the name and target bytes. It validates both strings, reserves the inode and target, and attaches the completed inode atomically. Failed attachment clears the unpublished inode. A failed operation does not advance namespace generation.
+
+`thistleVfsReplaceDescriptor` replaces an arena file through its open write rights without moving its cursor. Quota and allocation failures leave the old payload intact.

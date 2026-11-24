@@ -35,3 +35,5 @@ The registry is bound to its root inode incarnation. A remount expires the regis
 `CarrierDescriptor` supplies a synchronous, incarnation-checked storage lease. `readDescriptor` copies resident data and advances the native cursor; `writeDescriptor` uses canonical append and quota policy. `materialiseDescriptor` releases locks during provider I/O and validates the descriptor and payload revision on completion. A lazy carrier returns `EAGAIN` until materialised. No pathname or current inode mode check replaces open-file authority.
 
 A mount has one registered host byte carrier registry per root incarnation. `forDescriptor` selects it using the canonical inode's carrier handle; arena descriptors return null. Remounting replaces the registry binding without adding filesystem state.
+
+`forWritableDescriptor` selects the mounted byte transport for a regular descriptor, including arena files. `replaceDescriptor` atomically replaces the whole resident payload without loading the discarded content or moving the cursor. `readView` uses the existing inode incarnation for provider completion.

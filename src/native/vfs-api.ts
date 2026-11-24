@@ -6,4 +6,4 @@ export { descriptorAt, releaseDescriptor, installDescriptor, copyDescriptor, fre
   thistleVfsLoaded,
   thistleVfsResolve,
   thistleVfsRoot, } from "./vfs.js";
-export { thistleVfsWriteScratch, thistleVfsOpenPath, thistleVfsWriteDescriptor } from "./vfs-edit.js";
+export { thistleVfsWriteScratch, thistleVfsOpenPath, thistleVfsWriteDescriptor, thistleVfsReplaceDescriptor } from "./vfs-edit.js";

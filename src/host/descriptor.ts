@@ -3,7 +3,7 @@ import { HostBacking } from "./backing.js";
 import { readDevice, writeDevice } from "./devices.js";
 import { C_CREDENTIAL_LOCK, FD_FLAGS, FD_IDENTITY, FD_INODE, FD_KIND, FD_OFFSET, P_DESCRIPTOR_CAPACITY, THISTLE_FD_EMPTY, THISTLE_FD_HOST } from "../native/abi.js";
 import { loadU32, loadU64, storeU32, storeU64 } from "../native/memory.js";
-import { descriptorAt, freeDescriptor, installDescriptor, copyDescriptor, releaseDescriptor, thistleVfsIdentity, thistleVfsOpenInode, thistleVfsReadDescriptor, thistleVfsSeekDescriptor, thistleVfsWriteDescriptor, thistleVfsOpenPath } from "../native/vfs-api.js";
+import { descriptorAt, freeDescriptor, installDescriptor, copyDescriptor, releaseDescriptor, thistleVfsIdentity, thistleVfsOpenInode, thistleVfsReadDescriptor, thistleVfsSeekDescriptor, thistleVfsWriteDescriptor, thistleVfsReplaceDescriptor, thistleVfsOpenPath } from "../native/vfs-api.js";
 import { checkNative, withVfsLock, withNativeLock, withImage } from "./native-access.js";
 import type { HostProcess } from "./process.js";
 import { HostInode } from "./inode.js";
@@ -177,7 +177,7 @@ export class HostDescriptor {
   writeFile(bytes: Uint8Array): number {
     const device = writeDevice(this, bytes.subarray(0, 1048576));
     if (device !== null) return device;
-    const backing = HostBacking.forDescriptor(this);
+    const backing = HostBacking.forWritableDescriptor(this);
     if (backing !== null) return backing.writeDescriptor(this, bytes);
     const memory = this.process.memory, amount = Math.min(bytes.length, 1048576);
     return withImage(memory, Math.max(1, amount), input => this.access(state => withVfsLock(memory, () => {
@@ -186,6 +186,17 @@ export class HostDescriptor {
       checkNative(count);
       return count;
     })));
+  }
+
+  /** Replace a regular file while retaining its open authority and cursor. */
+  replaceFile(bytes: Uint8Array): void {
+    const backing = HostBacking.forWritableDescriptor(this);
+    if (backing !== null) { backing.replaceDescriptor(this, bytes); return; }
+    const memory = this.process.memory;
+    withImage(memory, Math.max(1, bytes.length), input => this.withStorage(state => {
+      memory.bytes.set(bytes, input);
+      checkNative(thistleVfsReplaceDescriptor(memory, state, input, bytes.length, BigInt(Date.now())));
+    }));
   }
 
   /** Await byte transport before synchronous file I/O, without changing the cursor. */

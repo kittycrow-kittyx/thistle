@@ -11,3 +11,5 @@ Directory entry creation, hard links, rename and unlink pass through native VFS 
 `inodeKind` maps native file, directory, link and character kinds to `f`, `d`, `l` and `c`; an unknown kind raises `EIO`.
 
 `symlink` marshals both the entry name and target into the native atomic creation operation. It never exposes an empty intermediate symlink to another caller.
+
+`need` checks the requested access bits against the live process and inode using native permission policy.

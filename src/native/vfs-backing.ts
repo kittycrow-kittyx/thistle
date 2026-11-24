@@ -47,7 +47,7 @@ export const thistleVfsCommitBacking = (
 const publishBacking = (memory: ThistleMemory, inode: U32, expected: U64, descriptor: Ptr, now: U64): I32 => {
   const handle = loadU32(memory, descriptor), write = loadU32(memory, descriptor + 4);
   const size = loadU64(memory, descriptor + 8), resident = loadU64(memory, descriptor + 16);
-  if (handle === 0 || write > 2 || size > 0x1fffffffffffffn || resident > size) return -22;
+  if (handle === 0 || write > 3 || size > 0x1fffffffffffffn || resident > size) return -22;
   const state = inodeAt(memory, inode);
   if (loadU64(memory, state + V_VERSION) !== expected) return -11;
   const oldSize = loadU64(memory, state + V_SIZE);
@@ -62,7 +62,7 @@ const publishBacking = (memory: ThistleMemory, inode: U32, expected: U64, descri
   storeU64(memory, state + V_SIZE, size);
   storeU64(memory, state + V_RESIDENT, resident);
   storeU64(memory, state + V_VERSION, expected + 1n);
-  if (write === 1) {
+  if (write === 1 || write === 3) {
     storeU32(memory, state + V_MODE, loadU32(memory, state + V_MODE) & ~0o6000);
     storeU64(memory, state + V_MTIME, now);
     storeU64(memory, state + V_CTIME, now);
@@ -78,11 +78,12 @@ export const thistleVfsCommitDescriptorBacking = (
 ): I32 => {
   if (!inputContains(memory, descriptor, 24)) return -14;
   const operation = loadU32(memory, descriptor + 4);
-  if (operation > 1 || (operation === 0 && length !== 0)) return -22;
+  if (operation > 3 || operation === 2 || (operation !== 1 && length !== 0)) return -22;
   const status = descriptorAccessStatus(memory, state, operation === 0 ? THISTLE_FD_READ | THISTLE_FD_WRITE : THISTLE_FD_WRITE);
   if (status !== 0) return status;
   const inode = loadU32(memory, state + FD_INODE);
-  if (thistleVfsBacking(memory, inode) === 0) return -18;
+  if (operation === 0 && thistleVfsBacking(memory, inode) === 0) return -18;
+  if (operation === 3 && loadU64(memory, descriptor + 8) !== loadU64(memory, descriptor + 16)) return -22;
   const next = descriptorWriteOffset(memory, state) + u32word(length);
   if (operation === 1 && (length === 0 || next > loadU64(memory, descriptor + 8) ||
       next > 0x1fffffffffffffn)) return -22;

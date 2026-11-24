@@ -4,10 +4,10 @@ import { SourceLoad } from "./bytes.js";
 import { HostInode } from "./inode.js";
 import type { HostProcess } from "./process.js";
 import type { RegSource } from "./bytes.js";
-import { C_VFS_INODE_CAPACITY, FD_INODE, FD_OFFSET, THISTLE_FD_READ, THISTLE_FD_WRITE } from "../native/abi.js";
+import { C_VFS_INODE_CAPACITY, FD_INODE, FD_KIND, FD_OFFSET, THISTLE_FD_READ, THISTLE_FD_WRITE, THISTLE_FD_FILE, V_DATA } from "../native/abi.js";
 import { loadU32, loadU64, storeU32, storeU64 } from "../native/memory.js";
 import type { ThistleMemory } from "../native/memory.js";
-import { thistleVfsAccess, thistleVfsFileSize, thistleVfsRoot, thistleVfsIdentity, descriptorAccessStatus, descriptorReadCount, descriptorWriteOffset, residentFits } from "../native/vfs.js";
+import { thistleVfsAccess, thistleVfsFileSize, thistleVfsRoot, thistleVfsIdentity, descriptorAccessStatus, descriptorReadCount, descriptorWriteOffset, residentFits, inodeAt, arenaInodeStatus } from "../native/vfs.js";
 import { thistleVfsBacking, thistleVfsBackingVersion, thistleVfsCommitBacking, thistleVfsCommitDescriptorBacking } from "../native/vfs-backing.js";
 
 /** Live descriptor capability; the callback holds its lifetime and VFS locks. */
@@ -26,7 +26,7 @@ interface BackingUpdate {
   readonly payload: Payload;
   readonly size: number;
   readonly expected: bigint;
-  readonly operation: 0 | 1 | 2;
+  readonly operation: 0 | 1 | 2 | 3;
 }
 
 const restoredPayload = (source: RegSource | Uint8Array): { payload: Payload; size: number } => {
@@ -66,6 +66,17 @@ export class HostBacking {
       if (thistleVfsBacking(memory, loadU32(memory, state + FD_INODE)) === 0) return null;
       const backing = HostBacking.mounts.get(memory) ?? bad("EIO", "mount has no byte carrier registry");
       backing.checkMountLocked();
+      return backing;
+    });
+  }
+
+  /** A mounted host can promote arena files to byte carriers when they grow. */
+  static forWritableDescriptor(descriptor: CarrierDescriptor): HostBacking | null {
+    const memory = descriptor.process.memory;
+    return descriptor.withStorage(state => {
+      if (loadU32(memory, state + FD_KIND) !== THISTLE_FD_FILE) return null;
+      const backing = HostBacking.mounts.get(memory) ?? null;
+      if (backing !== null) backing.checkMountLocked();
       return backing;
     });
   }
@@ -145,7 +156,12 @@ export class HostBacking {
   }
 
   async read(inode: number, process: HostProcess): Promise<Uint8Array> {
-    const view = new HostInode(this.memory, inode);
+    return this.readView(new HostInode(this.memory, inode), process);
+  }
+
+  /** Load a carrier through the caller's already resolved inode incarnation. */
+  async readView(view: HostInode, process: HostProcess): Promise<Uint8Array> {
+    const inode = view.ino;
     const snapshot = view.access(process, proc => {
       this.checkMountLocked();
       if (!thistleVfsAccess(this.memory, proc, inode, 4)) bad("EACCES", "backing read denied");
@@ -209,12 +225,43 @@ export class HostBacking {
     }));
   }
 
+  private residentBytes(inode: number): Uint8Array {
+    const handle = thistleVfsBacking(this.memory, inode);
+    if (handle !== 0) {
+      const payload = this.payloads.get(handle) ?? bad("EIO", "missing host byte carrier");
+      return payload.bytes ?? bad("EAGAIN", "lazy descriptor requires materialisation");
+    }
+    checkNative(arenaInodeStatus(this.memory, inode));
+    const size = Number(thistleVfsFileSize(this.memory, inode));
+    const at = loadU32(this.memory, inodeAt(this.memory, inode) + V_DATA);
+    if (size > this.memory.bytes.length - at) bad("EIO", "invalid arena payload range");
+    return this.memory.bytes.subarray(at, at + size);
+  }
+
+  private withWritable<T>(descriptor: CarrierDescriptor, operation: (state: number, inode: number) => T): T {
+    if (descriptor.process.memory !== this.memory) bad("EINVAL", "descriptor backing instance mismatch");
+    return descriptor.withStorage(state => {
+      this.checkMountLocked();
+      checkNative(descriptorAccessStatus(this.memory, state, THISTLE_FD_WRITE));
+      return operation(state, loadU32(this.memory, state + FD_INODE));
+    });
+  }
+
+  /** Replace bytes via open rights, preserving the cursor and failing before publication on quota errors. */
+  replaceDescriptor(descriptor: CarrierDescriptor, bytes: Uint8Array): void {
+    withImage(this.memory, 24, input => this.withWritable(descriptor, (state, inode) => {
+      this.commit({ inode, payload: { bytes: bytes.slice(), source: null }, size: bytes.length,
+        expected: thistleVfsBackingVersion(this.memory, inode), operation: 3 }, { record: state, length: 0 }, input);
+      this.collectLocked();
+    }));
+  }
+
   /** Write resident carrier bytes using canonical append/offset and quota policy. */
   writeDescriptor(descriptor: CarrierDescriptor, bytes: Uint8Array): number {
-    return withImage(this.memory, 24, input => this.descriptorStorage(descriptor, THISTLE_FD_WRITE, (state, inode, payload) => {
+    return withImage(this.memory, 24, input => this.withWritable(descriptor, (state, inode) => {
       const amount = Math.min(bytes.length, 1048576);
       if (amount === 0) return 0;
-      const previous = payload.bytes ?? bad("EAGAIN", "lazy descriptor requires materialisation");
+      const previous = this.residentBytes(inode);
       const offset = descriptorWriteOffset(this.memory, state), end = offset + BigInt(amount);
       if (end > BigInt(Number.MAX_SAFE_INTEGER)) bad("EFBIG", "carrier size exceeds host integer range");
       const size = Math.max(previous.length, Number(end));

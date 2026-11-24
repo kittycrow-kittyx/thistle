@@ -340,6 +340,14 @@ export const thistleVfsWriteDescriptor = (memory: ThistleMemory, state: Ptr, inp
   return writeDescriptorData(memory, state, input, length, now);
 };
 
+/** Replace an opened file without changing its descriptor offset. */
+export const thistleVfsReplaceDescriptor = (memory: ThistleMemory, state: Ptr, input: Ptr, length: U32, now: U64): I32 => {
+  const status = descriptorAccessStatus(memory, state, THISTLE_FD_WRITE);
+  if (status !== 0) return status;
+  if (length !== 0 && !inputContains(memory, input, length)) return -14;
+  return writeInodeData(memory, loadU32(memory, state + FD_INODE), input, length, 0, true, now);
+};
+
 /** The mounted RV64 syscall supplies bytes in the locked kernel scratch region. */
 export const thistleVfsWriteScratch = (memory: ThistleMemory, state: Ptr, length: U32, now: U64): I32 => {
   if (length > THISTLE_VFS_PATH_CAPACITY) return -22;

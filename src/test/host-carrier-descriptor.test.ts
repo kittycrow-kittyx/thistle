@@ -70,3 +70,35 @@ test("a lazy descriptor materialises through the installed mount registry", asyn
   assert.equal(loads, 1);
   fd.close();
 });
+
+test("open authority promotes arena files and atomically replaces content", () => {
+  const memory = mountedKernel(), process = new HostProcess(memory, 0);
+  assert.equal(thistleVfsSetQuota(memory, 2048n), 0);
+  const root = HostInode.resolve(process, "/"), file = root.create(process, "arena", 1, 0o600);
+  file.write(process, Uint8Array.of(1, 2, 3), 0, true);
+  const backing = new HostBacking(memory);
+  const fd = HostDescriptor.open(process, file, THISTLE_FD_READ | THISTLE_FD_WRITE);
+  fd.offset = 1;
+  assert.equal(fd.writeFile(Uint8Array.of(9)), 1);
+  assert.deepEqual(backing.snapshot(file, process), Uint8Array.of(1, 9, 3));
+  fd.replaceFile(Uint8Array.of(6, 7));
+  assert.equal(fd.offset, 2);
+  assert.throws(() => fd.replaceFile(new Uint8Array(2048)), { code: "ENOSPC" });
+  assert.deepEqual(backing.snapshot(file, process), Uint8Array.of(6, 7));
+  fd.seekFile(0, 0);
+  assert.deepEqual(fd.readFile(8), Uint8Array.of(6, 7));
+  fd.close();
+});
+
+test("replacement discards lazy bytes without loading the provider", () => {
+  const memory = mountedKernel(), process = new HostProcess(memory, 0);
+  assert.equal(thistleVfsSetQuota(memory, 1024n), 0);
+  const root = HostInode.resolve(process, "/"), file = root.create(process, "lazy", 1, 0o600);
+  const backing = new HostBacking(memory);
+  backing.setSource(file.ino, process, { size: 8, sum: "", head: null,
+    load: () => { throw new Error("replacement must not load a discarded provider"); } });
+  const fd = HostDescriptor.open(process, file, THISTLE_FD_WRITE);
+  fd.replaceFile(Uint8Array.of(42));
+  assert.deepEqual(backing.snapshot(file, process), Uint8Array.of(42));
+  fd.close();
+});
