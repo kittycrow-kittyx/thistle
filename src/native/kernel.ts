@@ -714,6 +714,8 @@ export const thistleReadDescriptor = (
   return amount;
 };
 
+// Lock the descriptor before the VFS: SEEK_END reads the live inode size.
+// Reject negative or overflowing offsets before publishing the new cursor.
 export const thistleSeekDescriptor = (
   memory: ThistleMemory,
   hart: U32,
