@@ -45,7 +45,9 @@ test("truncate preserves the opened inode, cursor and write-only authority", asy
   assert.equal(descriptor.offset, 2);
   sys.rm("/renamed");
   await descriptor.resizeFile(1);
-  assert.equal(descriptor.inodeView()?.metadata().size ?? null, 1n);
+  const inode = descriptor.inodeView();
+  assert.ok(inode);
+  assert.equal(inode.metadata().size, 1n);
   assert.equal(descriptor.offset, 2);
   descriptor.close();
 });
