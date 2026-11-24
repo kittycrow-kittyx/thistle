@@ -1207,9 +1207,9 @@ export class Rv64 {
   }
 
   private path(fd0: bigint, p: string): string {
-    if (p.startsWith("/")) return norm(p);
+    if (p.startsWith("/")) return p;
     const fd = hostNumber(fd0, "directory descriptor");
-    if (fd === AT_FDCWD) return norm(p, this.s.cwd);
+    if (fd === AT_FDCWD) return this.s.cwd === "/" ? "/" + p : this.s.cwd + "/" + p;
     const base = this.s.fdPath(fd);
     if (this.s.fdStat(fd).kind !== "dir") bad("ENOTDIR", base);
     return base === "/" ? "/" + p : base + "/" + p;
@@ -1464,7 +1464,7 @@ break; }
     this.mem(at, 120, true); this.m.write(at, new Uint8Array(120));
     this.m.set64(at, 0x54484953); this.m.set64(at + 8n, bs);
     this.m.set64(at + 16n, blocks); this.m.set64(at + 24n, Math.max(0, blocks - hit)); this.m.set64(at + 32n, Math.max(0, blocks - hit));
-    this.m.set64(at + 40n, files); this.m.set64(at + 48n, Math.max(0, files - this.s.k.fs.root.ent.size));
+    this.m.set64(at + 40n, files); this.m.set64(at + 48n, Math.max(0, files - this.s.k.fs.inodeCount()));
     this.m.set32(at + 56n, 0x5448); this.m.set32(at + 60n, 0x4953);
     this.m.set64(at + 64n, 255); this.m.set64(at + 72n, bs); this.m.set64(at + 80n, 0);
     return 0n;

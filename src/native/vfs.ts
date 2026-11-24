@@ -463,6 +463,14 @@ export const thistleVfsChdirInode = (memory: ThistleMemory, proc: Ptr, inode: U3
   return 0;
 };
 
+/** Inherit an existing process cwd reference during trusted process construction. */
+export const thistleVfsInheritCwd = (memory: ThistleMemory, parent: Ptr, child: Ptr): I32 => {
+  const inode = loadU32(memory, parent + P_CWD_INODE);
+  if (thistleVfsKind(memory, inode) !== THISTLE_VFS_KIND_DIRECTORY) return -20;
+  storeU32(memory, child + P_CWD_INODE, inode);
+  return 0;
+};
+
 /** A directory used as cwd must not be deleted or replaced. Caller holds VFS lock. */
 export const thistleVfsCwdHeld = (memory: ThistleMemory, inode: U32): boolean => {
   const base = loadU32(memory, C_PROCESS_TABLE_BASE), count = loadU32(memory, C_PROCESS_CAPACITY);

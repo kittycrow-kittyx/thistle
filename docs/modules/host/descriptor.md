@@ -21,3 +21,5 @@ Character descriptor reads and writes delegate only byte transport to the regist
 `inodeView` captures a live inode and incarnation from a descriptor under its native lock. Stream-only descriptors return null.
 
 `replaceFile` replaces a regular file through the open descriptor and preserves its offset. A registered byte transport may promote an arena inode without changing the inode or open slot.
+
+`writeWhole` performs a single path-write transaction through the mounted carrier (or device callback); ordinary `writeFile` remains bounded to 1 MiB.

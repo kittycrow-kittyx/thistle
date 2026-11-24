@@ -188,6 +188,14 @@ export class HostDescriptor {
     })));
   }
 
+  /** Whole path-write transaction; ordinary descriptor writes retain bounded transfer size. */
+  writeWhole(bytes: Uint8Array): number {
+    const device = writeDevice(this, bytes);
+    if (device !== null) return device;
+    const backing = HostBacking.forWritableDescriptor(this) ?? bad("EXDEV", "whole write needs a mounted host carrier");
+    return backing.writeDescriptor(this, bytes, true);
+  }
+
   /** Replace a regular file while retaining its open authority and cursor. */
   replaceFile(bytes: Uint8Array): void {
     const backing = HostBacking.forWritableDescriptor(this);

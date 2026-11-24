@@ -215,3 +215,7 @@ Canonical directory changes and path reconstruction use dentries and process cwd
 `HostInode.symlink` creates a canonical symlink and its target bytes atomically. The production filesystem adapter will use this operation in place of mutable object nodes. Native failures leave no partially published link.
 
 Character-device opens retain native inode and descriptor authority. The explicit host device registry retains only callback capabilities, keyed by live inode incarnation. This is required for migrating `/dev` and `/proc` without an object filesystem or a second permissions implementation.
+
+## Production hosted root cutover
+
+`Kern` mounts its root in the existing canonical memory at construction. `Vfs` is a request facade over that mount and `VNode` subclasses are non-owning inode views. The old mutable object tree and detached-credential permission implementation are absent. `Sys` uses native inode descriptors for all ordinary files; `Proc.cwd` reads and changes the native cwd reference. `TreeFs` delegates root images to the canonical serializer and loader. RV64 file mapping retention, vfork descriptor snapshots and live overlay reconciliation remain explicit parity gates before promotion.

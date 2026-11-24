@@ -59,3 +59,5 @@ Character-device opens with the explicit host-transport flag bind a canonical in
 `copyDescriptor` copies kind, open rights, inode, offset and directory cursor into a destination slot under both descriptor locks and the VFS lock. It does not repeat path permission checks. The destination receives a new slot incarnation, and close-on-exec is explicitly selected by the caller. Offsets retain the existing independent-copy semantics, not POSIX shared open-file-description semantics.
 
 `thistleVfsChdirInode` changes cwd with the same search-rights check as path-based chdir. `thistleVfsDirectoryPath` reconstructs the unique directory path. `thistleVfsReadDescriptorEntry` reads directory entries using the open descriptor's retained rights; pathname and descriptor enumeration share the dentry cursor and record format.
+
+`thistleVfsInheritCwd` transfers an existing directory reference into a newly constructed child without rechecking pathname permissions. It requires both process records and the VFS lock.

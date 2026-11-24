@@ -24,3 +24,5 @@ Signal masks, deferred signals and the latest delivery live in native process
 metadata. `signal` and `setSignalMask` delegate policy there. The host abort
 controller carries delivery to JavaScript callbacks. Completed receipts retain
 the terminal signal alongside the exit code.
+
+`cwd` is reconstructed from native dentries; setting it uses canonical chdir. Child construction can inherit the existing cwd inode without a new path lookup. No hosted cwd string is stored.

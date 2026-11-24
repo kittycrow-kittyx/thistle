@@ -1,11 +1,12 @@
 import { HostContext } from "../host/context.js";
+import { inheritDirectory } from "../host/cwd.js";
 import { App } from "../apps/base.js";
 import { bad, KErr, msg, requireValue } from "./err.js";
 import { MemIn, MemOut, enc } from "../io/stream.js";
 import type { In, Out } from "../io/stream.js";
 import { Reg, Vfs } from "../fs/vfs.js";
-import { credGid, credUid, fullCred } from "../fs/vfs.js";
-import type { Cred, ProcCred } from "../fs/vfs.js";
+import { credUid, fullCred } from "../fs/vfs.js";
+import type { ProcCred } from "../fs/vfs.js";
 import { ExecReplace, Proc } from "./proc.js";
 import type { Fd, Io, Sig } from "./proc.js";
 import { Sched } from "./sched.js";
@@ -43,12 +44,6 @@ export interface PInfo {
 export interface Mnt { src: string; at: string; kind: string; opt: string; }
 
 const root = accountIdentity().cred;
-
-const procFsCred = (p: Proc): Cred => ({
-  uid: p.fsuid,
-  gid: p.fsgid,
-  groups: [...p.cred.groups],
-});
 
 function closeDistinctError(p: Proc): void {
   const error = p.fds.attachment(2), output = p.fds.attachment(1);
@@ -108,11 +103,11 @@ export class Kern {
   constructor(options: KernelOptions) {
     const { net, lim, config, setId, wasiGuest } = options;
     this.net = net; this.lim = lim; this.config = config; this.setId = setId; this.wasiGuest = wasiGuest;
-    this.fs = new Vfs(lim.fs);
     this.name = config.kernel.name;
     this.release = config.kernel.version;
     this.host = config.hostName;
     net.log = s => this.log(s);
+    this.fs = new Vfs(this.init().native, lim.fs);
   }
 
   setHalt(fn: () => void): void { this.haltFn = fn; }
@@ -127,6 +122,7 @@ export class Kern {
     if (this.procs.has(1)) return requireValue(this.procs.get(1) ?? null, "this.procs.get(1)");
     const z = new MemOut();
     const p = new Proc({ pgid: 1, cmd: "init", argv: ["init"], cwd: "/", env: this.baseEnv(), io: { sin: new MemIn(), sout: z, serr: z } }, this.canonical.create(1, 0, root));
+    p.mask = 0;
     p.state = "sleep";
     this.procs.set(1, p);
     this.log("init: process 1 entered service loop");
@@ -140,8 +136,12 @@ export class Kern {
     const env = this.baseEnv();
     env.set("HOME", home);
     env.set("USER", name);
-    env.set("PWD", home);
-    const p = new Proc({ pgid: pid, cmd: "thsh", argv: ["thsh"], cwd: home, env, io }, this.canonical.create(pid, 1, cred));
+    const p = new Proc({ pgid: pid, cmd: "thsh", argv: ["thsh"], cwd: "/", env, io }, this.canonical.create(pid, 1, cred));
+    try { p.cwd = home; }
+    catch (error) {
+      if (!(error instanceof KErr) || error.code !== "ENOENT") throw error instanceof Error ? error : new Error("session cwd failed");
+    }
+    env.set("PWD", p.cwd);
     holdStandardIo(io);
     p.state = "run";
     this.procs.set(pid, p);
@@ -162,24 +162,21 @@ export class Kern {
   install(a: App): void {
     this.reg(a);
     const p = `/bin/${a.name}`;
-    const c = root;
-    try { this.fs.mkfile(p, `#!thistle:${a.name}\n`, "/", c, 0o755); }
+    try { this.fs.mkfile(p, `#!thistle:${a.name}\n`, this.init().native, 0o755); }
     catch (e) { if (!(e instanceof KErr) || e.code !== "EEXIST") throw e instanceof Error ? e : new Error(typeof e === "string" ? e : "non-Error kernel exception"); }
   }
 
   which(name: string, p: Proc): string {
     if (name.includes("/")) {
-      const c = procFsCred(p);
-      const q = this.fs.at(name, p.cwd, c).path;
-      this.fs.need(this.fs.at(q, "/", c).node, c, 1, q);
-      return q;
+      const hit = this.fs.at(name, p.native);
+      this.fs.need(hit.node, p.native, 1);
+      return hit.path;
     }
     for (const d of (p.env.get("PATH") ?? "/bin").split(":")) {
       const q = `${d.replace(/\/$/, "")}/${name}`;
       try {
-        const c = procFsCred(p);
-        const h = this.fs.at(q, p.cwd, c);
-        this.fs.need(h.node, c, 1, q);
+        const h = this.fs.at(q, p.native);
+        this.fs.need(h.node, p.native, 1);
         if (h.node instanceof Reg) return h.path;
       } catch (error) {
         if (!(error instanceof KErr) || !["ENOENT", "ENOTDIR", "EACCES"].includes(error.code)) throw error instanceof Error ? error : new Error(typeof error === "string" ? error : "non-Error kernel exception");
@@ -216,8 +213,7 @@ export class Kern {
   start(name: string, argv: string[], par: Proc, opt: Start = emptyStart()): Proc {
     // Retain shared pipe endpoints before the child starts; explicit descriptor tables own their own references.
     const path = this.which(name, par);
-    const h = this.fs.at(path, par.cwd, procFsCred(par));
-    const node = h.node instanceof Reg ? h.node : bad("ENOEXEC", path);
+    const node = this.fs.executable(path, par.native);
     const pid = this.canonical.nextPid();
     const streams = opt.io;
     const io: Io = {
@@ -227,7 +223,9 @@ export class Kern {
     };
     if (!opt.fds) holdStandardIo(io);
     const cred = this.executableCred(path, node, par.cred);
-    const p = new Proc({ pgid: opt.pgid ?? pid, cmd: path, argv: [name, ...argv], cwd: opt.cwd ?? par.cwd, env: new Map(opt.env ?? par.env), io }, this.canonical.create(pid, par.pid, cred));
+    const p = new Proc({ pgid: opt.pgid ?? pid, cmd: path, argv: [name, ...argv], cwd: "/", env: new Map(opt.env ?? par.env), io }, this.canonical.create(pid, par.pid, cred));
+    if (opt.cwd === null) inheritDirectory(par.native, p.native);
+    else p.cwd = opt.cwd;
     if (opt.fds) {
       p.fds.clear(); p.allHeld = true;
       for (const [n, f] of opt.fds) p.fds.inherit(n, f);
@@ -249,14 +247,8 @@ export class Kern {
   }
 
   async exec(name: string, argv: string[], env: Map<string, string>, p: Proc): Promise<never> {
-    const credential = procFsCred(p);
-    const handle = this.fs.at(name, p.cwd, credential);
-
-    this.fs.need(handle.node, credential, 1, handle.path);
-
-    const node = handle.node instanceof Reg
-      ? handle.node
-      : bad("ENOEXEC", handle.path);
+    const handle = this.fs.at(name, p.native);
+    const node = this.fs.executable(handle.path, p.native);
 
     const image = (await node.materialise()).slice();
 

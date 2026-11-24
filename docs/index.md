@@ -58,6 +58,8 @@ bun run test
 - [core/sys](modules/core/sys.md)
 - [fs/tree](modules/fs/tree.md)
 - [fs/vfs](modules/fs/vfs.md)
+- [fs/nodes](modules/fs/nodes.md)
+- [fs/paths](modules/fs/paths.md)
 - [io/stream](modules/io/stream.md)
 - [io/tty](modules/io/tty.md)
 - [native/abi](modules/native/abi.md)
@@ -154,6 +156,7 @@ bun run test
 - [test/host-carrier-descriptor.test](modules/test/host-carrier-descriptor.test.md)
 - [test/host-path-open.test](modules/test/host-path-open.test.md)
 - [test/host-device.test](modules/test/host-device.test.md)
+- [test/host-root.test](modules/test/host-root.test.md)
 
 - [test/native-signals.test](modules/test/native-signals.test.md)
 
@@ -168,6 +171,7 @@ bun run test
 - [test/host-restore.test](modules/test/host-restore.test.md)
 
 - [host/mount](modules/host/mount.md)
+- [host/root](modules/host/root.md)
 - [host/snapshot](modules/host/snapshot.md)
 - [test/host-mount.test](modules/test/host-mount.test.md)
 

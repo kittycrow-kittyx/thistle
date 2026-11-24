@@ -257,9 +257,10 @@ export class HostBacking {
   }
 
   /** Write resident carrier bytes using canonical append/offset and quota policy. */
-  writeDescriptor(descriptor: CarrierDescriptor, bytes: Uint8Array): number {
+  writeDescriptor(descriptor: CarrierDescriptor, bytes: Uint8Array, whole = false): number {
+    if (bytes.length > 0x7fffffff) bad("EFBIG", "host transfer exceeds native length range");
     return withImage(this.memory, 24, input => this.withWritable(descriptor, (state, inode) => {
-      const amount = Math.min(bytes.length, 1048576);
+      const amount = whole ? bytes.length : Math.min(bytes.length, 1048576);
       if (amount === 0) return 0;
       const previous = this.residentBytes(inode);
       const offset = descriptorWriteOffset(this.memory, state), end = offset + BigInt(amount);

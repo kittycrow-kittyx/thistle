@@ -1,3 +1,4 @@
+import { changeDirectory, currentDirectory } from "../host/cwd.js";
 import type { In, Out } from "../io/stream.js";
 import { Fd, FdTable } from "./fd.js";
 export { Fd, FdTable } from "./fd.js";
@@ -63,7 +64,8 @@ export class Proc {
   set pgid(value: number) { this.native.groupId = value; }
   cmd: string;
   argv: string[];
-  cwd: string;
+  get cwd(): string { return currentDirectory(this.native); }
+  set cwd(path: string) { changeDirectory(this.native, path); }
   env: Map<string, string>;
   get cred(): ProcCred { return this.native.identity().credentials; }
   get fsuid(): number { return this.native.id("fsuid"); }
@@ -75,7 +77,8 @@ export class Proc {
     const { pgid, cmd, argv, cwd, env, io } = init;
     this.fds = new FdTable(native);
     this.pgid = pgid;
-    this.cmd = cmd; this.argv = argv; this.cwd = cwd;
+    this.cmd = cmd; this.argv = argv;
+    if (cwd !== "/") this.cwd = cwd;
     this.env = env;
     this.fds.set(0, new Fd(io.sin, null, "/dev/stdin", { rd: true, wr: false, add: false, clo: false }));
     this.fds.set(1, new Fd(null, io.sout, "/dev/stdout", { rd: false, wr: true, add: false, clo: false }));

@@ -1,6 +1,6 @@
 import { bad } from "../core/err.js";
-import { thistleVfsChdir, thistleVfsCwdPath, thistleVfsChdirInode, thistleVfsDirectoryPath } from "../native/vfs.js";
-import { withImage, checkNative } from "./native-access.js";
+import { thistleVfsChdir, thistleVfsCwdPath, thistleVfsChdirInode, thistleVfsDirectoryPath, thistleVfsInheritCwd } from "../native/vfs.js";
+import { withImage, checkNative, withVfsLock } from "./native-access.js";
 import type { HostProcess } from "./process.js";
 import type { HostInode } from "./inode.js";
 
@@ -37,4 +37,10 @@ export const directoryPath = (process: HostProcess, directory: HostInode): strin
     checkNative(length);
     return new TextDecoder().decode(memory.bytes.subarray(input, input + length - 1));
   }));
+};
+
+/** Inherit an already held cwd reference without re-resolving a pathname. */
+export const inheritDirectory = (parent: HostProcess, child: HostProcess): void => {
+  parent.withDescriptorPair(child, (source, destination) => withVfsLock(parent.memory, () =>
+    checkNative(thistleVfsInheritCwd(parent.memory, source, destination))));
 };
