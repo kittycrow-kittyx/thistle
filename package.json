@@ -16,7 +16,7 @@
     "test:host": "bun test --timeout 60000 src/test/net-boundary.test.ts src/test/host-rv64.test.ts src/test/host-backing.test.ts src/test/host-native-access.test.ts src/test/host-bytes.test.ts src/test/host-process.test.ts src/test/host-lifecycle.test.ts src/test/host-input.test.ts src/test/host-inode.test.ts src/test/host-restore.test.ts src/test/host-mount.test.ts src/test/host-descriptor.test.ts src/test/host-file-descriptor.test.ts src/test/host-carrier-descriptor.test.ts src/test/host-path-open.test.ts"
   },
   "devDependencies": {
-    "@kitty-crow/code-guards": "git+https://github.com/kitty-crow/code-guards.git#d1ce06c6b4a71e5f94ca97ba4b0f6780408aa3f6",
+    "@kitty-crow/code-guards": "git+https://github.com/kitty-crow/code-guards.git#a790861394c7312ff512ec9b03346e1fc8268188",
     "@types/node": "^26.1.1",
     "typescript": "^5.9.2"
   },
