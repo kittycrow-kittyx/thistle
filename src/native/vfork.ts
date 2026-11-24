@@ -168,6 +168,7 @@ const releaseLocked = (memory: ThistleMemory, childHart: U32, child: Ptr): I32 =
   if (slot === INVALID_POINTER) return -3;
   const parent = processAt(memory, slot), parentHart = loadU32(memory, parent + P_LEADER_HART);
   if (loadU32(memory, parent + P_VFORK_CHILD) !== loadU32(memory, child + P_PID)) return -3;
+  if (loadU32(memory, child + P_LEADER_HART) !== childHart || !soleHart(memory, childHart) || !soleHart(memory, parentHart)) return -95;
   if (!lockPair(memory, parentHart, childHart, parent, child)) return -11;
   if (hasDirtyRange(memory, child, 0n, loadU64(memory, child + P_VIRTUAL_TOP))) {
     unlockPair(memory, parentHart, childHart, parent, child);

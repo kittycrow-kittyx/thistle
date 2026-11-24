@@ -156,6 +156,7 @@ import {
   P_PAGE_CAPACITY,
   P_PAGE_COUNT,
   P_VFORK_CHILD,
+  P_VFORK_PARENT,
   P_PAGE_TABLE,
   P_PID,
   P_PPID,
@@ -1211,7 +1212,8 @@ const anonymousMap = (memory: ThistleMemory, proc: Ptr, address: U64, length: U6
   storeU32(memory, mapping + M_BACKING, THISTLE_MAP_BACKING_ANONYMOUS);
   atomicStoreI32(memory, proc + P_MAP_COUNT, wordToI32(word(count + 1)));
   const next = candidate + size + MAP_PAGE - 1n & -MAP_PAGE;
-  if (next > atomicLoadU64(memory, proc + P_MAP_NEXT)) atomicStoreU64(memory, proc + P_MAP_NEXT, next);
+  const cursor = atomicLoadU64(memory, proc + P_MAP_NEXT);
+  if (next > cursor || cursor >= top) atomicStoreU64(memory, proc + P_MAP_NEXT, next);
   return sx(candidate, 64);
 };
 
@@ -1779,6 +1781,7 @@ export const thistleImageBegin = (
       phdr >= virtualTop && phdr !== 0n) return THISTLE_THX_MEMORY;
   const proc = processForHart(memory, hart);
   if (proc === INVALID_POINTER) return THISTLE_THX_MEMORY;
+  if (loadU32(memory, proc + P_VFORK_CHILD) !== 0 || loadU32(memory, proc + P_VFORK_PARENT) !== 0) return THISTLE_THX_BUSY;
   const reset = resetImagePages(memory, proc);
   if (reset !== THISTLE_THX_OK) return reset;
   const segmentTable = loadU32(memory, proc + P_SEGMENT_TABLE);

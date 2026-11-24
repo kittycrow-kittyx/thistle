@@ -3,14 +3,14 @@ import { test } from "node:test";
 import { mappingKernel } from "./vfs-fixture.js";
 import { thistleGuestPage, thistleHartInit, thistleProcessInit, thistleProcessPark, thistleProcessRecord,
   thistleProcessFinish, thistleProcessReap, thistleResumeSyscall, thistleVforkBegin, thistleVforkRelease,
-  thistleHartGetX, thistleHartStatus, thistleProcessPrepareImage } from "../native/kernel.js";
+  thistleHartGetX, thistleHartStatus, thistleProcessPrepareImage, thistleProcessAttach, thistleImageBegin } from "../native/kernel.js";
 import { H_STATUS, H_EVENT, H_X, P_STATE, P_PAGE_TABLE, P_VFORK_CHILD, P_VFORK_PARENT,
-  THISTLE_HART_WAITING, THISTLE_EVENT_SYSCALL, THISTLE_PROCESS_WAITING, THISTLE_HART_RUNNABLE } from "../native/abi.js";
+  THISTLE_HART_WAITING, THISTLE_EVENT_SYSCALL, THISTLE_PROCESS_WAITING, THISTLE_HART_RUNNABLE, THISTLE_THX_BUSY } from "../native/abi.js";
 import { hartAt } from "../native/state.js";
 import { loadU32, storeU32, storeU64 } from "../native/memory.js";
 
 test("vfork transfers one address space and restores native parent registers", () => {
-  const memory = mappingKernel(2), parent = thistleProcessRecord(memory, 0);
+  const memory = mappingKernel(3), parent = thistleProcessRecord(memory, 0);
   const address = 0x200000n, page = thistleGuestPage(memory, 0, address, true);
   memory.bytes[page] = 17;
   assert.equal(thistleHartInit(memory, 1, 0x10000000n, 0n), 0);
@@ -33,6 +33,10 @@ test("vfork transfers one address space and restores native parent registers", (
   memory.bytes[page] = 42;
   assert.notEqual(thistleResumeSyscall(memory, 0, 2n), 0);
   assert.equal(thistleProcessPrepareImage(memory, 1), -16);
+  assert.equal(thistleImageBegin(memory, 1, 0x10000000n, 0x10000n, 0n, 0, 0), THISTLE_THX_BUSY);
+  assert.equal(thistleHartInit(memory, 2, 0x10000000n, 0n), 0);
+  assert.equal(thistleProcessAttach(memory, 2, 2), -16);
+  assert.equal(thistleProcessAttach(memory, 2, 1), -16);
   assert.equal(thistleProcessFinish(memory, 1, 2, 7), 0);
   assert.equal(thistleProcessReap(memory, 0, 2), -16);
   assert.equal(thistleVforkRelease(memory, 1), 0);

@@ -131,3 +131,13 @@ test("shared mapping dirty bytes remain canonical and block destructive unmap", 
     assert.equal(thistleUnmapHostFile(memory, 0, address, 4096n), 0n);
   });
 });
+
+
+test("consecutive unhinted file mappings advance a valid canonical cursor", () => {
+  const memory = mappingKernel();
+  const first = thistleMapHostFile(memory, 0, 0n, 4096n, 3n, 0x21n);
+  assert.ok(first > 0n);
+  const second = thistleMapHostFile(memory, 0, 0n, 4096n, 1n, 0x21n);
+  assert.equal(second, first + 4096n);
+  assert.equal(thistleProcessMapCount(memory, 0), 2);
+});

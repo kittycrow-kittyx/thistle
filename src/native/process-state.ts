@@ -2,7 +2,7 @@ import { installCredentials, readGroup, replaceGroups, writeGroup, updateIdentit
 import {
   C_MAX_HARTS, C_PROCESS_LOCK, C_CREDENTIAL_LOCK, C_VFS_LOCK, C_NEXT_PID, P_EUID, P_FSUID, P_FSGID, P_GROUP_COUNT, THISTLE_BATCH_CONTENDED, THISTLE_FAULT_BAD_STATE, THISTLE_FAULT_MEMORY,
   H_LOCK, H_PROCESS_SLOT, H_STATUS, THISTLE_HART_RUNNABLE, THISTLE_PROCESS_RUNNABLE, THISTLE_PROCESS_WAITING, THISTLE_PROCESS_RUNNING,
-  P_RGID, P_RUID, P_STATE, P_UMASK,
+  P_RGID, P_RUID, P_STATE, P_UMASK, P_VFORK_CHILD, P_VFORK_PARENT,
 } from "./abi.js";
 import { inputContains } from "./arena.js";
 import {
@@ -143,6 +143,8 @@ const attachLocked = (memory: ThistleMemory, hart: U32, pid: U32): I32 => {
   if (loadU32(memory, hartAt(hart) + H_PROCESS_SLOT) !== INVALID_POINTER) return -16;
   const slot = processSlotByPid(memory, pid);
   if (slot === INVALID_POINTER) return -3;
+  const proc = processAt(memory, slot);
+  if (loadU32(memory, proc + P_VFORK_CHILD) !== 0 || loadU32(memory, proc + P_VFORK_PARENT) !== 0) return -16;
   if (!lockProcessHarts(memory, slot)) return -11;
   const result = attachBoundLocked(memory, hart, slot);
   unlockProcessHarts(memory, slot, loadU32(memory, C_MAX_HARTS), hart);
