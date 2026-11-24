@@ -42,25 +42,44 @@ export class HostDescriptor {
     return new HostDescriptor(process, number, identity);
   }
 
-  static attach(process: HostProcess, number: number): HostDescriptor {
-    const identity = process.withDescriptors(record => {
-      const state = slot(process, record, number);
-      if (loadU32(process.memory, state + FD_KIND) === THISTLE_FD_EMPTY) bad("EBADF", "descriptor is closed");
-      return loadU32(process.memory, state + FD_IDENTITY);
+  static find(process: HostProcess, number: number): HostDescriptor | null {
+    return process.withDescriptors(record => {
+      const memory = process.memory;
+      if (!Number.isInteger(number) || number < 0 || number >= loadU32(memory, record + P_DESCRIPTOR_CAPACITY)) return null;
+      const state = descriptorAt(memory, record, number);
+      if (loadU32(memory, state + FD_KIND) === THISTLE_FD_EMPTY) return null;
+      return new HostDescriptor(process, number, loadU32(memory, state + FD_IDENTITY));
     });
-    return new HostDescriptor(process, number, identity);
+  }
+
+  static attach(process: HostProcess, number: number): HostDescriptor {
+    return HostDescriptor.find(process, number) ?? bad("EBADF", "descriptor is closed");
+  }
+
+  static active(process: HostProcess): HostDescriptor[] {
+    return process.withDescriptors(record => {
+      const memory = process.memory, count = loadU32(memory, record + P_DESCRIPTOR_CAPACITY);
+      const result: HostDescriptor[] = [];
+      for (let number = 0; number < count; number++) {
+        const state = descriptorAt(memory, record, number);
+        if (loadU32(memory, state + FD_KIND) === THISTLE_FD_EMPTY) continue;
+        result.push(new HostDescriptor(process, number, loadU32(memory, state + FD_IDENTITY)));
+      }
+      return result;
+    });
   }
 
   static open(process: HostProcess, inode: HostInode, flags: number, minimum = 3): HostDescriptor {
     const memory = process.memory;
     if (inode.memory !== memory) bad("EINVAL", "descriptor filesystem instance mismatch");
-    const number = process.withDescriptors(record => withNativeLock(memory, C_CREDENTIAL_LOCK, () => withVfsLock(memory, () => {
+    if (!Number.isInteger(minimum) || minimum < 0 || minimum > 0xffffffff) bad("EINVAL", "invalid descriptor minimum");
+    if (!Number.isInteger(flags) || flags < 0 || flags > 15) bad("EINVAL", "invalid descriptor flags");
+    return process.withDescriptors(record => withNativeLock(memory, C_CREDENTIAL_LOCK, () => withVfsLock(memory, () => {
       if (thistleVfsIdentity(memory, inode.ino) !== inode.identity) bad("ENOENT", "inode view expired");
-      const result = thistleVfsOpenInode(memory, record, inode.ino, flags, minimum);
-      checkNative(result);
-      return result;
+      const number = thistleVfsOpenInode(memory, record, inode.ino, flags, minimum);
+      checkNative(number);
+      return new HostDescriptor(process, number, loadU32(memory, descriptorAt(memory, record, number) + FD_IDENTITY));
     })));
-    return HostDescriptor.attach(process, number);
   }
 
   private access<T>(operation: (state: number) => T): T {

@@ -992,7 +992,7 @@ export class Rv64 {
 
   private clone(flags: bigint, sp: bigint, tls: bigint): bigint {
     if (this.vf) bad("EAGAIN", "nested RV64 clone");
-    const par = this.copyFds(this.s.p.fds), kid = this.copyFds(this.s.p.fds, true);
+    const par = this.copyFds(this.s.p.fds.entries()), kid = this.copyFds(this.s.p.fds.entries(), true);
     this.vf = { x: this.x.slice(), f: this.f.slice(), pc: this.pc, cwd: this.s.p.cwd, env: new Map(this.s.p.env), fds: par };
     this.s.p.fds.clear(); for (const [n, q] of kid) this.s.p.fds.set(n, q);
     if (sp) this.x[2] = sx(sp, 64);
@@ -1021,8 +1021,8 @@ export class Rv64 {
     if (f0 && f0.input) io.sin = f0.input;
     if (f1 && f1.output) io.sout = f1.output;
     if (f2 && f2.output) io.serr = f2.output;
-    const cwd = this.s.p.cwd, kid = [...this.s.p.fds.values()];
-    const pass = new Map([...this.s.p.fds].filter(([, f]) => !f.clo));
+    const cwd = this.s.p.cwd, kid = this.s.p.fds.values();
+    const pass = new Map(this.s.p.fds.entries().filter(([, f]) => !f.clo));
     const p = this.s.start(path, (argv.length ? argv : [path]).slice(1), {"pgid": null,  io, fds: pass, cwd, env });
     this.restoreVf();
     this.dropFds(kid);
@@ -1030,7 +1030,7 @@ export class Rv64 {
   }
 
   private vfExit(code: bigint): bigint {
-    const kid = [...this.s.p.fds.values()], n = Number(ux(code) & 255n);
+    const kid = this.s.p.fds.values(), n = Number(ux(code) & 255n);
     const p = this.s.start("thsh", ["-c", `exit ${n}`], {"io": null, "fds": null, "pgid": null,  cwd: this.s.p.cwd, env: new Map(this.s.p.env) });
     this.restoreVf();
     this.dropFds(kid);
@@ -1056,7 +1056,7 @@ export class Rv64 {
     this.vf = null;
   }
 
-  private copyFds(src: Iterable<[number, Fd]>, hold = false): Map<number, Fd> {
+  private copyFds(src: Array<[number, Fd]>, hold = false): Map<number, Fd> {
     const out = new Map<number, Fd>();
     for (const [n, f] of src) {
       if (hold) { withValue(withValue(f.input ?? null, value => value.holdR) ?? null, callable => callable.call(f.input)); withValue(withValue(f.output ?? null, value => value.hold) ?? null, callable => callable.call(f.output)); }
@@ -1214,16 +1214,11 @@ export class Rv64 {
     const f = this.s.p.fds.get(fd) ?? bad("EBADF", String(fd));
     if (cmd === 0 || cmd === 1030) {
       const min = this.nat(arg, "descriptor minimum", 255);
-      // Guest state updates stay inside the selected instruction or syscall path.
-      //@cg-expect-warning
-      for (let n = Math.max(3, min); n < 256; n++) if (!this.s.p.fds.has(n)) {
-        const q = this.s.dup(fd, n);
-        requireValue(this.s.p.fds.get(q) ?? null, "src/vm/rv64.ts:1770").clo = cmd === 1030;
-        (this.localSockets.has(fd)) && (this.localSockets.add(q));
-        this.events.duplicate(fd, q);
-        return q;
-      }
-      return bad("EMFILE", "descriptor table full");
+      const q = this.s.dup(fd, this.s.p.fds.next(Math.max(3, min)));
+      requireValue(this.s.p.fds.get(q) ?? null, "src/vm/rv64.ts:1770").clo = cmd === 1030;
+      (this.localSockets.has(fd)) && (this.localSockets.add(q));
+      this.events.duplicate(fd, q);
+      return q;
     }
     if (cmd === 1) return f.clo ? 1 : 0;
     if (cmd === 2) { f.clo = !!(this.nat(arg, "descriptor flags", 0x7fffffff) & 1); return 0; }

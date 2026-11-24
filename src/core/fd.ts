@@ -29,6 +29,21 @@ export class Fd {
     this.draft = null;
   }
 
+  static fromNative(native: HostDescriptor): Fd {
+    const descriptor = new Fd();
+    descriptor.native = native;
+    descriptor.draft = null;
+    return descriptor;
+  }
+
+  matches(native: HostDescriptor): boolean {
+    const current = this.native;
+    return current !== null && current.process === native.process &&
+      current.number === native.number && current.identity === native.identity;
+  }
+
+  get inode(): number { return this.native === null ? 0 : this.native.inode; }
+
   closeNative(): void {
     const native = this.native ?? bad("EBADF", "descriptor not installed");
     native.close();
@@ -81,15 +96,29 @@ export class Fd {
 }
 
 /** Host capability attachments, with allocation, flags and offsets in native slots. */
-export class FdTable implements Iterable<[number, Fd]> {
+export class FdTable {
   private readonly capabilities = new Map<number, Fd>();
 
   constructor(private readonly process: HostProcess) {}
 
   next(minimum = 3): number { return HostDescriptor.next(this.process, minimum); }
-  get size(): number { return this.capabilities.size; }
-  get(number: number): Fd | null { return this.capabilities.get(number) ?? null; }
-  has(number: number): boolean { return this.capabilities.has(number); }
+  get size(): number { return HostDescriptor.active(this.process).length; }
+
+  private view(native: HostDescriptor): Fd {
+    const attached = this.capabilities.get(native.number) ?? null;
+    return attached !== null && attached.matches(native) ? attached : Fd.fromNative(native);
+  }
+
+  get(number: number): Fd | null {
+    const native = HostDescriptor.find(this.process, number);
+    return native === null ? null : this.view(native);
+  }
+
+  has(number: number): boolean { return HostDescriptor.find(this.process, number) !== null; }
+
+  /** Cleanup may release host endpoints after the process record has been reaped. */
+  attachment(number: number): Fd | null { return this.capabilities.get(number) ?? null; }
+  attachments(): Fd[] { return [...this.capabilities.values()]; }
 
   set(number: number, descriptor: Fd): this {
     descriptor.bind(this.process, number);
@@ -101,15 +130,15 @@ export class FdTable implements Iterable<[number, Fd]> {
     const descriptor = this.get(number);
     if (descriptor === null) return false;
     descriptor.closeNative();
-    return this.capabilities.delete(number);
+    this.capabilities.delete(number);
+    return true;
   }
 
   clear(): void {
-    for (const number of this.capabilities.keys()) this.delete(number);
+    for (const number of this.keys()) this.delete(number);
   }
 
-  keys(): IterableIterator<number> { return this.capabilities.keys(); }
-  values(): IterableIterator<Fd> { return this.capabilities.values(); }
-  entries(): IterableIterator<[number, Fd]> { return this.capabilities.entries(); }
-  [Symbol.iterator](): IterableIterator<[number, Fd]> { return this.entries(); }
+  keys(): number[] { return HostDescriptor.active(this.process).map(view => view.number); }
+  values(): Fd[] { return HostDescriptor.active(this.process).map(view => this.view(view)); }
+  entries(): Array<[number, Fd]> { return HostDescriptor.active(this.process).map(view => [view.number, this.view(view)]); }
 }

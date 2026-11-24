@@ -51,14 +51,14 @@ const procFsCred = (p: Proc): Cred => ({
 });
 
 function closeDistinctError(p: Proc): void {
-  const output = p.output(2);
-  if (output !== null && output !== p.output(1)) output.close();
+  const error = p.fds.attachment(2), output = p.fds.attachment(1);
+  if (error !== null && error.output !== null && (output === null || error.output !== output.output)) error.output.close();
 }
 
 function releaseStandardIo(p: Proc): void {
-  const input = p.input(0), output = p.output(1);
-  if (input !== null) input.releaseR();
-  if (output !== null) output.close();
+  const input = p.fds.attachment(0), output = p.fds.attachment(1);
+  if (input !== null && input.input !== null) input.input.releaseR();
+  if (output !== null && output.output !== null) output.output.close();
   closeDistinctError(p);
 }
 
@@ -69,7 +69,7 @@ function holdStandardIo(io: Io): void {
 }
 
 function replaceProcessImage(p: Proc, error: ExecReplace): void {
-  for (const [fd, descriptor] of [...p.fds]) {
+  for (const [fd, descriptor] of p.fds.entries()) {
     if (!descriptor.clo) continue;
 
     descriptor.release();
@@ -316,7 +316,7 @@ export class Kern {
       code = await this.processFailure(p, e instanceof Error ? e : typeof e === "string" ? e : "non-Error process failure");
     } finally {
       if (p.allHeld) {
-        for (const f of p.fds.values()) f.release();
+        for (const f of p.fds.attachments()) f.release();
       } else {
         releaseStandardIo(p);
       }
@@ -383,6 +383,7 @@ export class Kern {
   }
 
   fd(p: Proc): number {
+    if (p.native.memory !== this.canonical.memory) bad("ESRCH", "descriptor process instance mismatch");
     return p.fds.next();
   }
 
@@ -391,11 +392,11 @@ export class Kern {
     const n = nu ?? this.fd(p);
     if (n === old) return n;
     const q = p.fds.get(n) ?? null;
-    if (q !== null) q.release();
-    f.hold();
     const copy = new Fd(f.input, f.output, f.path, { rd: f.rd, wr: f.wr, add: f.add, clo: false });
     copy.pos = f.pos;
     p.fds.set(n, copy);
+    f.hold();
+    if (q !== null) q.release();
     return n;
   }
 }

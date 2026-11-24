@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { HostDescriptor } from "../host/descriptor.js";
+import { FdTable } from "../core/fd.js";
 import { HostInode } from "../host/inode.js";
 import { HostProcess } from "../host/process.js";
 import { mountedKernel } from "./vfs-fixture.js";
@@ -14,14 +15,20 @@ test("host inode descriptors share native reads and survive unlink", () => {
   file.write(process, Uint8Array.of(1, 2, 3), 0, true);
   const fd = HostDescriptor.open(process, file, THISTLE_FD_READ);
   assert.equal(fd.inode, file.ino);
+  const table = new FdTable(process), view = table.get(fd.number);
+  assert.ok(view);
+  assert.equal(view.inode, file.ino);
+  assert.ok(table.keys().includes(fd.number));
   root.unlink(process, "file");
   withImage(memory, 3, input => {
     assert.equal(thistleReadDescriptor(memory, 0, fd.number, input, 2), 2);
     assert.deepEqual([...memory.bytes.subarray(input, input + 2)], [1, 2]);
   });
   assert.equal(fd.offset, 2);
+  assert.equal(view.pos, 2);
   assert.equal(thistleCloseDescriptor(memory, 0, fd.number), 0);
   assert.throws(() => fd.offset, { code: "EBADF" });
+  assert.equal(table.get(fd.number), null);
   assert.throws(() => file.metadata(), { code: "ENOENT" });
   const replacement = root.create(process, "new", 1, 0o600);
   replacement.write(process, Uint8Array.of(4, 5), 0, true);
