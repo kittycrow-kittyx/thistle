@@ -196,6 +196,8 @@ import {
   M_BACKING,
   M_END,
   M_FILE_DESCRIPTOR,
+  M_FILE_RIGHTS,
+  M_INODE,
   M_FILE_OFFSET,
   M_FLAGS,
   M_PROTECTION,
@@ -204,6 +206,7 @@ import {
   THISTLE_MAP_CAPACITY,
   THISTLE_MAP_STRIDE,
   FD_INODE,
+  FD_FLAGS,
   FD_KIND,
   FD_OFFSET,
   THISTLE_DESCRIPTOR_CAPACITY,
@@ -295,6 +298,7 @@ import {
   thistleVfsLoaded,
   thistleVfsResolve,
   thistleVfsRoot,
+  thistleVfsRelease,
 } from "./vfs-api.js";
 
 const NO_RESERVATION: I64 = -1n;
@@ -1053,7 +1057,8 @@ const copyMap = (memory: ThistleMemory, to: Ptr, from: Ptr): void => {
   storeI32(memory, to + M_FILE_DESCRIPTOR, loadI32(memory, from + M_FILE_DESCRIPTOR));
   storeU64(memory, to + M_FILE_OFFSET, loadU64(memory, from + M_FILE_OFFSET));
   storeU32(memory, to + M_BACKING, loadU32(memory, from + M_BACKING));
-  storeU32(memory, to + M_BACKING + 4, 0);
+  storeU32(memory, to + M_FILE_RIGHTS, loadU32(memory, from + M_FILE_RIGHTS));
+  storeU32(memory, to + M_INODE, loadU32(memory, from + M_INODE));
 };
 
 const mappingConflict = (memory: ThistleMemory, proc: Ptr, address: U64, end: U64): boolean => {
@@ -1160,12 +1165,27 @@ const lockHostMapping = (memory: ThistleMemory, hart: U32): I64 => {
   const proc = processForHart(memory, hart);
   if (proc === INVALID_POINTER) { release(memory, at + H_LOCK); return -3n; }
   if (!acquire(memory, proc + P_LOCK)) { release(memory, at + H_LOCK); return -11n; }
+  if (!acquire(memory, C_VFS_LOCK)) {
+    release(memory, proc + P_LOCK); release(memory, at + H_LOCK); return -11n;
+  }
   return word(proc);
 };
 
 const unlockHostMapping = (memory: ThistleMemory, hart: U32, proc: Ptr): void => {
+  release(memory, C_VFS_LOCK);
   release(memory, proc + P_LOCK);
   release(memory, hartAt(hart) + H_LOCK);
+};
+
+const reserveHostMapping = (
+  memory: ThistleMemory, proc: Ptr, address: U64, length: U64, protection: U64, flags: U64,
+): I64 => {
+  const result = anonymousMap(memory, proc, address, length, protection, flags | 0x20n);
+  if (result >= 0n) {
+    const count = loadU32(memory, proc + P_MAP_COUNT);
+    storeU32(memory, mapAt(memory, proc, count - 1) + M_BACKING, THISTLE_MAP_BACKING_HOST_FILE);
+  }
+  return result;
 };
 
 /** Reserve a hosted file mapping in the canonical address-space tables. */
@@ -1175,11 +1195,40 @@ export const thistleMapHostFile = (
   const locked = lockHostMapping(memory, hart);
   if (locked < 0n) return locked;
   const proc = wordToPtr(locked);
-  const result = anonymousMap(memory, proc, address, length, protection, flags | 0x20n);
-  if (result >= 0n) {
-    const count = loadU32(memory, proc + P_MAP_COUNT);
-    storeU32(memory, mapAt(memory, proc, count - 1) + M_BACKING, THISTLE_MAP_BACKING_HOST_FILE);
-  }
+  const result = reserveHostMapping(memory, proc, address, length, protection, flags);
+  unlockHostMapping(memory, hart, proc);
+  return result;
+};
+
+// The mapping retains an inode and the original open rights, not a reusable descriptor number.
+//@cg-expect-error
+const mapDescriptorLocked = (
+  memory: ThistleMemory, proc: Ptr, address: U64, length: U64, protection: U64, flags: U64, descriptor: U32, offset: U64,
+): I64 => {
+  if (descriptor >= loadU32(memory, proc + P_DESCRIPTOR_CAPACITY)) return -9n;
+  if ((offset & (MAP_PAGE - 1n)) !== 0n || (flags & 0x20n) !== 0n) return -22n;
+  const state = descriptorAt(memory, proc, descriptor);
+  if (descriptorReadStatus(memory, state) !== 0) return -9n;
+  const rights = loadU32(memory, state + FD_FLAGS) & (THISTLE_FD_READ | THISTLE_FD_WRITE);
+  if ((flags & 3n) === 1n && (protection & 2n) !== 0n && (rights & THISTLE_FD_WRITE) === 0) return -13n;
+  const result = reserveHostMapping(memory, proc, address, length, protection, flags);
+  if (result < 0n) return result;
+  const mapping = mapAt(memory, proc, loadU32(memory, proc + P_MAP_COUNT) - 1);
+  storeU32(memory, mapping + M_INODE, loadU32(memory, state + FD_INODE));
+  storeU32(memory, mapping + M_FILE_RIGHTS, rights);
+  storeU64(memory, mapping + M_FILE_OFFSET, offset);
+  return result;
+};
+
+/** Reserve a mapping from an open file, retaining its canonical inode independently of the slot. */
+//@cg-expect-error
+export const thistleMapHostDescriptor = (
+  memory: ThistleMemory, hart: U32, address: U64, length: U64, protection: U64, flags: U64, descriptor: U32, offset: U64,
+): I64 => {
+  const locked = lockHostMapping(memory, hart);
+  if (locked < 0n) return locked;
+  const proc = wordToPtr(locked);
+  const result = mapDescriptorLocked(memory, proc, address, length, protection, flags, descriptor, offset);
   unlockHostMapping(memory, hart, proc);
   return result;
 };
@@ -1233,12 +1282,14 @@ const unmapSplitCount = (memory: ThistleMemory, proc: Ptr, address: U64, end: U6
 };
 
 const eraseMapEntry = (memory: ThistleMemory, proc: Ptr, index: U32, count: U32): U32 => {
+  const inode = loadU32(memory, mapAt(memory, proc, index) + M_INODE);
   let move = index;
   while (move + 1 < count) {
     copyMap(memory, mapAt(memory, proc, move), mapAt(memory, proc, move + 1));
     move += 1;
   }
   fill(memory, mapAt(memory, proc, count - 1), THISTLE_MAP_STRIDE, 0);
+  thistleVfsRelease(memory, inode);
   return count - 1;
 };
 
@@ -1333,6 +1384,9 @@ const protectMappings = (memory: ThistleMemory, proc: Ptr, address: U64, length:
     const start = loadU64(memory, mapping + M_ADDRESS);
     const stop = loadU64(memory, mapping + M_END);
     const overlaps = address < stop && end > start;
+    if (overlaps && loadU32(memory, mapping + M_INODE) !== 0 && (protection & 2n) !== 0n &&
+        (loadU32(memory, mapping + M_FLAGS) & 3) === 1 &&
+        (loadU32(memory, mapping + M_FILE_RIGHTS) & THISTLE_FD_WRITE) === 0) return -13n;
     if (overlaps) hit = true;
     if (overlaps && address > start) needed += 1;
     if (overlaps && end < stop) needed += 1;
@@ -1476,6 +1530,8 @@ const moveMapping = (memory: ThistleMemory, hart: U32, proc: Ptr, mapping: Ptr, 
   storeU32(memory, target + M_BACKING, loadU32(memory, mapping + M_BACKING));
   storeI32(memory, target + M_FILE_DESCRIPTOR, loadI32(memory, mapping + M_FILE_DESCRIPTOR));
   storeU64(memory, target + M_FILE_OFFSET, loadU64(memory, mapping + M_FILE_OFFSET));
+  storeU32(memory, target + M_INODE, loadU32(memory, mapping + M_INODE));
+  storeU32(memory, target + M_FILE_RIGHTS, loadU32(memory, mapping + M_FILE_RIGHTS));
   const removed = anonymousUnmap(memory, proc, oldAddress, oldSize);
   if (removed !== 0n) return -12n;
   return sx(destination, 64);
@@ -2585,9 +2641,15 @@ const mapSyscall = (memory: ThistleMemory, hart: U32, proc: Ptr, number: U32): I
     setPc(memory, hart, loadU64(memory, at + H_PC) - 4n);
     return THISTLE_BATCH_CONTENDED;
   }
+  if (!acquire(memory, C_VFS_LOCK)) {
+    release(memory, lock);
+    setPc(memory, hart, loadU64(memory, at + H_PC) - 4n);
+    return THISTLE_BATCH_CONTENDED;
+  }
   const result = anonymousMap(memory, proc, ux(x(memory, hart, 10)), ux(x(memory, hart, 11)),
     ux(x(memory, hart, 12)), ux(x(memory, hart, 13)));
   traceMappingOperation(memory, hart, number, result);
+  release(memory, C_VFS_LOCK);
   release(memory, lock);
   return internalSyscall(memory, hart, result);
 };
@@ -2604,8 +2666,14 @@ const unmapSyscall = (memory: ThistleMemory, hart: U32, proc: Ptr, number: U32):
     release(memory, lock);
     return fallbackSyscall(memory, hart);
   }
+  if (!acquire(memory, C_VFS_LOCK)) {
+    release(memory, lock);
+    setPc(memory, hart, loadU64(memory, at + H_PC) - 4n);
+    return THISTLE_BATCH_CONTENDED;
+  }
   const result = anonymousUnmap(memory, proc, ux(x(memory, hart, 10)), ux(x(memory, hart, 11)));
   traceMappingOperation(memory, hart, number, result);
+  release(memory, C_VFS_LOCK);
   release(memory, lock);
   if (result === MAP_NOT_OWNED) return fallbackSyscall(memory, hart);
   return internalSyscall(memory, hart, result);
@@ -2619,10 +2687,16 @@ const modifyMappingSyscall = (memory: ThistleMemory, hart: U32, proc: Ptr, numbe
     setPc(memory, hart, loadU64(memory, at + H_PC) - 4n);
     return THISTLE_BATCH_CONTENDED;
   }
+  if (!acquire(memory, C_VFS_LOCK)) {
+    release(memory, lock);
+    setPc(memory, hart, loadU64(memory, at + H_PC) - 4n);
+    return THISTLE_BATCH_CONTENDED;
+  }
   const result = number === 216 ? remapMapping(memory, hart, proc, THISTLE_MAP_BACKING_ANONYMOUS) : number === 226 ?
     protectMappings(memory, proc, ux(x(memory, hart, 10)), ux(x(memory, hart, 11)), ux(x(memory, hart, 12))) :
     syncAnonymous(memory, proc, ux(x(memory, hart, 10)), ux(x(memory, hart, 11)), ux(x(memory, hart, 12)));
   traceMappingOperation(memory, hart, number, result);
+  release(memory, C_VFS_LOCK);
   release(memory, lock);
   if (result === MAP_NOT_OWNED) return fallbackSyscall(memory, hart);
   return internalSyscall(memory, hart, result);

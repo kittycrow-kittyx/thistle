@@ -224,3 +224,9 @@ RV64 eventfd and epoll waits expire on process cancellation or image disposal. W
 listeners and timers, and resumed operations check descriptor incarnation before
 accessing guest memory. This fixes host callback lifetime only; it does not yet
 move Linux event semantics into the canonical kernel.
+
+Canonical map records retain the inode and original open rights in previously
+unused words. VFS reclamation and remount validation account for mapped inodes.
+Split, move, unmap and reaping preserve or release these references. Mapping
+mutations share the VFS lock. The RV64 host transport still needs to use the
+retained records for file bytes and shared write-back.

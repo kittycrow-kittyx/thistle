@@ -203,8 +203,10 @@ export const M_END: U32 = 8;
 export const M_PROTECTION: U32 = 16;
 export const M_FLAGS: U32 = 20;
 export const M_FILE_DESCRIPTOR: U32 = 24;
+export const M_FILE_RIGHTS: U32 = 28;
 export const M_FILE_OFFSET: U32 = 32;
 export const M_BACKING: U32 = 40;
+export const M_INODE: U32 = 44;
 export const THISTLE_MAP_BACKING_ANONYMOUS: U32 = 0;
 export const THISTLE_MAP_BACKING_HOST_FILE: U32 = 1;
 

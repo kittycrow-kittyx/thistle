@@ -110,3 +110,5 @@ Mounted RV64 `openat` accepts existing-file read, write, read/write, append, dir
 The dispatcher imports the filesystem surface from [vfs-api](vfs-api.md), which re-exports the existing VFS implementations without additional state. Path open holds the descriptor, credential and VFS locks.
 
 `thistleVfsCreateSymlink` creates and attaches a complete symlink in one VFS transaction; the caller supplies the validated buffer and holds the filesystem locks.
+
+`thistleMapHostDescriptor` validates an open file descriptor and records its inode, rights and file offset before returning a mapping. The reference survives descriptor closure and map splitting until the final range is removed.

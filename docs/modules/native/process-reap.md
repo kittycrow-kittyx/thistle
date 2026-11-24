@@ -14,3 +14,5 @@ Associated harts are locked before cleanup and cleared after success.
 Page validation and release use the same arena functions as image reload.
 
 Reaping takes the process descriptor lock after locking its harts. Contention returns `EAGAIN` without freeing descriptors or guest frames. Descriptor cleanup uses the shared `releaseDescriptor` operation.
+
+Reaping releases retained mapping inodes after descriptor teardown and before recycling guest frames.

@@ -43,6 +43,7 @@ import {
   P_FSGID,
   P_FSUID,
   P_CWD_INODE,
+  P_MAP_TABLE, P_MAP_COUNT, THISTLE_MAP_STRIDE, M_INODE,
   P_GROUP_COUNT,
   P_STATE,
   THISTLE_PROCESS_EMPTY,
@@ -700,7 +701,18 @@ const processHoldsFile = (memory: ThistleMemory, proc: Ptr): boolean => {
   return false;
 };
 
-// A root remount must not reinterpret open files or a process's non-root working directory.
+const processHoldsMapping = (memory: ThistleMemory, proc: Ptr, inode: U32): boolean => {
+  const table = loadU32(memory, proc + P_MAP_TABLE), count = loadU32(memory, proc + P_MAP_COUNT);
+  let index: U32 = 0;
+  while (index < count) {
+    const retained = loadU32(memory, table + index * THISTLE_MAP_STRIDE + M_INODE);
+    if (retained !== 0 && (inode === 0 || retained === inode)) return true;
+    index += 1;
+  }
+  return false;
+};
+
+// A root remount must not reinterpret open files, mapped inodes or a process's non-root working directory.
 const hasMountReferences = (memory: ThistleMemory): boolean => {
   if (!thistleVfsLoaded(memory)) return false;
   const root = thistleVfsRoot(memory), capacity = loadU32(memory, C_PROCESS_CAPACITY);
@@ -709,7 +721,7 @@ const hasMountReferences = (memory: ThistleMemory): boolean => {
   while (index < capacity) {
     const proc = base + index * THISTLE_PROCESS_STRIDE;
     const cwd = loadU32(memory, proc + P_CWD_INODE);
-    if (loadU32(memory, proc + P_STATE) !== 0 && (cwd !== 0 && cwd !== root || processHoldsFile(memory, proc))) return true;
+    if (loadU32(memory, proc + P_STATE) !== 0 && (cwd !== 0 && cwd !== root || processHoldsFile(memory, proc) || processHoldsMapping(memory, proc, 0))) return true;
     index += 1;
   }
   return false;
@@ -792,6 +804,7 @@ export const thistleVfsRelease = (memory: ThistleMemory, inode: U32): void => {
       if (loadU32(memory, at + FD_KIND) !== 0 && loadU32(memory, at + FD_INODE) === inode) return;
       fd += 1;
     }
+    if (loadU32(memory, proc + P_STATE) !== 0 && processHoldsMapping(memory, proc, inode)) return;
     index += 1;
   }
   fill(memory, state, THISTLE_VFS_INODE_STRIDE, 0);
@@ -863,4 +876,17 @@ const readEntryAt = (memory: ThistleMemory, parent: U32, cursor: U32, output: Pt
     index += 1;
   }
   return 0;
+};
+
+/** Reap mapping references before recycling a process's address space. Caller owns the VFS lock. */
+export const releaseProcessMappings = (memory: ThistleMemory, proc: Ptr): void => {
+  const table = loadU32(memory, proc + P_MAP_TABLE), count = loadU32(memory, proc + P_MAP_COUNT);
+  let index: U32 = 0;
+  while (index < count) {
+    const at = table + index * THISTLE_MAP_STRIDE + M_INODE;
+    const inode = loadU32(memory, at);
+    storeU32(memory, at, 0);
+    thistleVfsRelease(memory, inode);
+    index += 1;
+  }
 };

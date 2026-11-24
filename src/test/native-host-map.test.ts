@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mountedKernel } from "./vfs-fixture.js";
 import { thistleImageBegin, thistleImageSegment, thistleImageFinish, thistleStackPrepare,
-  thistleMapHostFile, thistleUnmapHostFile, thistleRemapHostFile,
+  thistleMapHostFile, thistleMapHostDescriptor, thistleUnmapHostFile, thistleRemapHostFile, thistleCloseDescriptor,
   thistleHartSetX, thistleGuestPage, thistleGuestAccess, thistleProcessMapCount, thistleProcessRecord, thistleProcessMapAddress, thistleProcessMapEnd } from "../native/kernel.js";
 import { withImage } from "../host/native-access.js";
-import { H_LOCK, P_MAP_CAPACITY, P_MAP_TABLE, THISTLE_MAP_STRIDE, M_FILE_OFFSET } from "../native/abi.js";
+import { H_LOCK, P_MAP_CAPACITY, P_MAP_TABLE, THISTLE_MAP_STRIDE, M_FILE_OFFSET, M_INODE, THISTLE_VFS_KIND_FILE, THISTLE_FD_READ } from "../native/abi.js";
 import { hartAt } from "../native/state.js";
 import { storeU32, loadU32, loadU64 } from "../native/memory.js";
+import { thistleVfsKind, thistleVfsOpenInode } from "../native/vfs.js";
+import { thistleVfsCreate, thistleVfsUnlink } from "../native/vfs-edit.js";
 
 const mappingKernel = () => {
   const memory = mountedKernel();
@@ -85,4 +87,29 @@ test("partial unmaps preflight capacity and preserve surviving ranges and file o
   assert.equal(thistleProcessMapCount(memory, 0), 1);
   assert.equal(thistleUnmapHostFile(memory, 0, address, 4096n), 0n);
   assert.equal(thistleProcessMapCount(memory, 0), 0);
+});
+
+test("canonical mapped inodes survive descriptor close, unlink and range splitting", () => {
+  const memory = mappingKernel(), proc = thistleProcessRecord(memory, 0), address = 0x400000n;
+  withImage(memory, 16, input => {
+    memory.bytes.set(new TextEncoder().encode("file"), input);
+    const inode = thistleVfsCreate(memory, proc, 1, input, 4, THISTLE_VFS_KIND_FILE, 0o644, 1n);
+    assert.ok(inode > 1);
+    const descriptor = thistleVfsOpenInode(memory, proc, inode, THISTLE_FD_READ, 3);
+    assert.ok(descriptor >= 3);
+    assert.equal(thistleMapHostDescriptor(memory, 0, address, 12288n, 3n, 0x100001n, descriptor, 4096n), -13n);
+    assert.equal(thistleProcessMapCount(memory, 0), 0);
+    assert.equal(thistleMapHostDescriptor(memory, 0, address, 12288n, 1n, 0x100002n, descriptor, 4096n), address);
+    assert.equal(thistleCloseDescriptor(memory, 0, descriptor), 0);
+    assert.equal(thistleVfsUnlink(memory, proc, 1, input, 4, false, 2n), 0);
+    assert.equal(thistleVfsKind(memory, inode), THISTLE_VFS_KIND_FILE);
+    assert.equal(thistleUnmapHostFile(memory, 0, address + 4096n, 4096n), 0n);
+    const right = loadU32(memory, proc + P_MAP_TABLE) + THISTLE_MAP_STRIDE;
+    assert.equal(loadU32(memory, right + M_INODE), inode);
+    assert.equal(loadU64(memory, right + M_FILE_OFFSET), 12288n);
+    assert.equal(thistleUnmapHostFile(memory, 0, address, 4096n), 0n);
+    assert.equal(thistleVfsKind(memory, inode), THISTLE_VFS_KIND_FILE);
+    assert.equal(thistleUnmapHostFile(memory, 0, address + 8192n, 4096n), 0n);
+    assert.equal(thistleVfsKind(memory, inode), 0);
+  });
 });

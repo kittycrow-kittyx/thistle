@@ -382,3 +382,5 @@ Default VFS: 8192 inode slots, 16384 directory-entry slots. Reference mikuOS roo
 Each process has 256 descriptor slots of 32 bytes. The identity at offset 12 changes on allocation and survives close until the slot is reused. Exhausted identities are not recycled within a process lifetime.
 
 `THISTLE_FLAG_HOST_TRANSPORT` advertises host byte/stream transport for a mounted filesystem. It does not select a separate kernel or change inode authority.
+
+`M_INODE` retains the mapped inode independently of the original descriptor. `M_FILE_RIGHTS` records the open read/write rights. Both occupy reserved words; the map stride is unchanged.

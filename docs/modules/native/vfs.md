@@ -18,7 +18,7 @@ and supply validated canonical inode or dentry indices.
 - `parentOf` locates the canonical parent directory. `allowed` checks every
   requested permission bit against the process filesystem identity/groups.
 
-`thistleVfsRelease` releases a nameless inode after its final canonical descriptor closes. `vfs-edit` re-exports the same function.
+`thistleVfsRelease` releases a nameless inode after its final canonical descriptor or mapping is released. `vfs-edit` re-exports the same function.
 
 `thistleVfsResidentUsage` sums 128 bytes per live inode and each regular file's
 resident payload. `residentFits` checks a byte replacement against the canonical
@@ -61,3 +61,5 @@ Character-device opens with the explicit host-transport flag bind a canonical in
 `thistleVfsChdirInode` changes cwd with the same search-rights check as path-based chdir. `thistleVfsDirectoryPath` reconstructs the unique directory path. `thistleVfsReadDescriptorEntry` reads directory entries using the open descriptor's retained rights; pathname and descriptor enumeration share the dentry cursor and record format.
 
 `thistleVfsInheritCwd` transfers an existing directory reference into a newly constructed child without rechecking pathname permissions. It requires both process records and the VFS lock.
+
+`releaseProcessMappings` clears mapping references under the VFS lock before process reaping. Root remount rejects retained mapped inodes.

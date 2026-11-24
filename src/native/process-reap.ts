@@ -11,7 +11,7 @@ import { atomicStoreI32, compareExchangeI32, fill, loadU32, storeU32 } from "./m
 import type { ThistleMemory } from "./memory.js";
 import { lockProcessHarts, unlockProcessHarts, INVALID_POINTER, hartAt, processAt, processForHart, processSlotByPid, validHart, validKernel } from "./state.js";
 import type { I32, Ptr, U32 } from "./types.js";
-import { descriptorAt, releaseDescriptor } from "./vfs.js";
+import { descriptorAt, releaseDescriptor, releaseProcessMappings } from "./vfs.js";
 import { word, wordToU32 } from "./word.js";
 
 const releaseProcessDescriptors = (memory: ThistleMemory, proc: Ptr): void => {
@@ -46,6 +46,7 @@ const reapResources = (memory: ThistleMemory, proc: Ptr, slot: U32): I32 => {
     atomicStoreI32(memory, C_VFS_LOCK, 0); atomicStoreI32(memory, C_MEMORY_LOCK, 0); atomicStoreI32(memory, C_CREDENTIAL_LOCK, 0); return -14;
   }
   releaseProcessDescriptors(memory, proc);
+  releaseProcessMappings(memory, proc);
   releaseProcessFrames(memory, proc);
   releaseGroups(memory, proc);
   trimFreeFrames(memory);
