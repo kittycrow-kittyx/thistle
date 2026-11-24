@@ -86,9 +86,9 @@ export class Proc {
   cwd: string;
   env: Map<string, string>;
   get cred(): ProcCred { return this.native.identity().credentials; }
-  get fsuid(): number { return this.native.identity().fsuid; }
-  get fsgid(): number { return this.native.identity().fsgid; }
-  get mask(): number { return this.native.identity().umask; }
+  get fsuid(): number { return this.native.id("fsuid"); }
+  get fsgid(): number { return this.native.id("fsgid"); }
+  get mask(): number { return this.native.id("umask"); }
   set mask(value: number) { this.native.setUmask(value); }
 
   constructor(init: ProcInit, readonly native: HostProcess) {

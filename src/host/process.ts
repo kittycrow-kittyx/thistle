@@ -14,6 +14,12 @@ import { withNativeLock, withImage, checkNative } from "./native-access.js";
 const identityRequest = (id: number | null): number =>
   id === null ? 0xffffffff : id === 0xffffffff ? Number.NaN : id;
 
+export type HostIdentityField = "ruid" | "euid" | "suid" | "rgid" | "egid" | "sgid" | "fsuid" | "fsgid" | "umask";
+const identityOffsets: Readonly<Record<HostIdentityField, number>> = {
+  ruid: P_RUID, euid: P_EUID, suid: P_SUID, rgid: P_RGID, egid: P_EGID,
+  sgid: P_SGID, fsuid: P_FSUID, fsgid: P_FSGID, umask: P_UMASK,
+};
+
 export interface HostIdentity {
   readonly credentials: ProcCred;
   readonly fsuid: number;
@@ -51,6 +57,11 @@ export class HostProcess {
 
   finish(code: number): void {
     checkNative(thistleProcessFinish(this.memory, this.hart, this.pid, code));
+  }
+
+  id(field: HostIdentityField): number {
+    return this.withRecord(record => withNativeLock(this.memory, C_CREDENTIAL_LOCK,
+      () => loadU32(this.memory, record + identityOffsets[field])));
   }
 
   identity(): HostIdentity {

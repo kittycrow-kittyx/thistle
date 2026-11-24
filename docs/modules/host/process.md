@@ -23,3 +23,6 @@ operations.
 process metadata; the trusted group setter updates the native word atomically.
 `finish` retires all process harts after checking the allocated PID.
 `memory` and `hart` route guest execution to this same record.
+
+`HostIdentityField` names individual identity words. `id` reads one word under
+the credential lock, avoiding supplementary-group copies for scalar getters.

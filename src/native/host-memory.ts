@@ -1,8 +1,9 @@
 import { requireValue } from "../core/err.js";
 import { bad } from "../core/err.js";
 import type { RvMemory } from "../vm/mem64.js";
-import { H_PAGE_COUNT, THISTLE_GUEST_PAGE_SIZE, THISTLE_HART_BASE, THISTLE_HART_STRIDE } from "../native/abi.js";
+import { P_PAGE_COUNT, P_PID, THISTLE_GUEST_PAGE_SIZE } from "../native/abi.js";
 import { thistleGuestPage } from "../native/kernel.js";
+import { processForHart, INVALID_POINTER } from "./state.js";
 import { loadU32 } from "../native/memory.js";
 import type { ThistleMemory } from "../native/memory.js";
 
@@ -12,17 +13,27 @@ export type ThistlePageLookup = (hart: number, address: bigint, create: boolean)
 
 /** Direct-Thistle view of the sparse memory representation also generated into Thistle. */
 export class ThistleMem64 implements RvMemory {
+  private readonly pid: number;
   constructor(
     private readonly memory: ThistleMemory,
     private readonly hart: number,
     readonly top: bigint,
     readonly cap: number,
     private readonly page: ThistlePageLookup = (hart, address, create) => thistleGuestPage(memory, hart, address, create),
-  ) {}
+  ) {
+    const record = processForHart(memory, hart);
+    if (record === INVALID_POINTER) bad("ESRCH", "unbound guest memory view");
+    this.pid = loadU32(memory, record + P_PID);
+  }
+
+  private record(): number {
+    const record = processForHart(this.memory, this.hart);
+    if (record === INVALID_POINTER || loadU32(this.memory, record + P_PID) !== this.pid) bad("ESRCH", "expired guest memory view");
+    return record;
+  }
 
   get used(): number {
-    const state = THISTLE_HART_BASE + this.hart * THISTLE_HART_STRIDE;
-    return loadU32(this.memory, state + H_PAGE_COUNT) * THISTLE_GUEST_PAGE_SIZE;
+    return loadU32(this.memory, this.record() + P_PAGE_COUNT) * THISTLE_GUEST_PAGE_SIZE;
   }
 
   read(at: bigint, n: number): Uint8Array {
@@ -137,6 +148,7 @@ break; }
   }
 
   private check(at: bigint, n: number): void {
+    this.record();
     if (at < 0n || !Number.isSafeInteger(n) || n < 0 || at + BigInt(n) > this.top) {
       bad("ERANGE", `thistle64 address 0x${at.toString(16)}`);
     }

@@ -14,13 +14,13 @@ export class Sys {
   get pid(): number { return this.p.pid; }
   get ppid(): number { return this.p.ppid; }
   get uid(): number { return this.ruid; }
-  get euid(): number { return this.p.cred.euid; }
-  get suid(): number { return this.p.cred.suid; }
-  get ruid(): number { return this.p.cred.ruid; }
+  get euid(): number { return this.p.native.id("euid"); }
+  get suid(): number { return this.p.native.id("suid"); }
+  get ruid(): number { return this.p.native.id("ruid"); }
   get gid(): number { return this.rgid; }
-  get egid(): number { return this.p.cred.egid; }
-  get sgid(): number { return this.p.cred.sgid; }
-  get rgid(): number { return this.p.cred.rgid; }
+  get egid(): number { return this.p.native.id("egid"); }
+  get sgid(): number { return this.p.native.id("sgid"); }
+  get rgid(): number { return this.p.native.id("rgid"); }
   get groups(): number[] { return [...this.p.cred.groups]; }
   get cwd(): string { return this.p.cwd; }
   get umask(): number { return this.p.mask; }

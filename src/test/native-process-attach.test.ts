@@ -5,6 +5,7 @@ import { C_PROCESS_COUNT, C_PROCESS_LOCK, H_LOCK, THISTLE_HART_BASE, THISTLE_HAR
 import { loadU32, storeU32 } from "../native/memory.js";
 import { thistleHartInit, thistleProcessInit, thistleGuestPage, thistleExitHart, thistleProcessReap, thistleHartVirtualTop } from "../native/kernel.js";
 import { thistleProcessAttach, thistleProcessRecord, thistleProcessSetGroup } from "../native/process-state.js";
+import { ThistleMem64 } from "../native/host-memory.js";
 import { readGroup } from "../native/credentials.js";
 
 test("attaching another hart shares the existing canonical process and pages", () => {
@@ -27,6 +28,11 @@ test("attaching another hart shares the existing canonical process and pages", (
   assert.equal(thistleProcessAttach(memory, 2, 9999), -3);
   assert.equal(thistleProcessAttach(memory, 2, 2), 0);
   assert.equal(thistleProcessRecord(memory, 2), proc);
+  const view = new ThistleMem64(memory, 1, 0x10000000n, memory.bytes.length);
+  const secondPage = thistleGuestPage(memory, 2, 0x20000n, true);
+  memory.bytes[secondPage] = 91;
+  assert.equal(view.used, 2 * 65536);
+  assert.equal(view.u8(0x20000n), 91);
   assert.equal(loadU32(memory, C_PROCESS_COUNT), 2);
   assert.equal(thistleHartVirtualTop(memory, 2), 0x10000000n);
   assert.equal(thistleGuestPage(memory, 2, 0x10000n, false), page);
@@ -40,4 +46,8 @@ test("attaching another hart shares the existing canonical process and pages", (
   assert.equal(thistleExitHart(memory, 1, 0), 0);
   assert.equal(thistleProcessReap(memory, 0, 2), 0);
   assert.equal(loadU32(memory, C_PROCESS_COUNT), 1);
+  assert.throws(() => view.u8(0x10000n), { code: "ESRCH" });
+  assert.equal(thistleHartInit(memory, 1, 0x10000000n, 0n), 0);
+  assert.equal(thistleProcessInit(memory, 1, 3, 1, 0, 0, 0, 0, 0, 0), 0);
+  assert.throws(() => view.used, { code: "ESRCH" });
 });

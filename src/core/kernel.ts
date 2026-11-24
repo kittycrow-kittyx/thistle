@@ -328,7 +328,7 @@ export class Kern {
 
   async wait(pid: number, par: Proc): Promise<number> {
     const p = this.procs.get(pid) ?? bad("ESRCH", String(pid));
-    if (p.ppid !== par.pid && par.cred.euid !== 0) bad("ECHILD", String(pid));
+    if (p.ppid !== par.pid && par.native.id("euid") !== 0) bad("ECHILD", String(pid));
     const n = await p.done;
     this.reap(pid, par);
     return n;
@@ -352,7 +352,7 @@ export class Kern {
     let n = 0;
     for (const p of q) {
       if (p.pid === 1) continue;
-      if (by.cred.euid !== 0 && by.cred.ruid !== p.cred.ruid) bad("EPERM", String(p.pid));
+      if (by.native.id("euid") !== 0 && by.native.id("ruid") !== p.native.id("ruid")) bad("EPERM", String(p.pid));
       if (sig !== 0) p.signal(sig);
       if (sig !== 0 && (sig === 9 || p.state === "sleep")) p.end(128 + sig);
       n++;
@@ -363,7 +363,7 @@ export class Kern {
 
   ps(): PInfo[] {
     return [...this.procs.values()].sort((a, b) => a.pid - b.pid).map(p => ({
-      pid: p.pid, ppid: p.ppid, pgid: p.pgid, uid: p.cred.euid,
+      pid: p.pid, ppid: p.ppid, pgid: p.pgid, uid: p.native.id("euid"),
       state: p.state, ms: p.ms(), cmd: p.argv.join(" "),
     }));
   }
@@ -378,7 +378,7 @@ export class Kern {
   }
 
   stop(by: Proc): void {
-    if (by.cred.euid !== 0) bad("EPERM", "reboot");
+    if (by.native.id("euid") !== 0) bad("EPERM", "reboot");
     for (const p of this.procs.values()) if (p.pid !== 1 && p.pid !== by.pid) p.signal(15);
     this.log("system: reboot requested");
     if (this.haltFn !== null) this.haltFn();
