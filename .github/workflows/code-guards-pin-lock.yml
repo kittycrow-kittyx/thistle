@@ -1,0 +1,19 @@
+name: Generate Code Guards lock entry
+on:
+  push:
+    branches: [refactor/single-canonical-kernel]
+    paths: [.github/workflows/code-guards-pin-lock.yml]
+permissions:
+  contents: read
+jobs:
+  lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: oven-sh/setup-bun@v2
+      - name: Generate reproducible dependency record
+        run: |
+          mkdir -p "$RUNNER_TEMP/guards-lock"
+          cd "$RUNNER_TEMP/guards-lock"
+          printf '%s\n' '{"name":"guards-lock","devDependencies":{"@kitty-crow/code-guards":"git+https://github.com/kitty-crow/code-guards.git#a790861394c7312ff512ec9b03346e1fc8268188"}}' > package.json
+          bun install --lockfile-only --ignore-scripts
+          grep '"@kitty-crow/code-guards": \[' bun.lock
