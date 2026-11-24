@@ -156,7 +156,8 @@
       "thistleRemapHostFile",
       "thistleProcessSetHostState",
       "thistleProcessQueueSignal",
-      "thistleProcessSignalMask"
+      "thistleProcessSignalMask",
+      "thistleVfsIdentity"
     ],
     "verify": {
       "init": "tetoKernelInit",
@@ -281,7 +282,8 @@
       "thistleRemapHostFile": "tetoRemapHostFile",
       "thistleProcessSetHostState": "tetoProcessSetHostState",
       "thistleProcessQueueSignal": "tetoProcessQueueSignal",
-      "thistleProcessSignalMask": "tetoProcessSignalMask"
+      "thistleProcessSignalMask": "tetoProcessSignalMask",
+      "thistleVfsIdentity": "tetoVfsIdentity"
     }
   },
   "memory": {

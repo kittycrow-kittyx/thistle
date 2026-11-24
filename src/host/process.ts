@@ -12,7 +12,7 @@ import type { ThistleMemory } from "../native/memory.js";
 import { readGroup } from "../native/credentials.js";
 import { processAt } from "../native/state.js";
 import { thistleProcessInstallCredentials, thistleProcessRecord, thistleProcessIdentity, thistleProcessGroups, thistleProcessUmask } from "../native/process-state.js";
-import { withNativeLock, withImage, checkNative } from "./native-access.js";
+import { withNativeLock, withVfsLock, withImage, checkNative } from "./native-access.js";
 
 const identityRequest = (id: number | null): number =>
   id === null ? 0xffffffff : id === 0xffffffff ? Number.NaN : id;
@@ -66,6 +66,12 @@ export class HostProcess {
       if (record === 0xffffffff || loadU32(this.memory, record + P_PID) !== this.pid) bad("ESRCH", "canonical process view expired");
       return operation(record);
     });
+  }
+
+  /** Hold identity and credentials while a host adapter invokes canonical VFS operations. */
+  withFilesystem<T>(operation: (record: number) => T): T {
+    return this.withRecord(record => withNativeLock(this.memory, C_CREDENTIAL_LOCK,
+      () => withVfsLock(this.memory, () => operation(record))));
   }
 
   get parentPid(): number { return this.withRecord(record => loadU32(this.memory, record + P_PPID)); }

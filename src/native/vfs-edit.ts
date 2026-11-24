@@ -4,7 +4,7 @@ import {
   D_NAME_LENGTH, D_PARENT, P_FSGID, P_FSUID, THISTLE_CONTROL_BASE,
   THISTLE_VFS_INODE_STRIDE, THISTLE_VFS_KIND_CHARACTER, THISTLE_VFS_KIND_DIRECTORY,
   THISTLE_VFS_KIND_FILE, THISTLE_VFS_KIND_LINK, V_ATIME, V_CAPACITY, V_CTIME,
-  V_DATA, V_FLAGS, V_VERSION, THISTLE_VFS_HOST_BACKING, V_GID, V_KIND, V_MODE, V_MTIME, V_NLINK, V_SIZE, V_UID,
+  V_DATA, V_FLAGS, V_VERSION, V_IDENTITY, THISTLE_VFS_HOST_BACKING, V_GID, V_KIND, V_MODE, V_MTIME, V_NLINK, V_SIZE, V_UID,
 } from "./abi.js";
 import { word, ux, wordToU32 } from "./word.js";
 import { inputContains } from "./arena.js";
@@ -125,7 +125,9 @@ export const thistleVfsCreate = (
   const at = inodeAt(memory, inode);
   fill(memory, at, THISTLE_VFS_INODE_STRIDE, 0);
   storeU32(memory, at + V_KIND, kind);
-  storeU64(memory, at + V_VERSION, atomicLoadU64(memory, C_VFS_GENERATION) + 1n);
+  const generation = atomicLoadU64(memory, C_VFS_GENERATION) + 1n;
+  storeU64(memory, at + V_VERSION, generation);
+  storeU64(memory, at + V_IDENTITY, generation);
   storeU32(memory, at + V_MODE, mode & 0o7777);
   storeU32(memory, at + V_UID, loadU32(memory, proc + P_FSUID));
   storeU32(memory, at + V_GID, loadU32(memory, proc + P_FSGID));

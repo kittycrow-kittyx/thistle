@@ -51,7 +51,7 @@ import {
   V_CAPACITY,
   V_CTIME,
   V_DATA,
-  V_FLAGS, V_RESIDENT, V_VERSION, C_VFS_QUOTA, THISTLE_VFS_HOST_BACKING,
+  V_FLAGS, V_RESIDENT, V_VERSION, V_IDENTITY, C_VFS_QUOTA, THISTLE_VFS_HOST_BACKING,
   V_GID,
   V_KIND,
   V_MODE,
@@ -323,6 +323,10 @@ export const thistleVfsKind = (memory: ThistleMemory, inode: U32): U32 => {
   return loadU32(memory, inodeAt(memory, inode) + V_KIND);
 };
 
+/** Inode incarnation stays fixed across edits and changes on slot reuse or remount. */
+export const thistleVfsIdentity = (memory: ThistleMemory, inode: U32): U64 =>
+  thistleVfsKind(memory, inode) === THISTLE_VFS_KIND_EMPTY ? 0n : loadU64(memory, inodeAt(memory, inode) + V_IDENTITY);
+
 export const thistleVfsFileSize = (memory: ThistleMemory, inode: U32): U64 =>
   thistleVfsKind(memory, inode) === THISTLE_VFS_KIND_EMPTY ? 0n : loadU64(memory, inodeAt(memory, inode) + V_SIZE);
 
@@ -527,7 +531,11 @@ export const thistleLoadVfs = (memory: ThistleMemory, image: Ptr, imageLength: U
   let versioned: U32 = 1;
   while (versioned < inodeCapacity) {
     const state = inodeAt(memory, versioned);
-    if (loadU32(memory, state + V_KIND) !== 0) storeU64(memory, state + V_VERSION, atomicLoadU64(memory, C_VFS_GENERATION));
+    if (loadU32(memory, state + V_KIND) !== 0) {
+      const generation = atomicLoadU64(memory, C_VFS_GENERATION);
+      storeU64(memory, state + V_VERSION, generation);
+      storeU64(memory, state + V_IDENTITY, generation);
+    }
     versioned += 1;
   }
   return THISTLE_VFS_OK;

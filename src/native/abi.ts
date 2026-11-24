@@ -206,7 +206,7 @@ export const M_BACKING: U32 = 40;
 export const THISTLE_MAP_BACKING_ANONYMOUS: U32 = 0;
 export const THISTLE_MAP_BACKING_HOST_FILE: U32 = 1;
 
-export const THISTLE_VFS_INODE_STRIDE: U32 = 80;
+export const THISTLE_VFS_INODE_STRIDE: U32 = 88;
 export const THISTLE_VFS_INODE_CAPACITY: U32 = 4096;
 export const THISTLE_VFS_DENTRY_STRIDE: U32 = 24;
 export const THISTLE_VFS_DENTRY_CAPACITY: U32 = 8192;
@@ -313,6 +313,7 @@ export const THISTLE_START_MEMORY: I32 = 3;
 export const C_VFS_QUOTA: U32 = 3368;
 export const V_RESIDENT: U32 = 64;
 export const V_VERSION: U32 = 72;
+export const V_IDENTITY: U32 = 80;
 export const THISTLE_VFS_HOST_BACKING: U32 = 1;
 
 export const P_LEADER_HART: U32 = 348;

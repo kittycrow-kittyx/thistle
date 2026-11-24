@@ -30,3 +30,5 @@ The cursor is a dentry slot; EOF returns zero. The reserved output contains
 inode:u32, kind:u32, next-cursor:u32, name-length:u32, followed by UTF-8 bytes.
 The result is the record length. Short buffers return ERANGE; directory read
 permission is checked by the canonical `allowed` function.
+
+`thistleVfsIdentity` returns the immutable incarnation token of a live inode, or zero for a missing inode. Content and metadata edits preserve identity; slot reuse and remount assign a new token.

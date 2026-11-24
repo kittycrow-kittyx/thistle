@@ -53,6 +53,8 @@ for (const threaded of [false, true]) {
   data[record + 128] = 102;
   const file = Number(invoke("VfsCreate", 0, proc, 1, record + 128, 1, 1, 0o644, 1n));
   assert.ok(file > 1);
+  const inodeIdentity = invoke("VfsIdentity", 0, file);
+  assert.notEqual(inodeIdentity, 0n);
   assert.equal(invoke("VfsReadEntry", 0, proc, 1, 0, record, 128), 17);
   assert.equal(view.getUint32(record, true), file);
   assert.equal(view.getUint8(record + 16), 102);
@@ -63,6 +65,7 @@ for (const threaded of [false, true]) {
   view.setBigUint64(record + 16, 0n, true);
   assert.equal(invoke("VfsCommitBacking", 0, proc, file, previous, record, 2n), 0);
   assert.equal(invoke("VfsBacking", 0, file), 7);
+  assert.equal(invoke("VfsIdentity", 0, file), inodeIdentity);
   assert.equal(invoke("VfsFileSize", 0, file), 5n * 1024n ** 3n);
   assert.equal(invoke("VfsResidentUsage", 0), 256n);
   assert.equal(invoke("VfsReadData", 0, file, 0n, record + 128, 1), -18);

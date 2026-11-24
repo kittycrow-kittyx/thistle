@@ -1,6 +1,8 @@
 import { withVfsLock, withImage, checkNative } from "./native-access.js";
 import { bad } from "../core/err.js";
 import { SourceLoad } from "./bytes.js";
+import { HostInode } from "./inode.js";
+import type { HostProcess } from "./process.js";
 import type { RegSource } from "./bytes.js";
 import { C_VFS_INODE_CAPACITY } from "../native/abi.js";
 import { loadU32, storeU32, storeU64 } from "../native/memory.js";
@@ -20,7 +22,7 @@ export class HostBacking {
 
   constructor(private readonly memory: ThistleMemory) {}
 
-  private publish(inode: number, proc: number, payload: Payload, size: number, expected: bigint, write: boolean): void {
+  private publish(view: HostInode, process: HostProcess, payload: Payload, size: number, expected: bigint, write: boolean): void {
     if (!Number.isSafeInteger(size) || size < 0) bad("EINVAL", "invalid backing size");
     if (this.sequence > 0xffffffff) bad("ENFILE", "host carrier handles exhausted");
     const handle = this.sequence++;
@@ -28,27 +30,30 @@ export class HostBacking {
       storeU32(this.memory, input, handle); storeU32(this.memory, input + 4, write ? 1 : 0);
       storeU64(this.memory, input + 8, BigInt(size));
       storeU64(this.memory, input + 16, BigInt(payload.bytes === null ? 0 : payload.bytes.byteLength));
-      withVfsLock(this.memory, () => {
-        checkNative(thistleVfsCommitBacking(this.memory, proc, inode, expected, input, BigInt(Date.now())));
+      view.access(process, proc => {
+        checkNative(thistleVfsCommitBacking(this.memory, proc, view.ino, expected, input, BigInt(Date.now())));
         this.payloads.set(handle, payload);
         this.collectLocked();
       });
     });
   }
 
-  setBytes(inode: number, proc: number, bytes: Uint8Array): void {
-    const version = withVfsLock(this.memory, () => thistleVfsBackingVersion(this.memory, inode));
-    this.publish(inode, proc, { bytes: bytes.slice(), source: null }, bytes.byteLength, version, true);
+  setBytes(inode: number, process: HostProcess, bytes: Uint8Array): void {
+    const view = new HostInode(this.memory, inode);
+    const version = view.access(process, () => thistleVfsBackingVersion(this.memory, inode));
+    this.publish(view, process, { bytes: bytes.slice(), source: null }, bytes.byteLength, version, true);
   }
 
-  setSource(inode: number, proc: number, source: RegSource): void {
-    if (source.size === 0) { this.setBytes(inode, proc, new Uint8Array()); return; }
-    const version = withVfsLock(this.memory, () => thistleVfsBackingVersion(this.memory, inode));
-    this.publish(inode, proc, { bytes: null, source: new SourceLoad(source) }, source.size, version, true);
+  setSource(inode: number, process: HostProcess, source: RegSource): void {
+    if (source.size === 0) { this.setBytes(inode, process, new Uint8Array()); return; }
+    const view = new HostInode(this.memory, inode);
+    const version = view.access(process, () => thistleVfsBackingVersion(this.memory, inode));
+    this.publish(view, process, { bytes: null, source: new SourceLoad(source) }, source.size, version, true);
   }
 
-  async read(inode: number, proc: number): Promise<Uint8Array> {
-    const snapshot = withVfsLock(this.memory, () => {
+  async read(inode: number, process: HostProcess): Promise<Uint8Array> {
+    const view = new HostInode(this.memory, inode);
+    const snapshot = view.access(process, proc => {
       if (!thistleVfsAccess(this.memory, proc, inode, 4)) bad("EACCES", "backing read denied");
       const handle = thistleVfsBacking(this.memory, inode);
       const payload = this.payloads.get(handle) ?? bad("EIO", "missing host byte carrier");
@@ -59,7 +64,7 @@ export class HostBacking {
     const source = payload.source ?? bad("EIO", "missing lazy byte source");
     const bytes = await source.read();
     if (BigInt(bytes.byteLength) !== size) bad("EIO", "lazy payload length mismatch");
-    this.publish(inode, proc, { bytes: bytes.slice(), source: null }, bytes.byteLength, version, false);
+    this.publish(view, process, { bytes: bytes.slice(), source: null }, bytes.byteLength, version, false);
     return bytes.slice();
   }
 

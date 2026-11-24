@@ -120,7 +120,7 @@ storage metadata only after permission, version and resident-quota checks.
 Native arena access returns EXDEV for these inodes. `host/backing.ts` supplies lazy and resident byte carriers. The object filesystem
 facade still owns its original nodes and requires migration.
 
-The untagged ABI 11 inode stride changes to 80 bytes for resident accounting and
+The untagged ABI 11 inode stride changes to 88 bytes for resident accounting and
 payload versions. The VFS image format and process stride remain unchanged.
 No release archive or consumer pin uses this candidate layout.
 
@@ -181,3 +181,9 @@ resuming execution. The regression fixture releases an old write after the hart
 has been reassigned and checks the new guest's waiting state.
 
 Host pipe and terminal readers now use a shared cancellation queue. Aborting a process removes its pending read without closing inherited stdin; Sys, RV64 and legacy guest adapters pass the process signal. Regression fixtures kill and reap a reader, reuse its hart and verify that the next child and parent retain their input. Custom input providers must implement cancellation for pending reads.
+
+## Inode views
+
+The candidate inode layout includes a separate incarnation token. Host views read canonical metadata under locks and reject recycled slots and remounted filesystems. Checked reads use the live canonical process and credentials. The legacy object filesystem still needs replacement with these views.
+
+`HostBacking` now uses those inode and process views. Lazy provider completion rechecks both identities before committing metadata, covering reaped readers and recycled inode slots.

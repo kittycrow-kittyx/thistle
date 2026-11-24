@@ -148,3 +148,6 @@ bun run test
 
 - [io/read-queue](modules/io/read-queue.md)
 - [test/host-input.test](modules/test/host-input.test.md)
+
+- [host/inode](modules/host/inode.md)
+- [test/host-inode.test](modules/test/host-inode.test.md)

@@ -349,7 +349,8 @@ ABI identities, fixed region sizes, status/error values, flags and capacities us
 | `V_RESIDENT` | Inode offset 64, u64 host-resident bytes |
 | `V_VERSION` | Inode offset 72, u64 payload revision |
 | `THISTLE_VFS_HOST_BACKING` | Inode flag 1; `V_DATA` is an opaque host carrier handle |
-| `THISTLE_VFS_INODE_STRIDE` | 80 bytes; VFS image format remains unchanged |
+| `V_IDENTITY` | Inode offset 80, u64 incarnation token |
+| `THISTLE_VFS_INODE_STRIDE` | 88 bytes; VFS image format remains unchanged |
 
 `P_LEADER_HART` occupies process offset 348 in the untagged ABI 11 layout.
 
@@ -369,3 +370,5 @@ host callback phase does not park sibling guest harts.
 | `P_SIGNAL_PENDING` | Offset 328, one deferred supported signal |
 | `P_SIGNAL_LAST` | Offset 332, most recently delivered signal |
 | `P_SIGNAL_MASK` | Offset 336, unsigned 64-bit blocked mask |
+
+Candidate ABI 11 now uses an 88-byte inode stride. `V_IDENTITY` at byte 80 identifies one incarnation of an inode slot independently of its mutable payload version. The on-disk image retains 56-byte inode records.
