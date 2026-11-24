@@ -1,7 +1,8 @@
 import { withVfsLock, withImage } from "./native-access.js";
 import { bad } from "../core/err.js";
 import type { Errno } from "../core/err.js";
-import type { RegSource } from "../fs/vfs.js";
+import { SourceLoad } from "./bytes.js";
+import type { RegSource } from "./bytes.js";
 import { C_VFS_INODE_CAPACITY } from "../native/abi.js";
 import { loadU32, storeU32, storeU64 } from "../native/memory.js";
 import type { ThistleMemory } from "../native/memory.js";
@@ -10,8 +11,7 @@ import { thistleVfsBacking, thistleVfsBackingVersion, thistleVfsCommitBacking } 
 
 interface Payload {
   readonly bytes: Uint8Array | null;
-  readonly source: RegSource | null;
-  pending: Promise<Uint8Array> | null;
+  readonly source: SourceLoad | null;
 }
 
 const check = (status: number): void => {
@@ -45,12 +45,12 @@ export class HostBacking {
 
   setBytes(inode: number, proc: number, bytes: Uint8Array): void {
     const version = withVfsLock(this.memory, () => thistleVfsBackingVersion(this.memory, inode));
-    this.publish(inode, proc, { bytes: bytes.slice(), source: null, pending: null }, bytes.byteLength, version, true);
+    this.publish(inode, proc, { bytes: bytes.slice(), source: null }, bytes.byteLength, version, true);
   }
 
   setSource(inode: number, proc: number, source: RegSource): void {
     const version = withVfsLock(this.memory, () => thistleVfsBackingVersion(this.memory, inode));
-    this.publish(inode, proc, { bytes: null, source, pending: null }, source.size, version, true);
+    this.publish(inode, proc, { bytes: null, source: new SourceLoad(source) }, source.size, version, true);
   }
 
   async read(inode: number, proc: number): Promise<Uint8Array> {
@@ -63,10 +63,9 @@ export class HostBacking {
     const { payload, version, size } = snapshot;
     if (payload.bytes !== null) return payload.bytes.slice();
     const source = payload.source ?? bad("EIO", "missing lazy byte source");
-    payload.pending ??= source.load().finally(() => { payload.pending = null; });
-    const bytes = await payload.pending;
+    const bytes = await source.read();
     if (BigInt(bytes.byteLength) !== size) bad("EIO", "lazy payload length mismatch");
-    this.publish(inode, proc, { bytes: bytes.slice(), source: null, pending: null }, bytes.byteLength, version, false);
+    this.publish(inode, proc, { bytes: bytes.slice(), source: null }, bytes.byteLength, version, false);
     return bytes.slice();
   }
 

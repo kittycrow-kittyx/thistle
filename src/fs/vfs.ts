@@ -1,3 +1,5 @@
+import { SourceLoad } from "../host/bytes.js";
+import type { RegSource } from "../host/bytes.js";
 import { bad, KErr, requireValue } from "../core/err.js";
 import { dec, enc } from "../io/stream.js";
 
@@ -29,13 +31,7 @@ export type Kind = "file" | "dir" | "link" | "char";
 export type Rfn = (n: number) => Uint8Array;
 export type Wfn = (b: Uint8Array) => number;
 
-/** A regular-file payload supplied lazily by a static browser root. */
-export interface RegSource {
-  readonly size: number;
-  readonly sum: string;
-  readonly head: Uint8Array | null;
-  load(): Promise<Uint8Array>;
-}
+export type { RegSource } from "../host/bytes.js";
 
 let next = 1;
 
@@ -67,7 +63,7 @@ export class Reg extends VNode {
   data: Uint8Array;
   sum: string | null;
   source: RegSource | null;
-  private loading: Promise<Uint8Array> | null = null;
+  private loading: SourceLoad | null = null;
 
   constructor(
     data: Uint8Array | string = "",
@@ -94,14 +90,12 @@ export class Reg extends VNode {
   async materialise(): Promise<Uint8Array> {
     const source = this.source;
     if (source === null || this.data.length || source.size === 0) return this.data;
-    if (this.loading !== null) return this.loading;
-    this.loading = source.load().then(bytes => {
-      if (this.source !== source) throw new Error("lazy regular-file source changed during load");
-      if (bytes.length !== source.size) throw new Error("lazy regular-file size mismatch");
-      this.data = bytes;
-      return this.data;
-    }).finally(() => { if (this.source === source) this.loading = null; });
-    return this.loading;
+    const loading = this.loading ?? new SourceLoad(source);
+    this.loading = loading;
+    const bytes = await loading.read();
+    if (this.source !== loading.source) throw new Error("lazy regular-file source changed during load");
+    this.data = bytes;
+    return this.data;
   }
 
   replace(bytes: Uint8Array): void {

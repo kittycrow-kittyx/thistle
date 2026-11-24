@@ -121,3 +121,6 @@ bun run test
 - [host/directory](modules/host/directory.md)
 
 - [test/host-native-access.test](modules/test/host-native-access.test.md)
+
+- [host/bytes](modules/host/bytes.md)
+- [test/host-bytes.test](modules/test/host-bytes.test.md)
