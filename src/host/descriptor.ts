@@ -6,7 +6,7 @@ import { descriptorAt, freeDescriptor, installDescriptor, releaseDescriptor, thi
 import { checkNative, withVfsLock, withNativeLock, withImage } from "./native-access.js";
 import type { HostProcess } from "./process.js";
 import type { HostInode } from "./inode.js";
-import { thistleVfsWriteDescriptor } from "../native/vfs-edit.js";
+import { thistleVfsWriteDescriptor, thistleVfsOpenPath } from "../native/vfs-edit.js";
 
 const slot = (process: HostProcess, record: number, number: number): number => {
   if (!Number.isInteger(number) || number < 0 || number >= loadU32(process.memory, record + P_DESCRIPTOR_CAPACITY)) bad("EBADF", "descriptor outside canonical table");
@@ -83,6 +83,20 @@ export class HostDescriptor {
       checkNative(number);
       return new HostDescriptor(process, number, loadU32(memory, descriptorAt(memory, record, number) + FD_IDENTITY));
     })));
+  }
+
+  static openPath(process: HostProcess, path: string, flags: number, mode = 0o666, start = 0): HostDescriptor {
+    const memory = process.memory, bytes = new TextEncoder().encode(path);
+    if (bytes.length > 4096) bad("ENAMETOOLONG", path);
+    if (!Number.isInteger(flags) || flags < 0 || flags > 0xffffffff || !Number.isInteger(mode) ||
+        mode < 0 || mode > 0xffff || !Number.isInteger(start) || start < 0 || start > 0xffffffff) bad("EINVAL", "invalid open request");
+    return withImage(memory, Math.max(1, bytes.length), input => process.withDescriptors(record =>
+      withNativeLock(memory, C_CREDENTIAL_LOCK, () => withVfsLock(memory, () => {
+        memory.bytes.set(bytes, input);
+        const number = thistleVfsOpenPath(memory, record, start, input, bytes.length, flags, mode, BigInt(Date.now()));
+        checkNative(number);
+        return new HostDescriptor(process, number, loadU32(memory, descriptorAt(memory, record, number) + FD_IDENTITY));
+      }))));
   }
 
   private access<T>(operation: (state: number) => T): T {

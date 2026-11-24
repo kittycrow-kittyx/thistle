@@ -417,6 +417,12 @@ export const thistleVfsOpenInode = (memory: ThistleMemory, proc: Ptr, inode: U32
   const bits: U32 = kind === THISTLE_VFS_KIND_DIRECTORY ? 5 :
     ((flags & THISTLE_FD_READ) !== 0 ? 4 : 0) | ((flags & THISTLE_FD_WRITE) !== 0 ? 2 : 0);
   if (!allowed(memory, proc, inode, bits)) return -13;
+  return allocateInodeDescriptor(memory, proc, inode, flags, minimum);
+};
+
+/** Bind an inode whose type and open authority have already been validated. */
+export const allocateInodeDescriptor = (memory: ThistleMemory, proc: Ptr, inode: U32, flags: U32, minimum: U32): I32 => {
+  const kind = thistleVfsKind(memory, inode);
   const descriptor = freeDescriptor(memory, proc, minimum);
   if (descriptor < 0) return descriptor;
   const state = descriptorAt(memory, proc, wordToU32(word(descriptor)));

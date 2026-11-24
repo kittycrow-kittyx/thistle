@@ -35,3 +35,5 @@ Removing or replacing a directory held as a process cwd returns `EBUSY`. Renamin
 `thistleVfsWriteDescriptor` writes arena bytes through a live writable descriptor. Append selects the current inode size under lock. Access is retained after unlink or permission changes, and the descriptor offset advances only on success.
 
 `thistleVfsWriteScratch` accepts a bounded transfer from the canonical scratch region while the VFS lock is held, sharing write policy with `thistleVfsWriteDescriptor`.
+
+`thistleVfsOpenPath` resolves the original path and validates Linux access, creation, exclusive, truncate, append, directory, no-follow and close-on-exec flags. Creation applies the canonical umask and checks slot capacity before mutation. Truncating an existing writable file discards its payload and invalidates its revision without loading a lazy provider. Dangling final symlink creation follows the target when allowed.

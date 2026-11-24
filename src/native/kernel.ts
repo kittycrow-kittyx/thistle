@@ -208,8 +208,6 @@ import {
   FD_OFFSET,
   THISTLE_DESCRIPTOR_CAPACITY,
   THISTLE_DESCRIPTOR_STRIDE,
-  THISTLE_FD_CLOEXEC,
-  THISTLE_FD_APPEND,
   THISTLE_FD_DIRECTORY,
   THISTLE_FD_EMPTY,
   THISTLE_FD_HOST,
@@ -223,7 +221,6 @@ import {
   THISTLE_VFS_MAX_INODE_CAPACITY,
   THISTLE_VFS_MAX_DENTRY_CAPACITY,
   THISTLE_VFS_MAX_DATA_CAPACITY,
-  THISTLE_VFS_KIND_DIRECTORY,
   THISTLE_VFS_PATH_CAPACITY,
   THISTLE_START_FORMAT,
   THISTLE_START_MEMORY,
@@ -290,7 +287,7 @@ import {
   unsignedWordToFloat,
 } from "./word.js";
 import {
-  descriptorAt, releaseDescriptor, installDescriptor, thistleVfsOpenInode, descriptorAccessStatus, descriptorReadStatus, descriptorReadCount, thistleVfsReadDescriptor, thistleVfsSeekDescriptor,
+  descriptorAt, releaseDescriptor, installDescriptor, descriptorAccessStatus, descriptorReadStatus, descriptorReadCount, thistleVfsReadDescriptor, thistleVfsSeekDescriptor,
   thistleVfsAccess,
   thistleVfsKind,
   thistleVfsReadScratch,
@@ -299,7 +296,7 @@ import {
   thistleVfsRoot,
 } from "./vfs.js";
 
-import { thistleVfsWriteScratch } from "./vfs-edit.js";
+import { thistleVfsWriteScratch, thistleVfsOpenPath } from "./vfs-edit.js";
 
 const NO_RESERVATION: I64 = -1n;
 const UNMAPPED_POINTER: Ptr = 0xfffffffe;
@@ -365,9 +362,6 @@ const traceNodePointerWrite = (
   storeU32(memory, THISTLE_CONTROL_BASE + MMAP_TRACE_COUNTER, count + 1);
 };
 
-const OPEN_DIRECTORY: U32 = 0x10000;
-const OPEN_APPEND: U32 = 0x400;
-const OPEN_CLOEXEC: U32 = 0x80000;
 
 const regAt = (hart: U32, register: U32): Ptr => hartAt(hart) + H_X + register * 8;
 const floatRegAt = (hart: U32, register: U32): Ptr => hartAt(hart) + H_F + register * 8;
@@ -624,32 +618,12 @@ export const thistleOpenPath = (
     release(memory, proc + P_LOCK);
     return -11;
   }
-  const result = openPathLocked(memory, proc, start, path, pathLength, flags);
+  const result = thistleVfsOpenPath(memory, proc, start, path, pathLength, flags, 0o666, 0n);
   release(memory, vfsLock);
   release(memory, proc + P_LOCK);
   return result;
 };
 
-const openPathLocked = (
-  memory: ThistleMemory, proc: Ptr, start: U32, path: Ptr, pathLength: U32, flags: U32,
-): I32 => {
-  const access = flags & 3;
-  if (access === 3 || (flags & ~(3 | OPEN_DIRECTORY | OPEN_CLOEXEC | OPEN_APPEND | 0x8000)) !== 0) return -22;
-  const base = start === 0 ? loadU32(memory, proc + P_CWD_INODE) : start;
-  const resolved = thistleVfsResolve(memory, proc, base, path, pathLength, true);
-  if (resolved < 0) {
-    return resolved;
-  }
-  const inode = wordToU32(word(resolved));
-  const kind = thistleVfsKind(memory, inode);
-  if ((flags & OPEN_DIRECTORY) !== 0 && kind !== THISTLE_VFS_KIND_DIRECTORY) {
-    return -20;
-  }
-  const rights: U32 = access === 0 ? THISTLE_FD_READ : access === 1 ? THISTLE_FD_WRITE : THISTLE_FD_READ | THISTLE_FD_WRITE;
-  const extra: U32 = ((flags & OPEN_CLOEXEC) !== 0 ? THISTLE_FD_CLOEXEC : 0) |
-    ((flags & OPEN_APPEND) !== 0 && access !== 0 ? THISTLE_FD_APPEND : 0);
-  return thistleVfsOpenInode(memory, proc, inode, rights | extra, 3);
-};
 
 export const thistleReadDescriptor = (
   memory: ThistleMemory,
@@ -2439,7 +2413,7 @@ const copyGuestPath = (memory: ThistleMemory, hart: U32, address: U64, scratch: 
   return -36;
 };
 
-const mountedOpen = (memory: ThistleMemory, hart: U32, proc: Ptr, descriptor: I32, scratch: Ptr): I64 => {
+const mountedOpen = (memory: ThistleMemory, hart: U32, proc: Ptr, descriptor: I32, scratch: Ptr, now: U64): I64 => {
   const length = copyGuestPath(memory, hart, ux(x(memory, hart, 11)), scratch);
   if (length < 0) return word(length);
   if (length === 0) return -2n;
@@ -2450,7 +2424,7 @@ const mountedOpen = (memory: ThistleMemory, hart: U32, proc: Ptr, descriptor: I3
   if (relative && kind === THISTLE_FD_EMPTY) return -9n;
   if (relative && kind !== THISTLE_FD_DIRECTORY) return -20n;
   const base: U32 = relative ? loadU32(memory, dir + FD_INODE) : 0;
-  return word(openPathLocked(memory, proc, base, scratch, wordToU32(word(length)), wordToU32(x(memory, hart, 12))));
+  return word(thistleVfsOpenPath(memory, proc, base, scratch, wordToU32(word(length)), wordToU32(x(memory, hart, 12)), wordToU32(x(memory, hart, 13)), now));
 };
 
 const mountedRead = (memory: ThistleMemory, hart: U32, state: Ptr, scratch: Ptr): I64 => {
@@ -2500,7 +2474,7 @@ const mountedWrite = (memory: ThistleMemory, hart: U32, state: Ptr, scratch: Ptr
 const mountedFileLocked = (memory: ThistleMemory, hart: U32, proc: Ptr, number: U32, now: U64): I64 => {
   const descriptor = wordToI32(x(memory, hart, 10));
   const scratch = loadU32(memory, THISTLE_CONTROL_BASE + C_VFS_SCRATCH_BASE);
-  if (number === 56) return mountedOpen(memory, hart, proc, descriptor, scratch);
+  if (number === 56) return mountedOpen(memory, hart, proc, descriptor, scratch, now);
   if (descriptor < 0 || wordToU32(word(descriptor)) >= loadU32(memory, proc + P_DESCRIPTOR_CAPACITY)) return -9n;
   const state = descriptorAt(memory, proc, wordToU32(word(descriptor)));
   const kind = loadU32(memory, state + FD_KIND);
@@ -3105,7 +3079,7 @@ export const thistleExitHart = (memory: ThistleMemory, hart: U32, code: I32): I3
   return 0;
 };
 
-export { thistleVfsCreate, thistleVfsWrite, thistleVfsWriteDescriptor, thistleVfsLink, thistleVfsUnlink, thistleVfsCanMove, thistleVfsRename, thistleVfsChmod, thistleVfsChown, thistleVfsUtime } from "./vfs-edit.js";
+export { thistleVfsCreate, thistleVfsWrite, thistleVfsWriteDescriptor, thistleVfsOpenPath, thistleVfsLink, thistleVfsUnlink, thistleVfsCanMove, thistleVfsRename, thistleVfsChmod, thistleVfsChown, thistleVfsUtime } from "./vfs-edit.js";
 
 
 export { thistleProcessReap } from "./process-reap.js";

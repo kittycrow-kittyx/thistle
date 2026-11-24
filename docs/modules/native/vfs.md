@@ -51,3 +51,5 @@ Path resolution checks that the current component is a searchable directory befo
 with `-EXDEV`; native arena reads and writes share this check.
 
 `descriptorAccessStatus` checks an open regular file for any of the requested access bits. `descriptorReadCount` bounds a requested transfer by EOF. `descriptorWriteOffset` chooses the current EOF for append or the live cursor otherwise.
+
+`allocateInodeDescriptor` installs a validated open inode without repeating permission checks, including for a newly created file whose mode may deny subsequent opens.

@@ -1,5 +1,5 @@
 import {
-  C_VFS_DENTRY_CAPACITY, C_VFS_DENTRY_COUNT, C_VFS_DIRTY, C_VFS_GENERATION, C_VFS_SCRATCH_BASE, THISTLE_VFS_PATH_CAPACITY,
+  C_VFS_DENTRY_CAPACITY, C_VFS_DENTRY_COUNT, C_VFS_DIRTY, C_VFS_GENERATION, C_VFS_SCRATCH_BASE, THISTLE_VFS_PATH_CAPACITY, P_CWD_INODE, P_UMASK, THISTLE_FD_READ, THISTLE_FD_APPEND, THISTLE_FD_CLOEXEC, V_RESIDENT,
   C_VFS_INODE_CAPACITY, C_VFS_INODE_COUNT, D_INODE, D_NAME, D_NAME_HASH,
   D_NAME_LENGTH, D_PARENT, FD_INODE, FD_OFFSET, THISTLE_FD_WRITE, P_FSGID, P_FSUID, THISTLE_CONTROL_BASE,
   THISTLE_VFS_INODE_STRIDE, THISTLE_VFS_KIND_CHARACTER, THISTLE_VFS_KIND_DIRECTORY,
@@ -8,11 +8,11 @@ import {
 } from "./abi.js";
 import { word, ux, wordToU32 } from "./word.js";
 import { inputContains } from "./arena.js";
-import { atomicLoadU64, atomicStoreU64, copyMemory, fill, loadU32, loadU64, storeU32, storeU64 } from "./memory.js";
+import { atomicLoadU64, atomicStoreU64, copyMemory, fill, loadU8, loadU32, loadU64, storeU32, storeU64 } from "./memory.js";
 import type { ThistleMemory } from "./memory.js";
 import type { I32, Ptr, U32, U64 } from "./types.js";
 import {
-  allocateData, allowed, arenaInodeStatus, residentFits, growData, dentryAt, findChild, hashBytes, inodeAt, parentOf,
+  allocateData, allocateInodeDescriptor, freeDescriptor, descriptorAt, thistleVfsResolve, thistleVfsOpenInode, allowed, arenaInodeStatus, residentFits, growData, dentryAt, findChild, hashBytes, inodeAt, parentOf,
   sameName, thistleVfsKind, thistleVfsRelease, thistleVfsCwdHeld, descriptorAccessStatus, descriptorWriteOffset, validName,
 } from "./vfs.js";
 
@@ -76,7 +76,7 @@ const attachEntry = (
 ): I32 => {
   const access = parentAccess(memory, proc, parent);
   if (access !== 0) return access;
-  if (!inputContains(memory, name, length) || !validName(memory, name, length)) return -22;
+  if (!validName(memory, name, length)) return -22;
   if (thistleVfsKind(memory, inode) === 0) return -2;
   if (findChild(memory, parent, name, length) !== 0) return -17;
   const index = freeEntry(memory);
@@ -108,6 +108,7 @@ export const thistleVfsLink = (
   name: Ptr, length: U32, now: U64,
 ): I32 => {
   if (thistleVfsKind(memory, inode) === THISTLE_VFS_KIND_DIRECTORY) return -1;
+  if (!inputContains(memory, name, length)) return -22;
   return attachEntry(memory, proc, parent, inode, name, length, now);
 };
 
@@ -115,6 +116,16 @@ export const thistleVfsLink = (
 // The native ABI passes scalar arguments without allocating an options record.
 //@cg-expect-warning
 export const thistleVfsCreate = (
+  memory: ThistleMemory, proc: Ptr, parent: U32, name: Ptr, length: U32,
+  kind: U32, mode: U32, now: U64,
+): I32 => {
+  if (!inputContains(memory, name, length)) return -22;
+  return createInode(memory, proc, parent, name, length, kind, mode, now);
+};
+
+// The caller supplies a name in validated kernel memory and holds the VFS lock.
+//@cg-expect-warning
+const createInode = (
   memory: ThistleMemory, proc: Ptr, parent: U32, name: Ptr, length: U32,
   kind: U32, mode: U32, now: U64,
 ): I32 => {
@@ -138,6 +149,95 @@ export const thistleVfsCreate = (
   const count = loadU32(memory, THISTLE_CONTROL_BASE + C_VFS_INODE_COUNT);
   storeU32(memory, THISTLE_CONTROL_BASE + C_VFS_INODE_COUNT, count + 1);
   return inode;
+};
+
+const OPEN_CREATE: U32 = 0x40;
+const OPEN_EXCLUSIVE: U32 = 0x80;
+const OPEN_TRUNCATE: U32 = 0x200;
+const OPEN_APPEND: U32 = 0x400;
+const OPEN_DIRECTORY: U32 = 0x10000;
+const OPEN_NOFOLLOW: U32 = 0x20000;
+const OPEN_CLOEXEC: U32 = 0x80000;
+const OPEN_SUPPORTED: U32 = 3 | OPEN_CREATE | OPEN_EXCLUSIVE | OPEN_TRUNCATE | OPEN_APPEND |
+  0x800 | 0x8000 | OPEN_DIRECTORY | OPEN_NOFOLLOW | OPEN_CLOEXEC;
+
+/** Resolve an absent final component without lexical normalisation of its parent. */
+// The scalar arguments carry the same native path and inode authority as open.
+//@cg-expect-warning
+const createMissingFile = (
+  memory: ThistleMemory, proc: Ptr, base: U32, path: Ptr, length: U32,
+  mode: U32, now: U64, hops: U32,
+): I32 => {
+  if (hops > 32) return -40;
+  if (length === 0) return -2;
+  if (loadU8(memory, path + length - 1) === 47) return -21;
+  let name = path + length;
+  while (name > path && loadU8(memory, name - 1) !== 47) name -= 1;
+  const parentResult = name === path ? wordToI32(word(base)) :
+    thistleVfsResolve(memory, proc, base, path, name - path, true);
+  if (parentResult < 0) return parentResult;
+  const parent = wordToU32(word(parentResult)), nameLength = path + length - name;
+  if (thistleVfsKind(memory, parent) !== THISTLE_VFS_KIND_DIRECTORY) return -20;
+  if (!allowed(memory, proc, parent, 1)) return -13;
+  if (nameLength > 255) return -36;
+  if (!validName(memory, name, nameLength)) return -22;
+  const existing = findChild(memory, parent, name, nameLength);
+  if (existing === 0) return createInode(memory, proc, parent, name, nameLength, THISTLE_VFS_KIND_FILE, mode, now);
+  if (thistleVfsKind(memory, existing) !== THISTLE_VFS_KIND_LINK) return -17;
+  const link = inodeAt(memory, existing), size = loadU64(memory, link + V_SIZE);
+  if (size > 4096n) return -36;
+  return createMissingFile(memory, proc, parent, loadU32(memory, link + V_DATA), wordToU32(size), mode, now, hops + 1);
+};
+
+/** Truncation to zero needs no carrier I/O and invalidates pending payload revisions. */
+const truncateInode = (memory: ThistleMemory, inode: U32, now: U64): void => {
+  const state = inodeAt(memory, inode);
+  storeU32(memory, state + V_FLAGS, loadU32(memory, state + V_FLAGS) & ~THISTLE_VFS_HOST_BACKING);
+  storeU32(memory, state + V_DATA, 0);
+  storeU32(memory, state + V_CAPACITY, 0);
+  storeU64(memory, state + V_RESIDENT, 0n);
+  storeU64(memory, state + V_SIZE, 0n);
+  storeU32(memory, state + V_MODE, loadU32(memory, state + V_MODE) & ~0o6000);
+  storeU64(memory, state + V_VERSION, loadU64(memory, state + V_VERSION) + 1n);
+  touch(memory, inode, now, true);
+  changed(memory);
+};
+
+/** Common Linux-style path open; caller holds descriptor, credential and VFS locks. */
+// The native ABI passes scalar path, flags, mode and time without a host record.
+//@cg-expect-warning
+export const thistleVfsOpenPath = (
+  memory: ThistleMemory, proc: Ptr, start: U32, path: Ptr, length: U32,
+  flags: U32, mode: U32, now: U64,
+): I32 => {
+  const access = flags & 3, create = (flags & OPEN_CREATE) !== 0, truncate = (flags & OPEN_TRUNCATE) !== 0;
+  const directory = (flags & OPEN_DIRECTORY) !== 0;
+  if (access === 3 || (flags & ~OPEN_SUPPORTED) !== 0 || (create && directory) || (truncate && access === 0)) return -22;
+  const base = start === 0 ? loadU32(memory, proc + P_CWD_INODE) : start;
+  const exclusive = create && (flags & OPEN_EXCLUSIVE) !== 0;
+  const nofollow = exclusive || (flags & OPEN_NOFOLLOW) !== 0;
+  const resolved = thistleVfsResolve(memory, proc, base, path, length, !nofollow);
+  const rights: U32 = access === 0 ? THISTLE_FD_READ : access === 1 ? THISTLE_FD_WRITE : THISTLE_FD_READ | THISTLE_FD_WRITE;
+  const extra: U32 = ((flags & OPEN_CLOEXEC) !== 0 ? THISTLE_FD_CLOEXEC : 0) |
+    ((flags & OPEN_APPEND) !== 0 && access !== 0 ? THISTLE_FD_APPEND : 0);
+  if (resolved === -2 && create) {
+    if (freeDescriptor(memory, proc, 3) < 0) return -24;
+    const made = createMissingFile(memory, proc, base, path, length, mode & ~loadU32(memory, proc + P_UMASK), now, 0);
+    if (made < 0) return made;
+    return allocateInodeDescriptor(memory, proc, wordToU32(word(made)), rights | extra, 3);
+  }
+  if (resolved < 0) return resolved;
+  if (exclusive) return -17;
+  const inode = wordToU32(word(resolved)), kind = thistleVfsKind(memory, inode);
+  if (nofollow && kind === THISTLE_VFS_KIND_LINK) return -40;
+  if (directory && kind !== THISTLE_VFS_KIND_DIRECTORY) return -20;
+  if (kind === THISTLE_VFS_KIND_DIRECTORY && (create || truncate)) return -21;
+  if (kind === THISTLE_VFS_KIND_CHARACTER) return -18;
+  const descriptor = thistleVfsOpenInode(memory, proc, inode, rights | extra, 3);
+  if (descriptor < 0 || !truncate) return descriptor;
+  truncateInode(memory, inode, now);
+  storeU64(memory, descriptorAt(memory, proc, wordToU32(word(descriptor))) + FD_OFFSET, 0n);
+  return descriptor;
 };
 
 /** Write or replace bytes in the canonical data arena; old bytes survive ENOSPC. */
