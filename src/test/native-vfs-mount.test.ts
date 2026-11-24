@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { planHostThistleVfs } from "../native/vfs-image.js";
+import type { TreeEnt } from "../fs/tree.js";
 import { mountedKernel, rootVfsImage } from "./vfs-fixture.js";
 import { withImage } from "../host/native-access.js";
 import { thistleVfsCreate } from "../native/vfs-edit.js";
 import { thistleLoadVfs, thistleVfsIdentity, thistleVfsKind } from "../native/vfs.js";
-import { thistleProcessRecord, thistleOpenPath, thistleCloseDescriptor } from "../native/kernel.js";
+import { thistleKernelInit, thistleProcessRecord, thistleOpenPath, thistleCloseDescriptor } from "../native/kernel.js";
 import { P_CWD_INODE, P_DESCRIPTOR_TABLE, THISTLE_DESCRIPTOR_STRIDE, FD_KIND, THISTLE_VFS_BUSY } from "../native/abi.js";
-import { loadU32, storeU32 } from "../native/memory.js";
+import { directMemory, loadU32, storeU32 } from "../native/memory.js";
 
 test("remount preserves live inode and working-directory references on refusal", () => {
   const memory = mountedKernel(), proc = thistleProcessRecord(memory, 0), image = rootVfsImage();
@@ -35,4 +37,21 @@ test("remount preserves live inode and working-directory references on refusal",
     assert.equal(thistleLoadVfs(memory, input, image.length), 0);
     assert.equal(thistleVfsKind(memory, file), 0);
   });
+});
+
+test("default VFS loads a root with the audited mikuOS inode count", () => {
+  const root: TreeEnt = { p: "/", k: "d", id: 1, mode: 0o755, uid: 0, gid: 0,
+    at: 0, mt: 0, ct: 0, data: null, sum: null, size: null, source: null, to: null };
+  const entries: TreeEnt[] = [root];
+  for (let index = 0; index < 4667; index++) {
+    entries.push({ ...root, p: "/f" + index, k: "f", id: index + 13, data: new Uint8Array(), size: 0 });
+  }
+  const memory = directMemory(64 * 1024 * 1024);
+  assert.equal(thistleKernelInit(memory, 1, false), 0);
+  const { image } = planHostThistleVfs(entries);
+  withImage(memory, image.length, input => {
+    memory.bytes.set(image, input);
+    assert.equal(thistleLoadVfs(memory, input, image.length), 0);
+  });
+  assert.equal(thistleVfsKind(memory, 4679), 1);
 });

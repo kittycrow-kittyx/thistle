@@ -7,3 +7,5 @@
 `HostInode.resolve` passes the unnormalised path and native process working directory to canonical traversal, retaining the incarnation observed under lock. `chmod`, `chown` and `utime` marshal requests to native metadata operations with live process credentials. These methods do not replace the public object filesystem yet.
 
 Directory entry creation, hard links, rename and unlink pass through native VFS mutation functions. Cross-directory rename and links validate both inode incarnations while holding the same native VFS lock. Arena byte writes likewise invoke the existing native write operation; host-backed payloads retain their separate byte-carrier contract.
+
+`inodeKind` maps native file, directory, link and character kinds to `f`, `d`, `l` and `c`; an unknown kind raises `EIO`.

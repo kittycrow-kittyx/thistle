@@ -375,4 +375,4 @@ Candidate ABI 11 uses an 88-byte inode stride. `V_IDENTITY` at byte 80 identifie
 
 `THISTLE_VFS_BUSY` is mount status 6. It reports retained file descriptors or a process working directory below the current root.
 
-The default canonical VFS reserves 8192 inode slots and 16384 directory-entry slots. The mikuOS reference root manifest contains 4668 distinct inodes and a maximum inode ID of 4679; the former 4096-slot default cannot load it. Explicit smaller or larger configurations remain available through `thistleKernelInitWithVfs`.
+Default VFS: 8192 inode slots, 16384 directory-entry slots. Reference mikuOS root: 4668 inodes, maximum ID 4679. `thistleKernelInitWithVfs` accepts explicit capacities.
