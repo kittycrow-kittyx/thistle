@@ -12,3 +12,7 @@ process table has 256 records.
 
 The adapter has no process registry or PID counter. Hart and process capacity
 failures return EAGAIN. Guest execution receives this same `memory` instance.
+
+`readyPids` snapshots ready identities from the native process table under
+the process lock. Callers may modify the returned array without changing
+canonical readiness.

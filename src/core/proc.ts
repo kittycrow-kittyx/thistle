@@ -1,8 +1,8 @@
 import type { In, Out } from "../io/stream.js";
-import type { HostProcess } from "../host/process.js";
+import type { HostProcess, HostProcessState } from "../host/process.js";
 import type { ProcCred } from "../fs/vfs.js";
 
-export type PState = "ready" | "run" | "sleep" | "stop" | "zombie";
+export type PState = HostProcessState;
 export type Sig = 0 | 1 | 2 | 9 | 13 | 15;
 
 export interface Io {
@@ -64,8 +64,12 @@ export interface ProcInit {
 }
 
 export class Proc {
-  state: PState = "ready";
-  code: number | null = null;
+  // Completion retains a terminal receipt after reaping; live state belongs to native memory.
+  private finishedCode: number | null = null;
+  get completed(): boolean { return this.finishedCode !== null; }
+  get state(): PState { return this.finishedCode === null ? this.native.phase.state : "zombie"; }
+  set state(value: PState) { this.native.setState(value); }
+  get code(): number | null { return this.finishedCode ?? this.native.phase.code; }
   sig: Sig | null = null;
   readonly born = Date.now();
   readonly ac = new AbortController();
@@ -113,13 +117,12 @@ export class Proc {
   }
 
   end(n: number): void {
-    if (this.code !== null) return;
+    if (this.finishedCode !== null) return;
     this.native.finish(n & 0xff);
-    this.code = n & 0xff;
-    this.state = "zombie";
+    this.finishedCode = n & 0xff;
     const finish = this.fin;
     if (finish === null) throw new Error("missing process completion resolver");
-    finish(this.code);
+    finish(this.finishedCode);
   }
 
   signal(s: Sig): boolean {

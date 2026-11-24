@@ -352,3 +352,14 @@ ABI identities, fixed region sizes, status/error values, flags and capacities us
 | `THISTLE_VFS_INODE_STRIDE` | 80 bytes; VFS image format remains unchanged |
 
 `P_LEADER_HART` occupies process offset 348 in the untagged ABI 11 layout.
+
+| Canonical process phase | Value |
+| --- | --- |
+| `THISTLE_PROCESS_RUNNABLE` | 1, ready |
+| `THISTLE_PROCESS_WAITING` | 2, waiting |
+| `THISTLE_PROCESS_ZOMBIE` | 3, exited |
+| `THISTLE_PROCESS_RUNNING` | 4, host callback running |
+| `THISTLE_PROCESS_STOPPED` | 5, stopped phase |
+
+Hart status and events determine CPU readiness within a process. Updating a
+host callback phase does not park sibling guest harts.

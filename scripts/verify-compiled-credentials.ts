@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { THISTLE_ABI_VERSION, C_ABI, C_PHYSICAL_NEXT, P_GROUP_DATA } from "../src/native/abi.ts";
+import { THISTLE_ABI_VERSION, C_ABI, C_PHYSICAL_NEXT, P_GROUP_DATA, P_STATE, THISTLE_PROCESS_RUNNING, THISTLE_PROCESS_WAITING } from "../src/native/abi.ts";
 import { rootVfsImage } from "../src/test/vfs-fixture.ts";
 
 type NativeCall = (...args: (number | bigint)[]) => number | bigint;
@@ -30,6 +30,10 @@ for (const threaded of [false, true]) {
   assert.equal(invoke("ProcessAttach", 0, 1, 1), 0);
   assert.equal(invoke("ProcessRecord", 0, 1), proc);
   assert.equal(invoke("ProcessCount", 0), 1);
+  assert.equal(invoke("ProcessSetHostState", 0, 0, 1, THISTLE_PROCESS_RUNNING), 0);
+  assert.equal(view.getUint32(proc + P_STATE, true), THISTLE_PROCESS_RUNNING);
+  assert.equal(invoke("ProcessSetHostState", 0, 0, 999, THISTLE_PROCESS_WAITING), -3);
+  assert.equal(invoke("ProcessSetHostState", 0, 0, 1, THISTLE_PROCESS_WAITING), 0);
   assert.equal(invoke("ProcessAttach", 0, 1, 1), -16);
 
   const initial = view.getUint32(C_PHYSICAL_NEXT, true);

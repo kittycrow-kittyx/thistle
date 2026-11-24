@@ -1,11 +1,13 @@
-import { thistleProcessFinish } from "../native/process-host.js";
+import { thistleProcessFinish, thistleProcessSetHostState } from "../native/process-host.js";
 import { bad } from "../core/err.js";
 import type { ProcCred } from "../fs/vfs.js";
 import {
   C_PROCESS_LOCK, C_CREDENTIAL_LOCK, P_PID, P_RUID, P_EUID, P_SUID,
-  P_RGID, P_EGID, P_SGID, P_FSUID, P_FSGID, P_GROUP_COUNT, P_UMASK, P_PPID, P_PGID,
+  P_RGID, P_EGID, P_SGID, P_FSUID, P_FSGID, P_GROUP_COUNT, P_UMASK, P_PPID, P_PGID, P_STATE, P_EXIT_CODE,
+  THISTLE_PROCESS_RUNNABLE, THISTLE_PROCESS_WAITING, THISTLE_PROCESS_ZOMBIE,
+  THISTLE_PROCESS_RUNNING, THISTLE_PROCESS_STOPPED,
 } from "../native/abi.js";
-import { atomicStoreI32, loadU32, storeU32 } from "../native/memory.js";
+import { atomicStoreI32, loadI32, loadU32, storeU32 } from "../native/memory.js";
 import type { ThistleMemory } from "../native/memory.js";
 import { readGroup } from "../native/credentials.js";
 import { thistleProcessInstallCredentials, thistleProcessRecord, thistleProcessIdentity, thistleProcessGroups, thistleProcessUmask } from "../native/process-state.js";
@@ -13,6 +15,17 @@ import { withNativeLock, withImage, checkNative } from "./native-access.js";
 
 const identityRequest = (id: number | null): number =>
   id === null ? 0xffffffff : id === 0xffffffff ? Number.NaN : id;
+
+export type HostProcessState = "ready" | "run" | "sleep" | "stop" | "zombie";
+export interface HostProcessPhase { readonly state: HostProcessState; readonly code: number | null }
+const phaseCodes: Readonly<Record<HostProcessState, number>> = {
+  ready: THISTLE_PROCESS_RUNNABLE, run: THISTLE_PROCESS_RUNNING, sleep: THISTLE_PROCESS_WAITING,
+  stop: THISTLE_PROCESS_STOPPED, zombie: THISTLE_PROCESS_ZOMBIE,
+};
+const phaseNames: Readonly<Record<number, HostProcessState>> = {
+  [THISTLE_PROCESS_RUNNABLE]: "ready", [THISTLE_PROCESS_RUNNING]: "run",
+  [THISTLE_PROCESS_WAITING]: "sleep", [THISTLE_PROCESS_STOPPED]: "stop", [THISTLE_PROCESS_ZOMBIE]: "zombie",
+};
 
 export type HostIdentityField = "ruid" | "euid" | "suid" | "rgid" | "egid" | "sgid" | "fsuid" | "fsgid" | "umask";
 const identityOffsets: Readonly<Record<HostIdentityField, number>> = {
@@ -57,6 +70,18 @@ export class HostProcess {
 
   finish(code: number): void {
     checkNative(thistleProcessFinish(this.memory, this.hart, this.pid, code));
+  }
+
+  get phase(): HostProcessPhase {
+    return this.withRecord(record => {
+      const state = loadU32(this.memory, record + P_STATE);
+      return { state: phaseNames[state] ?? bad("EPROTO", "invalid canonical process phase"),
+        code: state === THISTLE_PROCESS_ZOMBIE ? loadI32(this.memory, record + P_EXIT_CODE) & 0xff : null };
+    });
+  }
+
+  setState(state: HostProcessState): void {
+    checkNative(thistleProcessSetHostState(this.memory, this.hart, this.pid, phaseCodes[state]));
   }
 
   id(field: HostIdentityField): number {

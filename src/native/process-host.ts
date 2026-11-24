@@ -4,7 +4,7 @@ import {
   P_LEADER_HART, P_STATE, P_PID, P_EXIT_CODE, P_SEGMENT_COUNT, P_IMAGE_ENTRY,
   THISTLE_HART_EMPTY, THISTLE_HART_EXITED, THISTLE_HART_RUNNABLE,
   THISTLE_HART_WAITING, THISTLE_PROCESS_RUNNABLE, THISTLE_PROCESS_WAITING,
-  THISTLE_PROCESS_ZOMBIE, THISTLE_EVENT_NONE,
+  THISTLE_PROCESS_ZOMBIE, THISTLE_PROCESS_RUNNING, THISTLE_PROCESS_STOPPED, THISTLE_EVENT_NONE,
 } from "./abi.js";
 import { atomicStoreI32, compareExchangeI32, fill, loadU32, loadU64, storeI64 } from "./memory.js";
 import type { ThistleMemory } from "./memory.js";
@@ -64,14 +64,23 @@ const finishLocked = (memory: ThistleMemory, proc: Ptr, slot: U32, code: I32): I
   return 0;
 };
 
+const setHostStateLocked = (memory: ThistleMemory, proc: Ptr, state: I32): I32 => {
+  if (state !== THISTLE_PROCESS_RUNNABLE && state !== THISTLE_PROCESS_WAITING &&
+      state !== THISTLE_PROCESS_RUNNING && state !== THISTLE_PROCESS_STOPPED) return -22;
+  // A sleeping host syscall must not park sibling guest harts; their readiness remains per hart.
+  atomicStoreI32(memory, proc + P_STATE, state);
+  return 0;
+};
+
 // Hold the process and every bound hart lock across each complete transition.
 const changeLocked = (memory: ThistleMemory, hart: U32, proc: Ptr, operation: U32, code: I32): I32 => {
   if (loadU32(memory, proc + P_LEADER_HART) !== hart ||
       operation !== 3 && loadU32(memory, proc + P_STATE) === THISTLE_PROCESS_ZOMBIE) return -22;
   const slot = loadU32(memory, hartAt(hart) + H_PROCESS_SLOT);
   if (!lockProcessHarts(memory, slot)) return -11;
-  const result = operation === 3 ? finishLocked(memory, proc, slot, code) : operation === 2
-    ? runImageLocked(memory, hart, proc) : parkLocked(memory, hart, proc, operation);
+  const result = operation === 4 ? setHostStateLocked(memory, proc, code) : operation === 3
+    ? finishLocked(memory, proc, slot, code) : operation === 2
+      ? runImageLocked(memory, hart, proc) : parkLocked(memory, hart, proc, operation);
   unlockProcessHarts(memory, slot, loadU32(memory, C_MAX_HARTS), INVALID_POINTER);
   return result;
 };
@@ -98,3 +107,7 @@ export const thistleProcessRunImage = (memory: ThistleMemory, hart: U32): I32 =>
 /** Finish every process hart while checking the host view's allocated identity. */
 export const thistleProcessFinish = (memory: ThistleMemory, hart: U32, pid: U32, code: I32): I32 =>
   pid === 0 ? -22 : change(memory, hart, 3, code, pid);
+
+/** Host callback phase lives in the canonical process word; hart events retain CPU readiness. */
+export const thistleProcessSetHostState = (memory: ThistleMemory, hart: U32, pid: U32, state: I32): I32 =>
+  pid === 0 ? -22 : change(memory, hart, 4, state, pid);

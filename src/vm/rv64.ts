@@ -1021,7 +1021,7 @@ export class Rv64 {
     const pid = hostNumber(pid0, "wait pid"), fl = this.nat(fl0, "wait flags", 0x7fffffff);
     const p = (pid > 0 ? (this.s.k.procs.get(pid) ?? null) : ([...this.s.p.kids].map(n => (this.s.k.procs.get(n) ?? null)).find(q => q !== null) ?? null)) ?? bad("ECHILD", String(pid));
     if (p.ppid !== this.s.pid) bad("ECHILD", String(pid));
-    if ((fl & 1) && p.code === null) return 0n;
+    if ((fl & 1) && !p.completed) return 0n;
     const code = await p.done, sig = p.sig;
     if (st) { this.mem(st, 4, true); this.m.set32(st, sig ? sig & 0x7f : (code & 255) << 8); }
     if (ru) this.putUsage(ru, p.ms());

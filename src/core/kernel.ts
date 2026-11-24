@@ -89,7 +89,7 @@ export class Kern {
   readonly apps = new Map<string, App>();
   readonly procs = new Map<number, Proc>();
   readonly logs: string[] = [];
-  readonly sched = new Sched();
+  readonly sched = new Sched(this.canonical);
   readonly born = Date.now();
   name: string;
   readonly release: string;
@@ -337,7 +337,7 @@ export class Kern {
   reap(pid: number, par: Proc | null = null): void {
     if (pid <= 2) return;
     const p = this.procs.get(pid) ?? null;
-    if (!p || p.code === null) return;
+    if (!p || !p.completed) return;
     const owner = this.procs.get(p.ppid) ?? null;
     const init = this.procs.get(1) ?? null;
     const parent = requireValue(par ?? owner ?? init, "canonical reaper");

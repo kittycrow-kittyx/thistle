@@ -26,3 +26,7 @@ process metadata; the trusted group setter updates the native word atomically.
 
 `HostIdentityField` names individual identity words. `id` reads one word under
 the credential lock, avoiding supplementary-group copies for scalar getters.
+
+`HostProcessState` names the hosted phase labels. `HostProcessPhase` is a
+state/exit-code snapshot read by `phase` under the process lock. `setState`
+updates the canonical phase through the PID-checked native operation.

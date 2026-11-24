@@ -1,12 +1,13 @@
 import { bad } from "../core/err.js";
 import { THISTLE_KERNEL_MEMORY_BYTES } from "../core/kernel-memory.js";
 import type { ProcCred } from "../fs/vfs.js";
-import { C_MAX_HARTS, H_STATUS, THISTLE_HART_EMPTY } from "../native/abi.js";
+import { C_MAX_HARTS, H_STATUS, THISTLE_HART_EMPTY, C_PROCESS_LOCK,
+  C_PROCESS_CAPACITY, P_STATE, P_PID, THISTLE_PROCESS_RUNNABLE } from "../native/abi.js";
 import { directMemory, atomicStoreI32, loadU32 } from "../native/memory.js";
 import { thistleKernelInit, thistleHartInit, thistleProcessInit, thistleExitHart, thistleProcessReap, thistleNextPid, thistleProcessPark } from "../native/kernel.js";
-import { hartAt } from "../native/state.js";
+import { hartAt, processAt } from "../native/state.js";
 import { HostProcess } from "./process.js";
-import { checkNative } from "./native-access.js";
+import { checkNative, withNativeLock } from "./native-access.js";
 
 /** Own one canonical memory instance; retain no second process registry. */
 export class HostContext {
@@ -23,6 +24,17 @@ export class HostContext {
 
   nextPid(): number {
     return thistleNextPid(this.memory) || bad("EAGAIN", "canonical PID allocation");
+  }
+
+  readyPids(): number[] {
+    return withNativeLock(this.memory, C_PROCESS_LOCK, () => {
+      const result: number[] = [], count = loadU32(this.memory, C_PROCESS_CAPACITY);
+      for (let slot = 0; slot < count; slot++) {
+        const proc = processAt(this.memory, slot);
+        if (loadU32(this.memory, proc + P_STATE) === THISTLE_PROCESS_RUNNABLE) result.push(loadU32(this.memory, proc + P_PID));
+      }
+      return result;
+    });
   }
 
   create(pid: number, ppid: number, credentials: ProcCred): HostProcess {

@@ -1,7 +1,7 @@
 import { installCredentials, readGroup, replaceGroups, writeGroup, updateIdentity } from "./credentials.js";
 import {
   C_MAX_HARTS, C_PROCESS_LOCK, C_CREDENTIAL_LOCK, C_VFS_LOCK, C_NEXT_PID, P_EUID, P_FSUID, P_FSGID, P_GROUP_COUNT, THISTLE_BATCH_CONTENDED, THISTLE_FAULT_BAD_STATE, THISTLE_FAULT_MEMORY,
-  H_LOCK, H_PROCESS_SLOT, H_STATUS, THISTLE_HART_RUNNABLE, THISTLE_PROCESS_RUNNABLE, THISTLE_PROCESS_WAITING,
+  H_LOCK, H_PROCESS_SLOT, H_STATUS, THISTLE_HART_RUNNABLE, THISTLE_PROCESS_RUNNABLE, THISTLE_PROCESS_WAITING, THISTLE_PROCESS_RUNNING,
   P_RGID, P_RUID, P_STATE, P_UMASK,
 } from "./abi.js";
 import { inputContains } from "./arena.js";
@@ -130,7 +130,7 @@ export const thistleProcessReadGroups = (memory: ThistleMemory, hart: U32, outpu
 const attachBoundLocked = (memory: ThistleMemory, hart: U32, slot: U32): I32 => {
   const proc = processAt(memory, slot), at = hartAt(hart);
   const state = loadU32(memory, proc + P_STATE);
-  if (state !== THISTLE_PROCESS_RUNNABLE && state !== THISTLE_PROCESS_WAITING) return -3;
+  if (state !== THISTLE_PROCESS_RUNNABLE && state !== THISTLE_PROCESS_WAITING && state !== THISTLE_PROCESS_RUNNING) return -3;
   if (loadU32(memory, at + H_PROCESS_SLOT) !== INVALID_POINTER) return -16;
   if (loadU32(memory, at + H_STATUS) !== THISTLE_HART_RUNNABLE) return -22;
   bindProcess(memory, hart, slot);

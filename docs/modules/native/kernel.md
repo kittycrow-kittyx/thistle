@@ -81,3 +81,7 @@ and applies the shared canonical mapping resize policy to hosted file mappings.
 The embedding flushes truncated shared bytes before calling it and updates
 its byte-carrier routing after success. Reservation, release and resize hold
 both hart and process locks against reaping or concurrent execution.
+
+`thistleProcessSetHostState` re-exports the PID-checked callback phase update
+from process-host. The native process state word also supplies host listings
+and ready snapshots.

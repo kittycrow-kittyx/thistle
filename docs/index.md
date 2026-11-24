@@ -141,3 +141,5 @@ bun run test
 - [test/native-guest-access.test](modules/test/native-guest-access.test.md)
 
 - [test/native-host-map.test](modules/test/native-host-map.test.md)
+
+- [test/host-lifecycle.test](modules/test/host-lifecycle.test.md)

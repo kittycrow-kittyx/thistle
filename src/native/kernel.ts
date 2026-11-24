@@ -3133,4 +3133,4 @@ export { thistleProcessReap } from "./process-reap.js";
 export { thistleProcessInstallCredentials, thistleProcessAttach, thistleProcessSetGroup, thistleProcessReadGroups, thistleProcessRecord, thistleNextPid, thistleProcessIdentity, thistleProcessGroups, thistleProcessUmask } from "./process-state.js";
 export { thistleVfsBacking, thistleVfsBackingVersion, thistleVfsCommitBacking, thistleVfsSetQuota } from "./vfs-backing.js";
 
-export { thistleProcessFinish, thistleProcessPark, thistleProcessPrepareImage, thistleProcessRunImage } from "./process-host.js";
+export { thistleProcessSetHostState, thistleProcessFinish, thistleProcessPark, thistleProcessPrepareImage, thistleProcessRunImage } from "./process-host.js";
