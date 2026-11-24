@@ -53,3 +53,5 @@ with `-EXDEV`; native arena reads and writes share this check.
 `descriptorAccessStatus` checks an open regular file for any of the requested access bits. `descriptorReadCount` bounds a requested transfer by EOF. `descriptorWriteOffset` chooses the current EOF for append or the live cursor otherwise.
 
 `allocateInodeDescriptor` installs a validated open inode without repeating permission checks, including for a newly created file whose mode may deny subsequent opens.
+
+Character-device opens with the explicit host-transport flag bind a canonical inode in a host descriptor. Access is checked by the native open operation. The device is nonseekable, and native-only callers without a host transport receive EXDEV. Closing an unlinked device follows the ordinary inode lifetime rule.

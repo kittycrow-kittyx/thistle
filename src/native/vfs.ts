@@ -1,7 +1,7 @@
 import { readGroup } from "./credentials.js";
 import { inputContains } from "./arena.js";
 import {
-  C_PROCESS_CAPACITY,
+  C_PROCESS_CAPACITY, C_FLAGS, THISTLE_FLAG_HOST_TRANSPORT, THISTLE_FD_HOST, THISTLE_VFS_KIND_CHARACTER,
   FD_INODE, FD_KIND, FD_FLAGS, FD_IDENTITY, FD_OFFSET, THISTLE_FD_EMPTY, THISTLE_FD_READ, THISTLE_FD_WRITE, THISTLE_FD_APPEND, THISTLE_FD_CLOEXEC, THISTLE_FD_FILE, THISTLE_FD_DIRECTORY, P_DESCRIPTOR_CAPACITY, P_DESCRIPTOR_TABLE, THISTLE_DESCRIPTOR_STRIDE,
   C_PROCESS_TABLE_BASE,
   C_VFS_DATA_BASE,
@@ -412,11 +412,12 @@ export const thistleVfsOpenInode = (memory: ThistleMemory, proc: Ptr, inode: U32
       ((flags & THISTLE_FD_APPEND) !== 0 && (flags & THISTLE_FD_WRITE) === 0)) return -22;
   const kind = thistleVfsKind(memory, inode);
   if (kind === THISTLE_VFS_KIND_EMPTY) return -2;
-  if (kind !== THISTLE_VFS_KIND_DIRECTORY && kind !== THISTLE_VFS_KIND_FILE) return -22;
+  if (kind !== THISTLE_VFS_KIND_DIRECTORY && kind !== THISTLE_VFS_KIND_FILE && kind !== THISTLE_VFS_KIND_CHARACTER) return -22;
   if (kind === THISTLE_VFS_KIND_DIRECTORY && (flags & THISTLE_FD_WRITE) !== 0) return -21;
   const bits: U32 = kind === THISTLE_VFS_KIND_DIRECTORY ? 5 :
     ((flags & THISTLE_FD_READ) !== 0 ? 4 : 0) | ((flags & THISTLE_FD_WRITE) !== 0 ? 2 : 0);
   if (!allowed(memory, proc, inode, bits)) return -13;
+  if (kind === THISTLE_VFS_KIND_CHARACTER && (loadU32(memory, C_FLAGS) & THISTLE_FLAG_HOST_TRANSPORT) === 0) return -18;
   return allocateInodeDescriptor(memory, proc, inode, flags, minimum);
 };
 
@@ -426,7 +427,7 @@ export const allocateInodeDescriptor = (memory: ThistleMemory, proc: Ptr, inode:
   const descriptor = freeDescriptor(memory, proc, minimum);
   if (descriptor < 0) return descriptor;
   const state = descriptorAt(memory, proc, wordToU32(word(descriptor)));
-  const result = installDescriptor(memory, state, kind === THISTLE_VFS_KIND_DIRECTORY ? THISTLE_FD_DIRECTORY : THISTLE_FD_FILE, flags, inode);
+  const result = installDescriptor(memory, state, kind === THISTLE_VFS_KIND_DIRECTORY ? THISTLE_FD_DIRECTORY : kind === THISTLE_VFS_KIND_CHARACTER ? THISTLE_FD_HOST : THISTLE_FD_FILE, flags, inode);
   if (result !== 0) return result;
   if ((flags & THISTLE_FD_APPEND) !== 0) storeU64(memory, state + FD_OFFSET, thistleVfsFileSize(memory, inode));
   return descriptor;
@@ -544,6 +545,7 @@ export const thistleVfsReadDescriptor = (memory: ThistleMemory, state: Ptr, outp
 
 export const thistleVfsSeekDescriptor = (memory: ThistleMemory, state: Ptr, offset: I64, whence: U32): I64 => {
   const kind = loadU32(memory, state + FD_KIND);
+  if (kind === THISTLE_FD_HOST) return -29n;
   if (kind !== THISTLE_FD_FILE && kind !== THISTLE_FD_DIRECTORY) return -9n;
   if (whence > 2) return -22n;
   const base: I64 = whence === 1 ? sx(loadU64(memory, state + FD_OFFSET), 64) :

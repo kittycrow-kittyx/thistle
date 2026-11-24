@@ -13,3 +13,5 @@
 `readFile` and `writeFile` select the registered byte carrier for host-backed inodes, otherwise use the native arena. `materialiseFile` awaits the carrier when needed and does not move the descriptor offset.
 
 `openPath` marshals the path, flags, creation mode and optional starting inode to the same native path-open operation used by RV64.
+
+Character descriptor reads and writes delegate only byte transport to the registered host device. The canonical descriptor provides access rights, inode identity and offset. Callbacks run outside kernel locks and completion revalidates the descriptor before advancing its offset.

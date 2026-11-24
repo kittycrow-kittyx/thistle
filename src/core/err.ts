@@ -3,7 +3,7 @@ export type Errno =
   | "EXDEV" | "EFAULT" | "EFBIG" | "EINTR" | "EINVAL" | "EIO" | "EISDIR" | "ELOOP" | "EMFILE"
   | "ENAMETOOLONG" | "ENFILE" | "ENOENT" | "ENOEXEC" | "ENOMEM"
   | "ENETUNREACH" | "ENOSPC" | "ENOSYS" | "ENOTDIR" | "ENOTEMPTY" | "ENOTSUP"
-  | "EPERM" | "EPIPE" | "EPROTO" | "ERANGE" | "EROFS" | "ESRCH" | "ETIMEDOUT";
+  | "EPERM" | "EPIPE" | "ESPIPE" | "EPROTO" | "ERANGE" | "EROFS" | "ESRCH" | "ETIMEDOUT";
 
 export class KErr extends Error {
   constructor(public readonly code: Errno, msg: string = code) {

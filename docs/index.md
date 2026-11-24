@@ -133,6 +133,7 @@ bun run test
 - [host/process](modules/host/process.md)
 - [host/cwd](modules/host/cwd.md)
 - [host/descriptor](modules/host/descriptor.md)
+- [host/devices](modules/host/devices.md)
 - [test/host-process.test](modules/test/host-process.test.md)
 
 - [test/native-image-lifetime.test](modules/test/native-image-lifetime.test.md)

@@ -281,9 +281,8 @@ export const thistleVfsOpenPath = (
   if (nofollow && kind === THISTLE_VFS_KIND_LINK) return -40;
   if (directory && kind !== THISTLE_VFS_KIND_DIRECTORY) return -20;
   if (kind === THISTLE_VFS_KIND_DIRECTORY && (create || truncate)) return -21;
-  if (kind === THISTLE_VFS_KIND_CHARACTER) return -18;
   const descriptor = thistleVfsOpenInode(memory, proc, inode, rights | extra, 3);
-  if (descriptor < 0 || !truncate) return descriptor;
+  if (descriptor < 0 || !truncate || kind === THISTLE_VFS_KIND_CHARACTER) return descriptor;
   truncateInode(memory, inode, now);
   storeU64(memory, descriptorAt(memory, proc, wordToU32(word(descriptor))) + FD_OFFSET, 0n);
   return descriptor;
