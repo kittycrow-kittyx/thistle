@@ -8,3 +8,5 @@ re-exports this type for existing consumers.
 length and clears its pending promise after success or failure. It stores no
 inode, permission or filesystem state. Both the legacy `Reg` reference and the
 canonical `HostBacking` adapter use it. Each caller controls publication.
+
+`fileSum` retains the persistence format's existing content checksum for both legacy and canonical snapshots.

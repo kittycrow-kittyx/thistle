@@ -21,3 +21,9 @@ export class SourceLoad {
     return this.pending;
   }
 }
+
+export const fileSum = (b: Uint8Array): string => {
+  let n = 0x811c9dc5;
+  for (const x of b) { n ^= x; n = Math.imul(n, 0x01000193); }
+  return `${b.length}:${(n >>> 0).toString(16)}`;
+};

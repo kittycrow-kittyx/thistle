@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mountHostTree } from "../host/mount.js";
+import { dumpHostTree } from "../host/snapshot.js";
 import { HostInode } from "../host/inode.js";
 import { HostProcess } from "../host/process.js";
 import { mountedKernel } from "./vfs-fixture.js";
@@ -52,4 +53,30 @@ test("root mounting retains hard links, lazy storage and recorded metadata", asy
     assert.ok(descriptor >= 3);
     assert.equal(thistleCloseDescriptor(memory, process.hart, descriptor), 0);
   });
+});
+
+test("canonical persistence round trip retains aliases, arena data and lazy sources", async () => {
+  const memory = mountedKernel(), process = new HostProcess(memory, 0);
+  const source = { size: 3, sum: "lazy", head: null,
+    load: () => { throw new Error("snapshot must not load lazy bytes"); } };
+  const sparse: TreeEnt = { ...entry("/sparse", "f", 4), data: null, size: 3, source };
+  const entries = [entry("/", "d", 1), entry("/base", "f", 2), entry("/alias", "f", 2), entry("/link", "l", 3), sparse];
+  const backing = mountHostTree(process, entries, 4096);
+  const directory = HostInode.resolve(process, "/");
+  const arena = directory.create(process, "arena", 1, 0o644);
+  arena.write(process, enc("xyz"), 0, true);
+  directory.create(process, "device", 4, 0o666);
+  const dumped = dumpHostTree(process, backing);
+  const byPath = new Map(dumped.map(item => [item.p, item]));
+  assert.equal(byPath.get("/base")?.id, byPath.get("/alias")?.id);
+  assert.deepEqual(byPath.get("/base")?.data, enc("AB"));
+  assert.deepEqual(byPath.get("/arena")?.data, enc("xyz"));
+  assert.equal(byPath.get("/link")?.to, "base");
+  assert.equal(byPath.get("/sparse")?.source, source);
+  assert.equal(byPath.has("/device"), false);
+  const restored = mountHostTree(process, dumped, 4096);
+  const restoredArena = HostInode.resolve(process, "/arena");
+  assert.deepEqual(await restored.read(restoredArena.ino, process), enc("xyz"));
+  assert.equal(HostInode.resolve(process, "/base").ino, HostInode.resolve(process, "/alias").ino);
+  assert.equal(dumpHostTree(process, restored).find(item => item.p === "/sparse")?.source, source);
 });

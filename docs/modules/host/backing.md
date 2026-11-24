@@ -29,3 +29,5 @@ Operations take a `HostProcess` view. Provider completion checks process and ino
 The registry is bound to its root inode incarnation. A remount expires the registry; `collect` then discards its old byte carriers.
 
 `installLocked` is the mount transaction entry: the caller supplies a validated process record and reserved input buffer while holding the process, credential and VFS locks. It shares the backing commit implementation with ordinary operations.
+
+`snapshot` returns a copied resident carrier or its existing lazy source under live inode and process validation; arena-backed data returns null for the native reader. It does not fetch or publish lazy bytes.

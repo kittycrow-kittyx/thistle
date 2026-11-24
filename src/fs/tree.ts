@@ -1,4 +1,5 @@
 import { bad } from "../core/err.js";
+import { fileSum } from "../host/bytes.js";
 import { Chr, Dir, Reg, Sym, Vfs } from "./vfs.js";
 import type { RegSource, VNode } from "./vfs.js";
 
@@ -28,11 +29,7 @@ export interface Tree {
 
 const root = { uid: 0, gid: 0, groups: [0] };
 
-export const fileSum = (b: Uint8Array): string => {
-  let n = 0x811c9dc5;
-  for (const x of b) { n ^= x; n = Math.imul(n, 0x01000193); }
-  return `${b.length}:${(n >>> 0).toString(16)}`;
-};
+export { fileSum } from "../host/bytes.js";
 
 const assignRegularPayload = (entry: TreeEnt, node: Reg): void => {
   if (node.lazy && node.source !== null) { entry.source = node.source; return; }

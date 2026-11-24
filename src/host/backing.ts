@@ -99,6 +99,20 @@ export class HostBacking {
     this.commit({ inode, payload, size, expected: thistleVfsBackingVersion(this.memory, inode), operation: 2 }, proc, input);
   }
 
+  /** Export the existing carrier without loading a lazy provider or changing inode state. */
+  snapshot(view: HostInode, process: HostProcess): Uint8Array | RegSource | null {
+    if (view.memory !== this.memory) bad("EINVAL", "backing snapshot instance mismatch");
+    return view.access(process, proc => {
+      this.checkMountLocked();
+      if (!thistleVfsAccess(this.memory, proc, view.ino, 4)) bad("EACCES", "backing read denied");
+      const handle = thistleVfsBacking(this.memory, view.ino);
+      if (handle === 0) return null;
+      const payload = this.payloads.get(handle) ?? bad("EIO", "missing host byte carrier");
+      if (payload.bytes !== null) return payload.bytes.slice();
+      return payload.source?.source ?? bad("EIO", "missing lazy byte source");
+    });
+  }
+
   async read(inode: number, process: HostProcess): Promise<Uint8Array> {
     const view = new HostInode(this.memory, inode);
     const snapshot = view.access(process, proc => {
