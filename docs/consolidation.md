@@ -212,6 +212,6 @@ Canonical directory changes and path reconstruction use dentries and process cwd
 
 `Kern` no longer imports host defaults. Its constructor accepts explicit limits, network and WASI capabilities. RAM discovery and environment overrides moved from `core/cap.ts` to `host/limits.ts`; the `createHostKernel` entry owns host defaults. mikuOS will obtain these services at its host boundary during repinning. The original native kernel graph and the supported host capability implementations remain intact.
 
-The canonical namespace now supports atomic creation of symlinks with their target bytes, through `HostInode.symlink`. The production filesystem adapter will use this operation in place of mutable object nodes. Native failures leave no partially published link.
+`HostInode.symlink` creates a canonical symlink and its target bytes atomically. The production filesystem adapter will use this operation in place of mutable object nodes. Native failures leave no partially published link.
 
-Character-device opens now retain native inode and descriptor authority. The explicit host device registry retains only callback capabilities, keyed by live inode incarnation. This is required for migrating `/dev` and `/proc` without an object filesystem or a second permissions implementation.
+Character-device opens retain native inode and descriptor authority. The explicit host device registry retains only callback capabilities, keyed by live inode incarnation. This is required for migrating `/dev` and `/proc` without an object filesystem or a second permissions implementation.
