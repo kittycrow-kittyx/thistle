@@ -1,6 +1,5 @@
-import { withVfsLock, withImage } from "./native-access.js";
+import { withVfsLock, withImage, checkNative } from "./native-access.js";
 import { bad } from "../core/err.js";
-import type { Errno } from "../core/err.js";
 import { SourceLoad } from "./bytes.js";
 import type { RegSource } from "./bytes.js";
 import { C_VFS_INODE_CAPACITY } from "../native/abi.js";
@@ -13,12 +12,6 @@ interface Payload {
   readonly bytes: Uint8Array | null;
   readonly source: SourceLoad | null;
 }
-
-const check = (status: number): void => {
-  if (status >= 0) return;
-  const codes: Record<number, Errno> = { 11: "EAGAIN", 13: "EACCES", 14: "EFAULT", 22: "EINVAL", 28: "ENOSPC", 95: "ENOTSUP" };
-  bad(codes[-status] ?? "EIO", "canonical backing operation returned " + status);
-};
 
 /** Byte carriers only. Kernel memory owns all inode, permission and quota state. */
 export class HostBacking {
@@ -36,7 +29,7 @@ export class HostBacking {
       storeU64(this.memory, input + 8, BigInt(size));
       storeU64(this.memory, input + 16, BigInt(payload.bytes === null ? 0 : payload.bytes.byteLength));
       withVfsLock(this.memory, () => {
-        check(thistleVfsCommitBacking(this.memory, proc, inode, expected, input, BigInt(Date.now())));
+        checkNative(thistleVfsCommitBacking(this.memory, proc, inode, expected, input, BigInt(Date.now())));
         this.payloads.set(handle, payload);
         this.collectLocked();
       });
@@ -49,6 +42,7 @@ export class HostBacking {
   }
 
   setSource(inode: number, proc: number, source: RegSource): void {
+    if (source.size === 0) { this.setBytes(inode, proc, new Uint8Array()); return; }
     const version = withVfsLock(this.memory, () => thistleVfsBackingVersion(this.memory, inode));
     this.publish(inode, proc, { bytes: null, source: new SourceLoad(source) }, source.size, version, true);
   }

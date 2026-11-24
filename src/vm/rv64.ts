@@ -1,6 +1,7 @@
 // This module composes kernel, toolchain or integration-test boundaries and intentionally imports their contracts.
 //@cg-expect-warning
 import { THISTLE_KERNEL_MEMORY_BYTES } from "../core/kernel-memory.js";
+import { errnoNumbers as eno } from "../core/errno.js";
 import { hostNumber, randomFill, readString } from "./mem64.js";
 import { ensure } from "../core/err.js";
 import type { TerminalState } from "../io/stream.js";
@@ -196,14 +197,6 @@ interface ThistleThreadRuntime {
   failure: Error | null;
 }
 
-const eno: Record<Errno, number> = {
-  EPERM: 1, ENOENT: 2, ESRCH: 3, EINTR: 4, EIO: 5, ECHILD: 10, EAGAIN: 11,
-  ENOMEM: 12, EACCES: 13, EFAULT: 14, EBUSY: 16, EEXIST: 17, ENOTDIR: 20, EISDIR: 21,
-  EINVAL: 22, ENFILE: 23, EMFILE: 24, EFBIG: 27, ENOSPC: 28, EPIPE: 32,
-  ERANGE: 34, ENAMETOOLONG: 36, ENOSYS: 38, ENOTEMPTY: 39, ELOOP: 40,
-  ENOEXEC: 8, EBADF: 9, EPROTO: 71, ENOTSUP: 95, ENETUNREACH: 101,
-  ETIMEDOUT: 110, EROFS: 30,
-};
 
 const sx = (n: bigint, z: number): bigint => BigInt.asIntN(z, n);
 const ux = (n: bigint): bigint => BigInt.asUintN(64, n);

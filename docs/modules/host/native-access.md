@@ -8,3 +8,7 @@
 Release retries repeat only cleanup. They do not repeat the callback or report
 an already committed operation as failed. The canonical image lock retains
 ownership until the release succeeds.
+
+`withNativeLock` applies the same synchronous callback contract to a specified
+canonical lock. `checkNative` translates errors through the shared
+`errnoNumbers` table, with EIO for unknown numeric statuses.

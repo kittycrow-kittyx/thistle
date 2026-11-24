@@ -1,14 +1,18 @@
+import { errnoNumbers } from "../core/errno.js";
 import { bad } from "../core/err.js";
 import { C_VFS_LOCK, THISTLE_THX_BUSY } from "../native/abi.js";
 import { atomicStoreI32, compareExchangeI32 } from "../native/memory.js";
 import type { ThistleMemory } from "../native/memory.js";
 import { thistleImageReserve, thistleImageRelease } from "../native/kernel.js";
 
-export const withVfsLock = <T>(memory: ThistleMemory, operation: () => T): T => {
-  if (compareExchangeI32(memory, C_VFS_LOCK, 0, 1) !== 0) bad("EAGAIN", "VFS is busy");
+export const withNativeLock = <T>(memory: ThistleMemory, lock: number, operation: () => T): T => {
+  if (compareExchangeI32(memory, lock, 0, 1) !== 0) bad("EAGAIN", "canonical state is busy");
   try { return operation(); }
-  finally { atomicStoreI32(memory, C_VFS_LOCK, 0); }
+  finally { atomicStoreI32(memory, lock, 0); }
 };
+
+export const withVfsLock = <T>(memory: ThistleMemory, operation: () => T): T =>
+  withNativeLock(memory, C_VFS_LOCK, operation);
 
 const releaseImage = (memory: ThistleMemory, input: number, size: number): void => {
   const status = thistleImageRelease(memory, input, size);
@@ -23,4 +27,16 @@ export const withImage = <T>(memory: ThistleMemory, size: number, operation: (in
   if (input === 0xffffffff) bad("EAGAIN", "input lease unavailable");
   try { return operation(input); }
   finally { releaseImage(memory, input, size); }
+};
+
+/** Translate numeric ABI errors using the same table as the guest adapter. */
+export const checkNative = (status: number): void => {
+  if (status >= 0) return;
+  for (const [code, number] of Object.entries(errnoNumbers)) {
+    if (number === -status) {
+      const known = code as keyof typeof errnoNumbers;
+      bad(known, "canonical operation returned " + status);
+    }
+  }
+  bad("EIO", "unknown canonical status " + status);
 };

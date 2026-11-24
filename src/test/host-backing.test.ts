@@ -33,4 +33,7 @@ test("host byte carriers preserve copies and reject stale lazy completion", asyn
   assert.deepEqual([...await store.read(inode, proc)], [7, 8]);
   store.collect();
   assert.deepEqual([...await store.read(inode, proc)], [7, 8]);
+  store.setSource(inode, proc, { size: 0, sum: "", head: null,
+    load: () => { throw new Error("empty files must not fetch a provider"); } });
+  assert.equal((await store.read(inode, proc)).byteLength, 0);
 });

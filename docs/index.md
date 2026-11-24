@@ -126,3 +126,7 @@ bun run test
 - [test/host-bytes.test](modules/test/host-bytes.test.md)
 
 - [test/native-process-attach.test](modules/test/native-process-attach.test.md)
+
+- [core/errno](modules/core/errno.md)
+- [host/process](modules/host/process.md)
+- [test/host-process.test](modules/test/host-process.test.md)

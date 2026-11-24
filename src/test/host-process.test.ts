@@ -1,0 +1,38 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { HostProcess } from "../host/process.js";
+import { mountedKernel } from "./vfs-fixture.js";
+import { thistleHartInit, thistleProcessInit, thistleExitHart, thistleProcessReap } from "../native/kernel.js";
+import { thistleProcessAttach, thistleProcessIdentity } from "../native/process-state.js";
+
+test("host process views read shared native credentials and reject expired identity", () => {
+  const memory = mountedKernel(3);
+  assert.equal(thistleHartInit(memory, 1, 0x10000000n, 0n), 0);
+  assert.equal(thistleProcessInit(memory, 1, 2, 1, 0, 0, 0, 0, 0, 0), 0);
+  assert.equal(thistleHartInit(memory, 2, 0x10000000n, 0n), 0);
+  assert.equal(thistleProcessAttach(memory, 2, 2), 0);
+  const first = new HostProcess(memory, 1), second = new HostProcess(memory, 2);
+  const groups: number[] = [];
+  for (let index = 0; index < 40; index++) groups.push(index + 100);
+  first.setGroups(groups);
+  const snapshot = second.identity();
+  assert.equal(snapshot.credentials.groups.length, 40);
+  snapshot.credentials.groups.length = 0;
+  snapshot.credentials.euid = 999;
+  assert.equal(first.identity().credentials.euid, 0);
+  assert.equal(first.identity().credentials.groups.length, 40);
+  assert.equal(first.setIdentity(0, 1000, 1000, 0), 0);
+  assert.equal(second.identity().credentials.euid, 1000);
+  assert.throws(() => second.setGroups([0.5]), { code: "EPERM" });
+  assert.equal(thistleProcessIdentity(memory, 1, 4, 0, 0xffffffff, 0xffffffff), 0n);
+  assert.equal(second.identity().credentials.euid, 0);
+  assert.throws(() => second.setGroups([0.5]), { code: "EINVAL" });
+  assert.equal(second.setUmask(0o077), 0o022);
+  assert.equal(first.identity().umask, 0o077);
+  assert.equal(thistleExitHart(memory, 2, 0), 0);
+  assert.equal(thistleExitHart(memory, 1, 0), 0);
+  assert.equal(thistleProcessReap(memory, 0, 2), 0);
+  assert.equal(thistleHartInit(memory, 1, 0x10000000n, 0n), 0);
+  assert.equal(thistleProcessInit(memory, 1, 3, 1, 0, 0, 0, 0, 0, 0), 0);
+  assert.throws(() => first.identity(), { code: "ESRCH" });
+});
