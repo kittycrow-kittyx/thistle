@@ -70,3 +70,8 @@ under process and hart locks.
 
 `thistleProcessFinish` re-exports the checked host completion operation from
 process-host. The allocated PID must still match the hart binding.
+
+`thistleGuestAccess` accepts a hart, expected PID, guest address, byte length and
+read/write/execute permission bits. It checks canonical mappings under the hart
+lock. Success returns zero; EFAULT denies inaccessible memory, ESRCH rejects
+an expired binding and EAGAIN reports contention.

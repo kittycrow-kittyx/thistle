@@ -149,7 +149,8 @@
       "thistleProcessPark",
       "thistleProcessPrepareImage",
       "thistleProcessRunImage",
-      "thistleProcessFinish"
+      "thistleProcessFinish",
+      "thistleGuestAccess"
     ],
     "verify": {
       "init": "tetoKernelInit",
@@ -267,7 +268,8 @@
       "thistleProcessPark": "tetoProcessPark",
       "thistleProcessPrepareImage": "tetoProcessPrepareImage",
       "thistleProcessRunImage": "tetoProcessRunImage",
-      "thistleProcessFinish": "tetoProcessFinish"
+      "thistleProcessFinish": "tetoProcessFinish",
+      "thistleGuestAccess": "tetoGuestAccess"
     }
   },
   "memory": {

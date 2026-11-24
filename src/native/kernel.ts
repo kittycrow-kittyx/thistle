@@ -716,8 +716,7 @@ export const thistleReadDescriptor = (
   return amount;
 };
 
-// Lock the descriptor before the VFS: SEEK_END reads the live inode size.
-// Reject negative or overflowing offsets before publishing the new cursor.
+/** SEEK_END reads size under the descriptor/VFS lock order; overflow must leave the cursor unchanged. */
 export const thistleSeekDescriptor = (
   memory: ThistleMemory,
   hart: U32,
@@ -1037,6 +1036,23 @@ const guestAllowed = (
     index += 1;
   }
   return false;
+};
+
+/** Host syscalls use the same mapped-range and permission checks as guest instructions. */
+export const thistleGuestAccess = (memory: ThistleMemory, hart: U32, pid: U32, address: U64, size: U32, permission: U32): I32 => {
+  if (!validKernel(memory) || !validHart(memory, hart) || permission < 1 || permission > 7) return -22;
+  if (address < 0n || size < 0 || size > 0xffffffff || floatFloor(size) !== size) return -14;
+  const at = hartAt(hart);
+  if (!acquire(memory, at + H_LOCK)) return -11;
+  const proc = processForHart(memory, hart);
+  let result: I32 = -3;
+  if (proc !== INVALID_POINTER && loadU32(memory, proc + P_PID) === pid) {
+    const allowed = size === 0 ? address <= atomicLoadU64(memory, proc + P_VIRTUAL_TOP)
+      : guestAllowed(memory, hart, address, size, permission);
+    result = allowed ? 0 : -14;
+  }
+  release(memory, at + H_LOCK);
+  return result;
 };
 
 const pageHash = (page: U64, capacity: U32): U32 =>

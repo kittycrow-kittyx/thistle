@@ -9,7 +9,7 @@
     "check": "bun --bun tsc -p tsconfig.json --noEmit",
     "guards": "bash scripts/guards.sh",
     "test": "bun test --timeout 60000 src/test",
-    "test:memory": "bun test --timeout 60000 src/test/kernel-memory.test.ts src/test/native-image-lifetime.test.ts",
+    "test:memory": "bun test --timeout 60000 src/test/kernel-memory.test.ts src/test/native-image-lifetime.test.ts src/test/native-guest-access.test.ts",
     "test:numeric": "bun test --timeout 60000 src/test/native-word.test.ts",
     "test:vfs": "bun test --timeout 60000 src/test/native-vfs-syscall.test.ts src/test/native-vfs-edit.test.ts src/test/native-vfs-backing.test.ts",
     "test:process": "bun test --timeout 60000 src/test/native-process-reap.test.ts src/test/native-process-state.test.ts src/test/native-credentials.test.ts src/test/native-process-attach.test.ts src/test/native-process-host.test.ts",

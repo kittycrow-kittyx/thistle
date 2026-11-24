@@ -24,6 +24,7 @@ import { ThistleMem64 } from "../native/host-memory.js";
 import type { ThistleExports } from "../native/host-exports.js";
 import {
   thistleKernelValid,
+  thistleGuestAccess,
   thistleHartGetX,
   thistleHartSetX,
   thistleHartGetF,
@@ -386,15 +387,8 @@ export class Rv64 {
 
   private thistleDescribeImage(exe: Exe): void {
     this.seg.length = 0;
-    const seen: Array<[bigint, bigint]> = [];
     for (const section of exe.sec) {
-      const at = BigInt(section.addr), end = at + BigInt(section.size);
-      if (section.addr < 0x10000 || section.addr % section.align || end > this.m.top || section.data.length > section.size) {
-        bad("ENOEXEC", `section ${section.name} has an invalid mapping`);
-      }
-      if (seen.some(([left, right]) => at < right && end > left)) bad("ENOEXEC", `section ${section.name} overlaps another section`);
-      seen.push([at, end]);
-      this.seg.push({ name: section.name, at, end, flg: section.flg });
+      this.seg.push({ name: section.name, at: BigInt(section.addr), end: BigInt(section.addr) + BigInt(section.size), flg: section.flg });
     }
   }
 
@@ -1776,14 +1770,9 @@ break; }
   private random(at: bigint, n: number): number { return randomFill(this.m, this.mem.bind(this), at, n); }
 
   private mem(at: bigint, n: number, wr = false): void {
-    const end = at + BigInt(n);
-    if (at < 0n || !Number.isSafeInteger(n) || n < 0 || end > this.m.top) bad("ERANGE", `RV64 memory at 0x${at.toString(16)}`);
-    if (!n) return;
-    const q = at < this.floor ? (this.seg.find(s => at >= s.at && end <= s.end) ?? null) : null;
-    const mapped = !!q || at >= this.floor && end <= this.brk || at >= this.stackAt || this.maps.some(m => at >= m.at && end <= m.end);
-    if (!mapped) bad("ERANGE", `unmapped RV64 memory at 0x${at.toString(16)} from pc 0x${(this.pc - 2n).toString(16)} (a3=0x${ux(requireValue(this.x[13] ?? null, "src/vm/rv64.ts:2355")).toString(16)}, a7=0x${ux(requireValue(this.x[17] ?? null, "src/vm/rv64.ts:2355")).toString(16)})`);
-    if (wr && q && !q.flg.includes("w")) bad("EACCES", `write to ${q.name}`);
-    if (wr && !q && this.maps.some(m => at >= m.at && end <= m.end && !(m.prot & 2))) bad("EACCES", "write to read-only RV64 mapping");
+    if (!this.executionActive) bad("EINTR", "expired guest image");
+    if (!Number.isSafeInteger(n) || n < 0 || n > 0xffffffff || at < 0n) bad("ERANGE", "invalid guest access range");
+    checkNative(thistleGuestAccess(requireValue(this.nativeMemory, "canonical memory"), this.thistleActiveHart, this.s.pid, at, n, wr ? 2 : 1));
   }
 
 

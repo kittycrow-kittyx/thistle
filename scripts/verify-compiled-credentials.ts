@@ -80,6 +80,9 @@ for (const threaded of [false, true]) {
   assert.equal(invoke("ImageSegment", 0, 0, 1, 1, 0x200000n, 4n, 5, code, 4), 0);
   assert.equal(invoke("ImageFinish", 0, 0, 4), 0);
   assert.equal(invoke("ImageRelease", 0, code, 4), 0);
+  assert.equal(invoke("GuestAccess", 0, 0, 1, 0x200000n, 4, 1), 0);
+  assert.equal(invoke("GuestAccess", 0, 0, 1, 0x200000n, 4, 2), -14);
+  assert.equal(invoke("GuestAccess", 0, 0, 999, 0x200000n, 4, 1), -3);
   assert.equal(invoke("HartSetX", 0, 0, 17, 174n), 0);
   assert.equal(invoke("RunRv64Batch", 0, 0, 1, 0n, -1), 0);
   assert.equal(invoke("HartGetX", 0, 0, 10), 0xfffffffen);
