@@ -106,3 +106,5 @@ a byte count or negative errno, and does not resolve the pathname again.
 `thistleVfsCommitDescriptorBacking` re-exports the open-file carrier publication primitive from [vfs-backing](vfs-backing.md).
 
 Mounted RV64 `openat` accepts existing-file read, write, read/write, append, directory and close-on-exec flags. Native arena writes use the same descriptor write policy as host calls; host-backed data and non-console host capabilities delegate to the registered transport when `THISTLE_FLAG_HOST_TRANSPORT` is enabled. Creation, exclusive, truncate and no-follow flags use the common `thistleVfsOpenPath` implementation. `thistleOpenPath` supplies default mode 0666 and timestamp zero; RV64 supplies mode and batch time.
+
+The dispatcher imports the filesystem surface from [vfs-api](vfs-api.md), which re-exports the existing VFS implementations without additional state. Path open holds the descriptor, credential and VFS locks.

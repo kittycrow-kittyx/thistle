@@ -67,7 +67,7 @@ const parentAccess = (memory: ThistleMemory, proc: Ptr, parent: U32): I32 => {
   return allowed(memory, proc, parent, 3) ? 0 : -13;
 };
 
-/** Attach a new name to canonical inode state. The input must be a reserved image. */
+/** Attach a new name from validated kernel memory to canonical inode state. */
 // The native ABI passes scalar arguments without allocating an options record.
 //@cg-expect-warning
 const attachEntry = (

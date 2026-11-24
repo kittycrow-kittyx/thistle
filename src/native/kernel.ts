@@ -287,6 +287,7 @@ import {
   unsignedWordToFloat,
 } from "./word.js";
 import {
+  thistleVfsWriteScratch, thistleVfsOpenPath,
   descriptorAt, releaseDescriptor, installDescriptor, descriptorAccessStatus, descriptorReadStatus, descriptorReadCount, thistleVfsReadDescriptor, thistleVfsSeekDescriptor,
   thistleVfsAccess,
   thistleVfsKind,
@@ -294,9 +295,7 @@ import {
   thistleVfsLoaded,
   thistleVfsResolve,
   thistleVfsRoot,
-} from "./vfs.js";
-
-import { thistleVfsWriteScratch, thistleVfsOpenPath } from "./vfs-edit.js";
+} from "./vfs-api.js";
 
 const NO_RESERVATION: I64 = -1n;
 const UNMAPPED_POINTER: Ptr = 0xfffffffe;
@@ -613,13 +612,17 @@ export const thistleOpenPath = (
   const proc = processForHart(memory, hart);
   if (proc === INVALID_POINTER) return -3;
   if (!acquire(memory, proc + P_LOCK)) return -11;
+  const credentials = THISTLE_CONTROL_BASE + C_CREDENTIAL_LOCK;
+  if (!acquire(memory, credentials)) { release(memory, proc + P_LOCK); return -11; }
   const vfsLock = THISTLE_CONTROL_BASE + C_VFS_LOCK;
   if (!acquire(memory, vfsLock)) {
+    release(memory, credentials);
     release(memory, proc + P_LOCK);
     return -11;
   }
   const result = thistleVfsOpenPath(memory, proc, start, path, pathLength, flags, 0o666, 0n);
   release(memory, vfsLock);
+  release(memory, credentials);
   release(memory, proc + P_LOCK);
   return result;
 };
@@ -2501,12 +2504,16 @@ const mountedFileSyscall = (memory: ThistleMemory, hart: U32, proc: Ptr, number:
   const lock = proc + P_LOCK;
   const vfsLock = THISTLE_CONTROL_BASE + C_VFS_LOCK;
   if (!acquire(memory, lock)) return internalSyscall(memory, hart, -11n);
+  const credentials = THISTLE_CONTROL_BASE + C_CREDENTIAL_LOCK;
+  if (number === 56 && !acquire(memory, credentials)) { release(memory, lock); return internalSyscall(memory, hart, -11n); }
   if (!acquire(memory, vfsLock)) {
+    if (number === 56) release(memory, credentials);
     release(memory, lock);
     return internalSyscall(memory, hart, -11n);
   }
   const result = mountedFileLocked(memory, hart, proc, number, now);
   release(memory, vfsLock);
+  if (number === 56) release(memory, credentials);
   release(memory, lock);
   if (result === -18n && hostTransport(memory)) return fallbackSyscall(memory, hart);
   return internalSyscall(memory, hart, result);
@@ -2653,6 +2660,15 @@ const getProcessId = (memory: ThistleMemory, hart: U32, proc: Ptr, number: U32):
   return fallbackSyscall(memory, hart);
 };
 
+const mountedFileOperation = (memory: ThistleMemory, hart: U32, number: U32): boolean => {
+  if (number === 56 || number === 57 || number === 62) return true;
+  if (number !== 63 && number !== 64) return false;
+  const descriptor = wordToU32(x(memory, hart, 10));
+  const kind = thistleDescriptorKind(memory, hart, descriptor);
+  return kind !== THISTLE_FD_HOST || (number === 63 && descriptor !== 0) ||
+    (number === 64 && descriptor !== 1 && descriptor !== 2);
+};
+
 const kernelSyscall = (memory: ThistleMemory, hart: U32, nowMicros: I64): I32 => {
   const at = hartAt(hart);
   const proc = processForHart(memory, hart);
@@ -2663,15 +2679,9 @@ const kernelSyscall = (memory: ThistleMemory, hart: U32, nowMicros: I64): I32 =>
   // The mounted filesystem is authoritative, independent of the compiler target.
   // Without a mount, the embedding system owns filesystem operations.
   const mountedVfs = thistleVfsLoaded(memory);
-  if (mountedVfs) {
-    const now = nowMicros < 0n ? 0n : ux(nowMicros / 1000n);
-    if (number === 56 || number === 57 || number === 62) return mountedFileSyscall(memory, hart, proc, number, now);
-    if (number === 63 || number === 64) {
-      const descriptor = wordToU32(x(memory, hart, 10));
-      const kind = thistleDescriptorKind(memory, hart, descriptor);
-      if (kind !== THISTLE_FD_HOST || (number === 63 && descriptor !== 0) ||
-          (number === 64 && descriptor !== 1 && descriptor !== 2)) return mountedFileSyscall(memory, hart, proc, number, now);
-    }
+  if (mountedVfs && mountedFileOperation(memory, hart, number)) {
+    const now: U64 = nowMicros < 0n ? 0n : ux(nowMicros / 1000n);
+    return mountedFileSyscall(memory, hart, proc, number, now);
   }
   // Opt-in native console. Hosted runtimes retain their existing syscall path.
   if (number === 63 && (loadU32(memory, THISTLE_CONTROL_BASE + C_FLAGS) & THISTLE_FLAG_HOST_STDIN) !== 0) return readHostConsole(memory, hart, proc, mountedVfs);

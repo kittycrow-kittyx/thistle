@@ -70,6 +70,7 @@ bun run test
 - [native/types](modules/native/types.md)
 - [native/vfs](modules/native/vfs.md)
 - [native/vfs-edit](modules/native/vfs-edit.md)
+- [native/vfs-api](modules/native/vfs-api.md)
 - [native/word](modules/native/word.md)
 - [net/host-fetch](modules/net/host-fetch.md)
 - [net/net](modules/net/net.md)
@@ -149,6 +150,7 @@ bun run test
 - [test/host-descriptor.test](modules/test/host-descriptor.test.md)
 - [test/host-file-descriptor.test](modules/test/host-file-descriptor.test.md)
 - [test/host-carrier-descriptor.test](modules/test/host-carrier-descriptor.test.md)
+- [test/host-path-open.test](modules/test/host-path-open.test.md)
 
 - [test/native-signals.test](modules/test/native-signals.test.md)
 
