@@ -1,15 +1,52 @@
 import { requireValue } from "../core/err.js";
 import { bad } from "../core/err.js";
 import type { RvMemory } from "../vm/mem64.js";
-import { P_PAGE_COUNT, P_PID, THISTLE_GUEST_PAGE_SIZE } from "../native/abi.js";
-import { thistleGuestPage } from "../native/kernel.js";
+import { P_PAGE_COUNT, P_PAGE_TABLE, P_PAGE_CAPACITY, P_PID, THISTLE_GUEST_PAGE_SIZE, THISTLE_PAGE_ENTRY_SIZE, PAGE_DIRTY_FRAME } from "../native/abi.js";
+import { thistleGuestPage, thistleMarkGuestWrite } from "../native/kernel.js";
+import { clearDirtyBytes } from "./arena.js";
+import { checkNative } from "../host/native-access.js";
 import { processForHart, INVALID_POINTER } from "./state.js";
-import { loadU32 } from "../native/memory.js";
+import { loadU32, loadU64 } from "../native/memory.js";
 import type { ThistleMemory } from "../native/memory.js";
 
 const INVALID = 0xffffffff;
 const UNMAPPED = 0xfffffffe;
 export type ThistlePageLookup = (hart: number, address: bigint, create: boolean) => number;
+
+export interface DirtyWrite {
+  readonly at: bigint;
+  readonly bytes: Uint8Array;
+}
+
+interface DirtySpan {
+  readonly entry: number;
+  readonly offset: number;
+  readonly length: number;
+  readonly at: bigint;
+}
+
+const dirtyBit = (memory: ThistleMemory, frame: number, offset: number): boolean =>
+  (loadU32(memory, frame + (offset >>> 5) * 4) & (1 << (offset & 31))) !== 0;
+
+const pageDirtySpans = (memory: ThistleMemory, entry: number, at: bigint, end: bigint): DirtySpan[] => {
+  const bitmap = loadU32(memory, entry + PAGE_DIRTY_FRAME), key = loadU64(memory, entry);
+  if (bitmap === 0 || key === 0n) return [];
+  const base = (key - 1n) << 16n, stop = base + BigInt(THISTLE_GUEST_PAGE_SIZE);
+  if (at >= stop || end <= base) return [];
+  const low = Number((at > base ? at : base) - base), high = Number((end < stop ? end : stop) - base);
+  const result: DirtySpan[] = [];
+  let cursor = low;
+  while (cursor < high) {
+    const bits = loadU32(memory, bitmap + (cursor >>> 5) * 4);
+    if (bits === 0) { cursor = Math.min(high, (cursor & ~31) + 32); continue; }
+    if ((bits & (1 << (cursor & 31))) === 0) { cursor++; continue; }
+    let next = cursor + 1;
+    while (next < high && dirtyBit(memory, bitmap, next)) next++;
+    result.push({ entry, offset: cursor, length: next - cursor, at: base + BigInt(cursor) });
+    cursor = next;
+  }
+  return result;
+};
 
 /** Direct-Thistle view of the sparse memory representation also generated into Thistle. */
 export class ThistleMem64 implements RvMemory {
@@ -58,6 +95,14 @@ break; }
 
   write(at: bigint, bytes: Uint8Array): void {
     this.check(at, bytes.length);
+    if (bytes.length === 0) return;
+    checkNative(thistleMarkGuestWrite(this.memory, this.hart, at, bytes.length));
+    this.populate(at, bytes);
+  }
+
+  /** Load mapping bytes without recording guest write authority. */
+  populate(at: bigint, bytes: Uint8Array): void {
+    this.check(at, bytes.length);
     let position = 0;
     while (position < bytes.length) {
       const address = at + BigInt(position);
@@ -70,6 +115,21 @@ break; }
       if (frame < UNMAPPED) this.memory.bytes.set(part, frame + offset);
       position += length;
     }
+  }
+
+  /** Publish only changed bytes, clearing the canonical bitmap after successful storage. */
+  flushDirty(at: bigint, length: number, publish: (writes: DirtyWrite[]) => void): void {
+    this.check(at, length);
+    const record = this.record(), table = loadU32(this.memory, record + P_PAGE_TABLE);
+    const count = loadU32(this.memory, record + P_PAGE_CAPACITY), end = at + BigInt(length);
+    const spans: DirtySpan[] = [];
+    for (let index = 0; index < count; index++) {
+      spans.push(...pageDirtySpans(this.memory, table + index * THISTLE_PAGE_ENTRY_SIZE, at, end));
+    }
+    if (spans.length === 0) return;
+    const writes = spans.map(span => ({ at: span.at, bytes: this.read(span.at, span.length) }));
+    publish(writes);
+    for (const span of spans) clearDirtyBytes(this.memory, span.entry, span.offset, span.length);
   }
 
   drop(at: bigint, n: number): void {

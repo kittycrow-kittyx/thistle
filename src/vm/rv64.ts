@@ -12,7 +12,6 @@ import type { Sys } from "../core/sys.js";
 import { enc } from "../io/stream.js";
 import type { Exe } from "../../thistle-asm/fmt.js";
 import { norm } from "../fs/vfs.js";
-import type { RvMemory } from "./mem64.js";
 import { Fd, ExecReplace } from "../core/proc.js";
 import { HostBacking, mappedRanges } from "../host/backing.js";
 import type { MappedRange } from "../host/backing.js";
@@ -201,14 +200,14 @@ const al = (n: bigint, z = PAGE): bigint => (n + z - 1n) & -z;
 export class Rv64 {
   private xState: BigInt64Array<ArrayBufferLike> = new BigInt64Array(32);
   private fState: BigUint64Array<ArrayBufferLike> = new BigUint64Array(32);
-  private memoryState: RvMemory | null = null;
+  private memoryState: ThistleMem64 | null = null;
   private nativeMemory: ThistleMemory | null = null;
   private executionActive = false;
-  private get m(): RvMemory {
+  private get m(): ThistleMem64 {
     if (!this.executionActive) bad("EINTR", "expired guest image");
     return requireValue(this.memoryState, "m before VM initialisation");
   }
-  private set m(value: RvMemory) { this.memoryState = value; }
+  private set m(value: ThistleMem64) { this.memoryState = value; }
   private pc = 0n;
   private floor = 0n;
   private stackAt = 0n;
@@ -1681,7 +1680,7 @@ default: { q = [MASK, MASK]; }
     try {
       const range = mappedRanges(this.s.p.native).find(mapping => mapping.at === at)
         ?? bad("EPROTO", "missing canonical file mapping");
-      this.m.write(at, HostBacking.forMapping(this.s.p.native).readMapping(this.s.p.native, range.index, at, Number(range.end - at)));
+      this.m.populate(at, HostBacking.forMapping(this.s.p.native).readMapping(this.s.p.native, range.index, at, Number(range.end - at)));
       return at;
     } catch (error) {
       checkNative(Number(thistleUnmapHostFile(memory, hart, at, al(len0))));
@@ -1692,13 +1691,13 @@ default: { q = [MASK, MASK]; }
   private remap(old0: bigint, oz0: bigint, nz0: bigint): bigint {
     const old = ux(old0), oldSize = al(ux(oz0)), newSize = al(ux(nz0));
     if (!mappedRanges(this.s.p.native).some(mapping => mapping.at === old && mapping.end === old + oldSize)) return -22n;
-    if (newSize < oldSize) this.flushShared(old + newSize, this.nat(oldSize - newSize, "truncated mapping", Number.MAX_SAFE_INTEGER));
+    this.flushShared(old, this.nat(oldSize, "remapped range", Number.MAX_SAFE_INTEGER));
     const result = thistleRemapHostFile(requireValue(this.nativeMemory, "canonical memory"), this.thistleActiveHart);
     if (result < 0n || newSize <= oldSize) return result;
     const range = mappedRanges(this.s.p.native).find(mapping => mapping.at === ux(result))
       ?? bad("EPROTO", "missing resized mapping");
     const start = ux(result) + oldSize;
-    this.m.write(start, HostBacking.forMapping(this.s.p.native).readMapping(this.s.p.native, range.index, start, this.nat(newSize - oldSize, "mapping growth", Number.MAX_SAFE_INTEGER)));
+    this.m.populate(start, HostBacking.forMapping(this.s.p.native).readMapping(this.s.p.native, range.index, start, this.nat(newSize - oldSize, "mapping growth", Number.MAX_SAFE_INTEGER)));
     return result;
   }
 
@@ -1714,7 +1713,8 @@ default: { q = [MASK, MASK]; }
     const lo = at > range.at ? at : range.at, hi = end < range.end ? end : range.end;
     if (lo >= hi) return;
     const length = this.nat(hi - lo, "mapping flush length", Number.MAX_SAFE_INTEGER);
-    HostBacking.forMapping(this.s.p.native).writeMapping(this.s.p.native, range.index, lo, this.m.read(lo, length));
+    this.m.flushDirty(lo, length, writes =>
+      HostBacking.forMapping(this.s.p.native).writeMappedSpans(this.s.p.native, range.index, writes));
   }
 
   private flushShared(at0: bigint, len: number): void {

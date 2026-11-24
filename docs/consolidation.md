@@ -232,3 +232,5 @@ mutations share the VFS lock. The RV64 host transport still needs to use the
 retained records for file bytes and shared write-back.
 
 RV64 file mappings use retained native inode records for byte transport. The host mapping array and its split/remap metadata are removed. Shared write-back precedes MAP_FIXED replacement and unmap. Successful exec releases file mappings before loading the next image. Dirty-page and concurrent mapping coherence require further validation.
+
+Shared mapping write-back uses a canonical byte bitmap allocated with guest pages. Clean bytes are not copied back over newer inode contents. Native stores, atomic writes and host syscall output share the marking path. Immediate cross-process mapping visibility remains a parity gate.

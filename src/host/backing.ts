@@ -7,6 +7,7 @@ import type { RegSource } from "./bytes.js";
 import { C_VFS_INODE_CAPACITY, FD_INODE, FD_KIND, FD_OFFSET, THISTLE_FD_READ, THISTLE_FD_WRITE, THISTLE_FD_FILE, V_DATA, V_RESIDENT, P_MAP_TABLE, P_MAP_COUNT, THISTLE_MAP_STRIDE, M_INODE, M_ADDRESS, M_END, M_FLAGS, M_FILE_RIGHTS, M_FILE_OFFSET, M_PROTECTION } from "../native/abi.js";
 import { loadU32, loadU64, storeU32, storeU64 } from "../native/memory.js";
 import type { ThistleMemory } from "../native/memory.js";
+import type { DirtyWrite } from "../native/host-memory.js";
 import { thistleVfsAccess, thistleVfsFileSize, thistleVfsRoot, thistleVfsIdentity, descriptorAccessStatus, descriptorReadCount, descriptorWriteOffset, residentFits, inodeAt, arenaInodeStatus } from "../native/vfs.js";
 import { thistleVfsBacking, thistleVfsBackingVersion, thistleVfsCommitBacking, thistleVfsCommitDescriptorBacking, thistleVfsMappingInode, thistleVfsCommitMappingBacking } from "../native/vfs-backing.js";
 
@@ -355,14 +356,24 @@ export class HostBacking {
 
   /** Flush a shared range through retained open authority, bounded by the current EOF. */
   writeMapping(process: HostProcess, index: number, address: bigint, bytes: Uint8Array): void {
+    this.writeMappedSpans(process, index, [{ at: address, bytes }]);
+  }
+
+  /** Merge dirty spans into the current inode payload in one publication. */
+  writeMappedSpans(process: HostProcess, index: number, writes: DirtyWrite[]): void {
     withImage(this.memory, 24, input => this.mappingStorage(process, index, true, (record, state, inode) => {
-      const offset = this.mappingOffset(state, address, bytes.length), previous = this.residentBytes(inode);
-      if (offset >= BigInt(previous.length) || bytes.length === 0) return;
-      const start = Number(offset), amount = Math.min(bytes.length, previous.length - start);
-      const part = bytes.subarray(0, amount);
-      if (part.every((byte, i) => byte === (previous[start + i] ?? -1))) return;
-      const replacement = previous.slice();
-      replacement.set(part, start);
+      const previous = this.residentBytes(inode);
+      let replacement: Uint8Array | null = null;
+      for (const write of writes) {
+        const offset = this.mappingOffset(state, write.at, write.bytes.length);
+        if (offset >= BigInt(previous.length) || write.bytes.length === 0) continue;
+        const start = Number(offset), amount = Math.min(write.bytes.length, previous.length - start);
+        const part = write.bytes.subarray(0, amount), current = replacement ?? previous;
+        if (part.every((byte, i) => byte === (current[start + i] ?? -1))) continue;
+        replacement = replacement ?? previous.slice();
+        replacement.set(part, start);
+      }
+      if (replacement === null) return;
       this.commit({ inode, payload: { bytes: replacement, source: null }, size: replacement.length,
         expected: thistleVfsBackingVersion(this.memory, inode), operation: 3 }, { process: record, mapping: index }, input);
       this.collectLocked();

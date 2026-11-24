@@ -45,3 +45,5 @@ A mount has one registered host byte carrier registry per root incarnation. `for
 `mappedRanges` derives an ephemeral view from the canonical mapping table. `readMapping` and `writeMapping` use retained inode authority. Shared write-back is clipped at current EOF and does not alter a descriptor cursor.
 
 `MappedRange` describes a transient file mapping. `forMapping` selects the mount registry for a process; subsequent byte operations validate the process and retained mapping under lock.
+
+`writeMappedSpans` merges dirty byte spans into the current resident payload, clips each at EOF and publishes the result once. It leaves clean bytes unchanged.
