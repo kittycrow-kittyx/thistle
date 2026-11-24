@@ -105,3 +105,27 @@ test("host path and metadata views use native traversal, credentials and incarna
   assert.equal(metadata.mt, 20n);
   assert.throws(() => new HostInode(memory, file.ino, file.identity + 1n), { code: "ENOENT" });
 });
+
+test("host directory mutations share native entry identity and arena bytes", () => {
+  const memory = mountedKernel(), root = new HostProcess(memory, 0);
+  const directory = HostInode.resolve(root, "/");
+  const child = directory.create(root, "dir", 2, 0o755);
+  const file = directory.create(root, "file", 1, 0o600);
+  assert.equal(file.write(root, enc("abc"), 0, true), 3);
+  assert.equal(file.write(root, enc("z"), 4), 1);
+  assert.deepEqual([...file.read(root, 0n, 5)], [97, 98, 99, 0, 122]);
+  child.link(root, "alias", file);
+  assert.equal(file.metadata().nlink, 2);
+  directory.rename(root, "file", child, "moved");
+  assert.equal(HostInode.resolve(root, "/dir/moved").identity, file.identity);
+  assert.equal(HostInode.resolve(root, "/dir/alias").identity, file.identity);
+  assert.throws(() => HostInode.resolve(root, "/file"), { code: "ENOENT" });
+  assert.throws(() => directory.unlink(root, "dir", true), { code: "ENOTEMPTY" });
+  assert.throws(() => child.link(root, "bad", directory), { code: "EPERM" });
+  child.unlink(root, "alias");
+  child.unlink(root, "moved");
+  assert.throws(() => file.metadata(), { code: "ENOENT" });
+  assert.throws(() => child.link(root, "expired", file), { code: "ENOENT" });
+  directory.unlink(root, "dir", true);
+  assert.deepEqual(readDirectory(directory, root), []);
+});

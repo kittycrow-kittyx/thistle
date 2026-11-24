@@ -6,7 +6,7 @@ import { inodeAt, thistleVfsAccess, thistleVfsIdentity, thistleVfsReadData, this
 import { withImage, withVfsLock, checkNative } from "./native-access.js";
 import type { HostProcess } from "./process.js";
 import { enc } from "../io/stream.js";
-import { thistleVfsChmod, thistleVfsChown, thistleVfsUtime } from "../native/vfs-edit.js";
+import { thistleVfsChmod, thistleVfsChown, thistleVfsUtime, thistleVfsCreate, thistleVfsLink, thistleVfsUnlink, thistleVfsRename, thistleVfsWrite } from "../native/vfs-edit.js";
 
 export interface InodeMetadata {
   readonly ino: number;
@@ -42,6 +42,62 @@ export class HostInode {
       return { ino, identity: thistleVfsIdentity(memory, ino) };
     }));
     return new HostInode(memory, found.ino, found.identity);
+  }
+
+  /** Encode one entry name, leaving name and permission decisions to native VFS. */
+  private withName<T>(name: string, operation: (input: number, length: number) => T): T {
+    const bytes = enc(name);
+    if (bytes.length > 255) bad("ENAMETOOLONG", name);
+    return withImage(this.memory, Math.max(1, bytes.length), input => {
+      this.memory.bytes.set(bytes, input);
+      return operation(input, bytes.length);
+    });
+  }
+
+  create(process: HostProcess, name: string, kind: number, mode: number): HostInode {
+    const found = this.withName(name, (input, length) => this.access(process, record => {
+      const ino = thistleVfsCreate(this.memory, record, this.ino, input, length, kind, mode, BigInt(Date.now()));
+      checkNative(ino);
+      return { ino, identity: thistleVfsIdentity(this.memory, ino) };
+    }));
+    return new HostInode(this.memory, found.ino, found.identity);
+  }
+
+  link(process: HostProcess, name: string, target: HostInode): void {
+    if (target.memory !== this.memory) bad("EINVAL", "filesystem instance mismatch");
+    this.withName(name, (input, length) => this.access(process, record => {
+      target.recordLocked();
+      checkNative(thistleVfsLink(this.memory, record, this.ino, target.ino, input, length, BigInt(Date.now())));
+    }));
+  }
+
+  unlink(process: HostProcess, name: string, directory = false): void {
+    this.withName(name, (input, length) => this.access(process, record =>
+      checkNative(thistleVfsUnlink(this.memory, record, this.ino, input, length, directory, BigInt(Date.now())))));
+  }
+
+  rename(process: HostProcess, name: string, destination: HostInode, newName: string): void {
+    if (destination.memory !== this.memory) bad("EINVAL", "filesystem instance mismatch");
+    const target = enc(newName);
+    if (target.length > 255) bad("ENAMETOOLONG", newName);
+    this.withName(name, (input, length) => withImage(this.memory, Math.max(1, target.length), output =>
+      this.access(process, record => {
+        destination.recordLocked();
+        this.memory.bytes.set(target, output);
+        checkNative(thistleVfsRename(this.memory, record, this.ino, input, length,
+          destination.ino, output, target.length, BigInt(Date.now())));
+      })));
+  }
+
+  /** Native arena payload write; host-backed files use the existing HostBacking carrier. */
+  write(process: HostProcess, bytes: Uint8Array, offset = 0, replace = false): number {
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > 0x7fffffff) bad("EINVAL", "invalid inode write offset");
+    return withImage(this.memory, Math.max(1, bytes.length), input => this.access(process, record => {
+      this.memory.bytes.set(bytes, input);
+      const written = thistleVfsWrite(this.memory, record, this.ino, input, bytes.length, offset, replace, BigInt(Date.now()));
+      checkNative(written);
+      return written;
+    }));
   }
 
   chmod(process: HostProcess, mode: number): void {
