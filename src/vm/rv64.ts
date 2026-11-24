@@ -980,8 +980,9 @@ export class Rv64 {
   private async read(fd: number, n: number): Promise<Uint8Array> {
     const f = this.s.p.fds.get(fd) ?? bad("EBADF", String(fd));
     if (!f.input) {
+      if (f.inode === 0) return this.s.fdr(fd, n);
       if (n !== 0) await f.materialiseFile();
-      return this.s.fdr(fd, n);
+      return f.readFile(n);
     }
     let q = (this.ins.get(fd) ?? null);
     if (!q || q.at >= q.b.length) { q = { b: await f.input.rd(this.s.p.ac.signal), at: 0 }; this.ins.set(fd, q); }
@@ -991,8 +992,9 @@ export class Rv64 {
   private async write(fd: number, b: Uint8Array): Promise<number> {
     const f = this.s.p.fds.get(fd) ?? bad("EBADF", String(fd));
     if (f.output !== null) return f.output.wr(b);
+    if (f.inode === 0) return this.s.fdw(fd, b);
     if (b.length !== 0) await f.materialiseFile();
-    return this.s.fdw(fd, b);
+    return f.writeFile(b);
   }
 
   private clone(flags: bigint, sp: bigint, tls: bigint): bigint {

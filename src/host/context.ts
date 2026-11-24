@@ -1,9 +1,9 @@
 import { bad } from "../core/err.js";
 import { THISTLE_KERNEL_MEMORY_BYTES } from "../core/kernel-memory.js";
 import type { ProcCred } from "../fs/vfs.js";
-import { C_MAX_HARTS, H_STATUS, THISTLE_HART_EMPTY, C_PROCESS_LOCK,
+import { C_FLAGS, THISTLE_FLAG_HOST_TRANSPORT, C_MAX_HARTS, H_STATUS, THISTLE_HART_EMPTY, C_PROCESS_LOCK,
   C_PROCESS_CAPACITY, P_STATE, P_PID, THISTLE_PROCESS_RUNNABLE } from "../native/abi.js";
-import { directMemory, atomicStoreI32, loadU32 } from "../native/memory.js";
+import { directMemory, atomicStoreI32, loadU32, storeU32 } from "../native/memory.js";
 import { thistleKernelInit, thistleHartInit, thistleProcessInit, thistleExitHart, thistleProcessReap, thistleNextPid, thistleProcessPark } from "../native/kernel.js";
 import { hartAt, processAt } from "../native/state.js";
 import { HostProcess } from "./process.js";
@@ -15,6 +15,7 @@ export class HostContext {
 
   constructor() {
     if (thistleKernelInit(this.memory, 1024, false) !== 0) bad("ENOMEM", "canonical kernel initialisation");
+    storeU32(this.memory, C_FLAGS, loadU32(this.memory, C_FLAGS) | THISTLE_FLAG_HOST_TRANSPORT);
   }
 
   reap(parent: HostProcess, pid: number): void {

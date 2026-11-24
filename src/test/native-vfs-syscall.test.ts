@@ -66,7 +66,16 @@ for (const mounted of [true, false]) test(`guest file syscalls ${mounted ? "use 
     assert.equal(thistleProcessMapCount(memory, 0), 0);
     return;
   }
-  assert.equal(call(56, -100n, 0x210000n, 1n), -30n);
+  const writer = call(56, -100n, 0x210000n, 1n);
+  assert.equal(writer, 3n);
+  assert.equal(call(63, writer, 0x210100n, 1n), -9n);
+  assert.equal(call(64, writer, 0x220000n, 1n), -14n);
+  assert.equal(call(64, writer, 0x210000n, 1n), 1n);
+  assert.equal(call(62, writer, 0n), 0n);
+  const dataPage = thistleGuestPage(memory, 0, 0x210100n, true);
+  storeU8(memory, dataPage + 0x100, 65n);
+  assert.equal(call(64, writer, 0x210100n, 1n), 1n);
+  assert.equal(call(57, writer), 0n);
   assert.equal(call(56, -100n, 0x220000n), -14n);
   const fd = call(56, -100n, 0x210000n);
   assert.equal(fd, 3n);
@@ -78,6 +87,12 @@ for (const mounted of [true, false]) test(`guest file syscalls ${mounted ? "use 
   assert.equal(call(62, fd, -1n, 2n), 2n);
   assert.equal(call(63, fd, 0x210100n, 3n), 1n);
   assert.equal(loadU8(memory, page + 0x100), 67);
+  const appender = call(56, -100n, 0x210000n, 0x401n);
+  assert.equal(appender, 4n);
+  assert.equal(call(62, appender, 0n), 0n);
+  assert.equal(call(64, appender, 0x210100n, 1n), 1n);
+  assert.equal(call(62, fd, 0n, 2n), 4n);
+  assert.equal(call(57, appender), 0n);
   const name = thistleImageReserve(memory, 1);
   storeU8(memory, name, 102n);
   assert.equal(thistleVfsUnlink(memory, thistleProcessRecord(memory, 0), 1, name, 1, false, 1n), 0);

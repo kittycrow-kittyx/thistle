@@ -239,6 +239,7 @@ ABI identities, fixed region sizes, status/error values, flags and capacities us
 - `THISTLE_WORKER_STRIDE`
 - `THISTLE_FLAG_THREADED`
 - `THISTLE_FLAG_HOST_STDIN`
+- `THISTLE_FLAG_HOST_TRANSPORT`
 - `THISTLE_GROUP_CAPACITY`
 - `THISTLE_PROCESS_STRIDE`
 - `THISTLE_DESCRIPTOR_STRIDE`
@@ -379,3 +380,5 @@ Candidate ABI 11 uses an 88-byte inode stride. `V_IDENTITY` at byte 80 identifie
 Default VFS: 8192 inode slots, 16384 directory-entry slots. Reference mikuOS root: 4668 inodes, maximum ID 4679. `thistleKernelInitWithVfs` accepts explicit capacities.
 
 Each process has 256 descriptor slots of 32 bytes. The identity at offset 12 changes on allocation and survives close until the slot is reused. Exhausted identities are not recycled within a process lifetime.
+
+`THISTLE_FLAG_HOST_TRANSPORT` advertises host byte/stream transport for a mounted filesystem. It does not select a separate kernel or change inode authority.

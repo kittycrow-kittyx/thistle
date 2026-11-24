@@ -120,6 +120,7 @@ import {
   THISTLE_FAULT_MEMORY,
   THISTLE_FLAG_THREADED,
   THISTLE_FLAG_HOST_STDIN,
+  THISTLE_FLAG_HOST_TRANSPORT,
   THISTLE_GUEST_PAGE_SIZE,
   THISTLE_HART_BASE,
   THISTLE_HART_EMPTY,
@@ -208,6 +209,7 @@ import {
   THISTLE_DESCRIPTOR_CAPACITY,
   THISTLE_DESCRIPTOR_STRIDE,
   THISTLE_FD_CLOEXEC,
+  THISTLE_FD_APPEND,
   THISTLE_FD_DIRECTORY,
   THISTLE_FD_EMPTY,
   THISTLE_FD_HOST,
@@ -288,7 +290,7 @@ import {
   unsignedWordToFloat,
 } from "./word.js";
 import {
-  descriptorAt, releaseDescriptor, installDescriptor, thistleVfsOpenInode, descriptorReadStatus, descriptorReadCount, thistleVfsReadDescriptor, thistleVfsSeekDescriptor,
+  descriptorAt, releaseDescriptor, installDescriptor, thistleVfsOpenInode, descriptorAccessStatus, descriptorReadStatus, descriptorReadCount, thistleVfsReadDescriptor, thistleVfsSeekDescriptor,
   thistleVfsAccess,
   thistleVfsKind,
   thistleVfsReadScratch,
@@ -296,6 +298,8 @@ import {
   thistleVfsResolve,
   thistleVfsRoot,
 } from "./vfs.js";
+
+import { thistleVfsWriteScratch } from "./vfs-edit.js";
 
 const NO_RESERVATION: I64 = -1n;
 const UNMAPPED_POINTER: Ptr = 0xfffffffe;
@@ -362,6 +366,7 @@ const traceNodePointerWrite = (
 };
 
 const OPEN_DIRECTORY: U32 = 0x10000;
+const OPEN_APPEND: U32 = 0x400;
 const OPEN_CLOEXEC: U32 = 0x80000;
 
 const regAt = (hart: U32, register: U32): Ptr => hartAt(hart) + H_X + register * 8;
@@ -610,8 +615,7 @@ export const thistleOpenPath = (
   pathLength: U32,
   flags: U32,
 ): I32 => {
-  if (!thistleKernelValid(memory) || !validHart(memory, hart) || (flags & 3) !== 0) return -30;
-  if ((flags & ~(OPEN_DIRECTORY | OPEN_CLOEXEC)) !== 0) return -22;
+  if (!thistleKernelValid(memory) || !validHart(memory, hart)) return -22;
   const proc = processForHart(memory, hart);
   if (proc === INVALID_POINTER) return -3;
   if (!acquire(memory, proc + P_LOCK)) return -11;
@@ -629,8 +633,8 @@ export const thistleOpenPath = (
 const openPathLocked = (
   memory: ThistleMemory, proc: Ptr, start: U32, path: Ptr, pathLength: U32, flags: U32,
 ): I32 => {
-  if ((flags & 3) !== 0) return -30;
-  if ((flags & ~(OPEN_DIRECTORY | OPEN_CLOEXEC | 0x8000)) !== 0) return -22;
+  const access = flags & 3;
+  if (access === 3 || (flags & ~(3 | OPEN_DIRECTORY | OPEN_CLOEXEC | OPEN_APPEND | 0x8000)) !== 0) return -22;
   const base = start === 0 ? loadU32(memory, proc + P_CWD_INODE) : start;
   const resolved = thistleVfsResolve(memory, proc, base, path, pathLength, true);
   if (resolved < 0) {
@@ -641,7 +645,10 @@ const openPathLocked = (
   if ((flags & OPEN_DIRECTORY) !== 0 && kind !== THISTLE_VFS_KIND_DIRECTORY) {
     return -20;
   }
-  return thistleVfsOpenInode(memory, proc, inode, THISTLE_FD_READ | ((flags & OPEN_CLOEXEC) !== 0 ? THISTLE_FD_CLOEXEC : 0), 3);
+  const rights: U32 = access === 0 ? THISTLE_FD_READ : access === 1 ? THISTLE_FD_WRITE : THISTLE_FD_READ | THISTLE_FD_WRITE;
+  const extra: U32 = ((flags & OPEN_CLOEXEC) !== 0 ? THISTLE_FD_CLOEXEC : 0) |
+    ((flags & OPEN_APPEND) !== 0 && access !== 0 ? THISTLE_FD_APPEND : 0);
+  return thistleVfsOpenInode(memory, proc, inode, rights | extra, 3);
 };
 
 export const thistleReadDescriptor = (
@@ -2472,7 +2479,25 @@ const mountedRead = (memory: ThistleMemory, hart: U32, state: Ptr, scratch: Ptr)
   return word(copied);
 };
 
-const mountedFileLocked = (memory: ThistleMemory, hart: U32, proc: Ptr, number: U32): I64 => {
+const mountedWrite = (memory: ThistleMemory, hart: U32, state: Ptr, scratch: Ptr, now: U64): I64 => {
+  const status = descriptorAccessStatus(memory, state, THISTLE_FD_WRITE);
+  if (status !== 0) return word(status);
+  const requested = ux(x(memory, hart, 12));
+  if (requested === 0n) return 0n;
+  const length = requested > ux(word(THISTLE_VFS_PATH_CAPACITY)) ? THISTLE_VFS_PATH_CAPACITY : wordToU32(requested);
+  const address = ux(x(memory, hart, 11));
+  if (!guestAllowed(memory, hart, address, length, THISTLE_SEGMENT_READ)) return -14n;
+  let copied: U32 = 0;
+  while (copied < length) {
+    const byte = guestLoadU8(memory, hart, address + ux(word(copied)));
+    if (byte < 0) return -14n;
+    storeU8(memory, scratch + copied, word(byte));
+    copied += 1;
+  }
+  return word(thistleVfsWriteScratch(memory, state, length, now));
+};
+
+const mountedFileLocked = (memory: ThistleMemory, hart: U32, proc: Ptr, number: U32, now: U64): I64 => {
   const descriptor = wordToI32(x(memory, hart, 10));
   const scratch = loadU32(memory, THISTLE_CONTROL_BASE + C_VFS_SCRATCH_BASE);
   if (number === 56) return mountedOpen(memory, hart, proc, descriptor, scratch);
@@ -2480,10 +2505,15 @@ const mountedFileLocked = (memory: ThistleMemory, hart: U32, proc: Ptr, number: 
   const state = descriptorAt(memory, proc, wordToU32(word(descriptor)));
   const kind = loadU32(memory, state + FD_KIND);
   if (kind === THISTLE_FD_EMPTY) return -9n;
+  if (kind === THISTLE_FD_HOST && hostTransport(memory)) return -18n;
   if (number === 57) { releaseDescriptor(memory, state); return 0n; }
   if (number === 63) return mountedRead(memory, hart, state, scratch);
+  if (number === 64) return mountedWrite(memory, hart, state, scratch, now);
   return -38n;
 };
+
+const hostTransport = (memory: ThistleMemory): boolean =>
+  (loadU32(memory, C_FLAGS) & THISTLE_FLAG_HOST_TRANSPORT) !== 0;
 
 const mountedSeek = (memory: ThistleMemory, hart: U32): I32 => {
   const descriptor = wordToU32(x(memory, hart, 10));
@@ -2491,7 +2521,7 @@ const mountedSeek = (memory: ThistleMemory, hart: U32): I32 => {
   return internalSyscall(memory, hart, thistleSeekDescriptor(memory, hart, descriptor, x(memory, hart, 11), wordToU32(x(memory, hart, 12))));
 };
 
-const mountedFileSyscall = (memory: ThistleMemory, hart: U32, proc: Ptr, number: U32): I32 => {
+const mountedFileSyscall = (memory: ThistleMemory, hart: U32, proc: Ptr, number: U32, now: U64): I32 => {
   if (proc === INVALID_POINTER) return internalSyscall(memory, hart, -3n);
   if (number === 62) return mountedSeek(memory, hart);
   const lock = proc + P_LOCK;
@@ -2501,9 +2531,10 @@ const mountedFileSyscall = (memory: ThistleMemory, hart: U32, proc: Ptr, number:
     release(memory, lock);
     return internalSyscall(memory, hart, -11n);
   }
-  const result = mountedFileLocked(memory, hart, proc, number);
+  const result = mountedFileLocked(memory, hart, proc, number, now);
   release(memory, vfsLock);
   release(memory, lock);
+  if (result === -18n && hostTransport(memory)) return fallbackSyscall(memory, hart);
   return internalSyscall(memory, hart, result);
 };
 
@@ -2648,7 +2679,7 @@ const getProcessId = (memory: ThistleMemory, hart: U32, proc: Ptr, number: U32):
   return fallbackSyscall(memory, hart);
 };
 
-const kernelSyscall = (memory: ThistleMemory, hart: U32): I32 => {
+const kernelSyscall = (memory: ThistleMemory, hart: U32, nowMicros: I64): I32 => {
   const at = hartAt(hart);
   const proc = processForHart(memory, hart);
   const number = wordToU32(ux(x(memory, hart, 17)));
@@ -2658,8 +2689,15 @@ const kernelSyscall = (memory: ThistleMemory, hart: U32): I32 => {
   // The mounted filesystem is authoritative, independent of the compiler target.
   // Without a mount, the embedding system owns filesystem operations.
   const mountedVfs = thistleVfsLoaded(memory);
-  if (mountedVfs && (number === 56 || number === 57 || number === 62 || (number === 63 && x(memory, hart, 10) !== 0n))) {
-    return mountedFileSyscall(memory, hart, proc, number);
+  if (mountedVfs) {
+    const now = nowMicros < 0n ? 0n : ux(nowMicros / 1000n);
+    if (number === 56 || number === 57 || number === 62) return mountedFileSyscall(memory, hart, proc, number, now);
+    if (number === 63 || number === 64) {
+      const descriptor = wordToU32(x(memory, hart, 10));
+      const kind = thistleDescriptorKind(memory, hart, descriptor);
+      if (kind !== THISTLE_FD_HOST || (number === 63 && descriptor !== 0) ||
+          (number === 64 && descriptor !== 1 && descriptor !== 2)) return mountedFileSyscall(memory, hart, proc, number, now);
+    }
   }
   // Opt-in native console. Hosted runtimes retain their existing syscall path.
   if (number === 63 && (loadU32(memory, THISTLE_CONTROL_BASE + C_FLAGS) & THISTLE_FLAG_HOST_STDIN) !== 0) return readHostConsole(memory, hart, proc, mountedVfs);
@@ -2819,7 +2857,7 @@ const stepJump = (memory: ThistleMemory, hart: U32, instruction: U32, atPc: U64)
 };
 
 const stepSystem = (memory: ThistleMemory, hart: U32, instruction: U32, nowMicros: I64): I32 => {
-  if (instruction === 0x00000073) return kernelSyscall(memory, hart);
+  if (instruction === 0x00000073) return kernelSyscall(memory, hart, nowMicros);
   if (instruction === 0x00100073) return fault(memory, hart, THISTLE_FAULT_BREAKPOINT, instruction);
   return csr(memory, hart, instruction, nowMicros) ?
     THISTLE_BATCH_BUDGET : fault(memory, hart, THISTLE_FAULT_INSTRUCTION, instruction);

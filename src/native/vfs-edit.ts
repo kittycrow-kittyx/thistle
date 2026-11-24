@@ -1,5 +1,5 @@
 import {
-  C_VFS_DENTRY_CAPACITY, C_VFS_DENTRY_COUNT, C_VFS_DIRTY, C_VFS_GENERATION,
+  C_VFS_DENTRY_CAPACITY, C_VFS_DENTRY_COUNT, C_VFS_DIRTY, C_VFS_GENERATION, C_VFS_SCRATCH_BASE, THISTLE_VFS_PATH_CAPACITY,
   C_VFS_INODE_CAPACITY, C_VFS_INODE_COUNT, D_INODE, D_NAME, D_NAME_HASH,
   D_NAME_LENGTH, D_PARENT, FD_INODE, FD_OFFSET, THISTLE_FD_WRITE, P_FSGID, P_FSUID, THISTLE_CONTROL_BASE,
   THISTLE_VFS_INODE_STRIDE, THISTLE_VFS_KIND_CHARACTER, THISTLE_VFS_KIND_DIRECTORY,
@@ -188,10 +188,20 @@ const writeInodeData = (
 
 /** Descriptor authority comes from open flags, including after rename or unlink. */
 export const thistleVfsWriteDescriptor = (memory: ThistleMemory, state: Ptr, input: Ptr, length: U32, now: U64): I32 => {
+  if (length !== 0 && !inputContains(memory, input, length)) return -14;
+  return writeDescriptorData(memory, state, input, length, now);
+};
+
+/** The mounted RV64 syscall supplies bytes in the locked kernel scratch region. */
+export const thistleVfsWriteScratch = (memory: ThistleMemory, state: Ptr, length: U32, now: U64): I32 => {
+  if (length > THISTLE_VFS_PATH_CAPACITY) return -22;
+  return writeDescriptorData(memory, state, loadU32(memory, C_VFS_SCRATCH_BASE), length, now);
+};
+
+const writeDescriptorData = (memory: ThistleMemory, state: Ptr, input: Ptr, length: U32, now: U64): I32 => {
   const status = descriptorAccessStatus(memory, state, THISTLE_FD_WRITE);
   if (status !== 0) return status;
   if (length === 0) return 0;
-  if (!inputContains(memory, input, length)) return -14;
   const inode = loadU32(memory, state + FD_INODE);
   if ((loadU32(memory, inodeAt(memory, inode) + V_FLAGS) & THISTLE_VFS_HOST_BACKING) !== 0) return -18;
   const offset = descriptorWriteOffset(memory, state);

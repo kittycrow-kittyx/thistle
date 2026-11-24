@@ -33,3 +33,5 @@ work before the new operations can replace the hosted entry points.
 Removing or replacing a directory held as a process cwd returns `EBUSY`. Renaming a referenced directory retains its inode and updates the path observed by the process.
 
 `thistleVfsWriteDescriptor` writes arena bytes through a live writable descriptor. Append selects the current inode size under lock. Access is retained after unlink or permission changes, and the descriptor offset advances only on success.
+
+`thistleVfsWriteScratch` accepts a bounded transfer from the canonical scratch region while the VFS lock is held, sharing write policy with `thistleVfsWriteDescriptor`.

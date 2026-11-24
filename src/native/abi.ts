@@ -67,6 +67,7 @@ export const W_IDLE: U32 = 16;
 
 export const THISTLE_FLAG_THREADED: U32 = 1;
 export const THISTLE_FLAG_HOST_STDIN: U32 = 2;
+export const THISTLE_FLAG_HOST_TRANSPORT: U32 = 4;
 
 export const H_LOCK: U32 = 0;
 export const H_STATUS: U32 = 4;
