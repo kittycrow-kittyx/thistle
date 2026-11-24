@@ -1368,7 +1368,7 @@ const anonymousUnmap = (memory: ThistleMemory, proc: Ptr, address: U64, length: 
   const end = address + size;
   const splits = unmapSplitCount(memory, proc, address, end);
   if (splits < 0) return MAP_NOT_OWNED;
-  if (splits > loadU32(memory, proc + P_MAP_CAPACITY) - loadU32(memory, proc + P_MAP_COUNT)) return -12n;
+  if (wordToU32(word(splits)) > loadU32(memory, proc + P_MAP_CAPACITY) - loadU32(memory, proc + P_MAP_COUNT)) return -12n;
   applyUnmap(memory, proc, address, end);
   return 0n;
 };
