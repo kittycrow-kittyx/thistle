@@ -4,7 +4,7 @@ import { SourceLoad } from "./bytes.js";
 import { HostInode } from "./inode.js";
 import type { HostProcess } from "./process.js";
 import type { RegSource } from "./bytes.js";
-import { C_VFS_INODE_CAPACITY, FD_INODE, FD_KIND, FD_OFFSET, THISTLE_FD_READ, THISTLE_FD_WRITE, THISTLE_FD_FILE, V_DATA } from "../native/abi.js";
+import { C_VFS_INODE_CAPACITY, FD_INODE, FD_KIND, FD_OFFSET, THISTLE_FD_READ, THISTLE_FD_WRITE, THISTLE_FD_FILE, V_DATA, V_RESIDENT } from "../native/abi.js";
 import { loadU32, loadU64, storeU32, storeU64 } from "../native/memory.js";
 import type { ThistleMemory } from "../native/memory.js";
 import { thistleVfsAccess, thistleVfsFileSize, thistleVfsRoot, thistleVfsIdentity, descriptorAccessStatus, descriptorReadCount, descriptorWriteOffset, residentFits, inodeAt, arenaInodeStatus } from "../native/vfs.js";
@@ -251,6 +251,22 @@ export class HostBacking {
   replaceDescriptor(descriptor: CarrierDescriptor, bytes: Uint8Array): void {
     withImage(this.memory, 24, input => this.withWritable(descriptor, (state, inode) => {
       this.commit({ inode, payload: { bytes: bytes.slice(), source: null }, size: bytes.length,
+        expected: thistleVfsBackingVersion(this.memory, inode), operation: 3 }, { record: state, length: 0 }, input);
+      this.collectLocked();
+    }));
+  }
+
+  /** Resize through open write authority; a zero size discards a deferred provider. */
+  resizeDescriptor(descriptor: CarrierDescriptor, size: number): void {
+    if (!Number.isSafeInteger(size) || size < 0) bad("EINVAL", "invalid file size");
+    withImage(this.memory, 24, input => this.withWritable(descriptor, (state, inode) => {
+      const old = size === 0 ? new Uint8Array() : this.residentBytes(inode);
+      const record = inodeAt(this.memory, inode);
+      const resident = thistleVfsBacking(this.memory, inode) === 0 ? thistleVfsFileSize(this.memory, inode) : loadU64(this.memory, record + V_RESIDENT);
+      if (!residentFits(this.memory, resident, BigInt(size))) bad("ENOSPC", "carrier exceeds filesystem quota");
+      const bytes = new Uint8Array(size);
+      bytes.set(old.subarray(0, size));
+      this.commit({ inode, payload: { bytes, source: null }, size,
         expected: thistleVfsBackingVersion(this.memory, inode), operation: 3 }, { record: state, length: 0 }, input);
       this.collectLocked();
     }));

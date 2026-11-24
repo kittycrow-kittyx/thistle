@@ -69,6 +69,7 @@ export class Fd {
     const native = this.native;
     if (native !== null && native.inode !== 0) await native.materialiseFile();
   }
+  async resizeFile(size: number): Promise<void> { await (this.native ?? bad("EBADF")).resizeFile(size); }
   seekFile(offset: number, whence: number): number { return (this.native ?? bad("EBADF")).seekFile(offset, whence); }
 
   closeNative(): void {

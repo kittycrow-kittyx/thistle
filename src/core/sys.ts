@@ -183,6 +183,16 @@ export class Sys {
     return descriptor.inodeView() ?? bad("EBADF", String(fd));
   }
 
+  async fdTruncate(fd: number, size: number): Promise<void> {
+    await (this.p.fds.get(fd) ?? bad("EBADF", String(fd))).resizeFile(size);
+  }
+
+  async truncate(path: string, size: number): Promise<void> {
+    const descriptor = HostDescriptor.openPath(this.p.native, path, 1);
+    try { await descriptor.resizeFile(size); }
+    finally { descriptor.close(); }
+  }
+
   fdStat(fd: number): St { return statView(this.fdInode(fd)); }
 
   fdList(fd: number): Array<[string, { ino: number; kind: Kind }]> {

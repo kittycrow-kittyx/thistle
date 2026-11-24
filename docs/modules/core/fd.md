@@ -11,3 +11,5 @@ Inode-bound `Fd` views expose native `readFile`, `writeFile` and `seekFile` oper
 `Fd.copyTo` and `FdTable.inherit` retain the canonical slot's inode when duplicating or inheriting a live descriptor. Detached stream requests still bind as host capabilities. The destination owns its stream holds.
 
 `inodeView` and `directoryEntries` expose the native inode and directory data of a live descriptor without resolving its original path.
+
+`resizeFile(size)` materialises any retained prefix as needed and resizes through the open file descriptor without moving its cursor.

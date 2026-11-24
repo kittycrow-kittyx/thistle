@@ -207,6 +207,14 @@ export class HostDescriptor {
     }));
   }
 
+  /** Resize a hosted file using its retained write authority. */
+  async resizeFile(size: number): Promise<void> {
+    if (!Number.isSafeInteger(size) || size < 0) bad("EINVAL", "invalid file size");
+    const backing = HostBacking.forWritableDescriptor(this) ?? bad("EBADF", "resize requires an open hosted file");
+    if (size !== 0) await this.materialiseFile();
+    backing.resizeDescriptor(this, size);
+  }
+
   /** Await byte transport before synchronous file I/O, without changing the cursor. */
   async materialiseFile(): Promise<void> {
     const backing = HostBacking.forDescriptor(this);

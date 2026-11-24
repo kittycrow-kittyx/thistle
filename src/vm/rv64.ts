@@ -848,8 +848,8 @@ export class Rv64 {
       }
       case 43: this.s.stat(this.str(requireValue(a[10] ?? null, "src/vm/rv64.ts:1393"))); return this.statfs(ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1393")));
       case 44: { const fd = this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1394")); if (fd >= 3) this.s.fdStat(fd); return this.statfs(ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1394"))); }
-      case 45: this.trunc(this.str(requireValue(a[10] ?? null, "src/vm/rv64.ts:1395")), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1395"), "file length", this.s.k.fs.cap)); return 0n;
-      case 46: { const f = this.s.p.fds.get(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1396"))) ?? bad("EBADF", String((a[10] ?? null))); this.trunc(f.path ?? bad("EBADF", String((a[10] ?? null))), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1396"), "file length", this.s.k.fs.cap)); return 0n; }
+      case 45: await this.s.truncate(this.str(requireValue(a[10] ?? null, "src/vm/rv64.ts:1395")), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1395"), "file length", this.s.k.fs.cap)); return 0n;
+      case 46: await this.s.fdTruncate(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1396")), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1396"), "file length", this.s.k.fs.cap)); return 0n;
       case 48: this.s.stat(this.path(requireValue(a[10] ?? null, "src/vm/rv64.ts:1397"), this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1397")))); return 0n;
       case 49: this.s.cd(this.str(requireValue(a[10] ?? null, "src/vm/rv64.ts:1398"))); return 0n;
       case 50: { this.s.fdChdir(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1399"))); return 0n; }
@@ -892,8 +892,8 @@ export class Rv64 {
       }
       case 65: return BigInt(await this.readv(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1437")), ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1437")), this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1437"), "iovec count", 1024)));
       case 66: return BigInt(await this.writev(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1438")), ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1438")), this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1438"), "iovec count", 1024)));
-      case 67: return BigInt(this.pread(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1439")), ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1439")), this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1439"), "read length", MAX_IO), hostNumber(requireValue(a[13] ?? null, "src/vm/rv64.ts:1439"), "read offset")));
-      case 68: return BigInt(this.pwrite(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1440")), ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1440")), this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1440"), "write length", MAX_IO), hostNumber(requireValue(a[13] ?? null, "src/vm/rv64.ts:1440"), "write offset")));
+      case 67: return BigInt(await this.pread(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1439")), ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1439")), this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1439"), "read length", MAX_IO), hostNumber(requireValue(a[13] ?? null, "src/vm/rv64.ts:1439"), "read offset")));
+      case 68: return BigInt(await this.pwrite(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1440")), ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1440")), this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1440"), "write length", MAX_IO), hostNumber(requireValue(a[13] ?? null, "src/vm/rv64.ts:1440"), "write offset")));
       case 73: return BigInt(this.ppoll(ux(requireValue(a[10] ?? null, "src/vm/rv64.ts:1441")), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1441"), "poll descriptor count", 1024)));
       case 78: { const b = enc(this.s.readlink(this.path(requireValue(a[10] ?? null, "src/vm/rv64.ts:1442"), this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1442"))))); return BigInt(this.copy(b, ux(requireValue(a[12] ?? null, "src/vm/rv64.ts:1442")), this.nat(requireValue(a[13] ?? null, "src/vm/rv64.ts:1442"), "readlink length", MAX_IO), true)); }
       case 79: { const p = this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1443")), fl = this.nat(requireValue(a[13] ?? null, "src/vm/rv64.ts:1443"), "stat flags", 0xffff); return this.stat(this.path(requireValue(a[10] ?? null, "src/vm/rv64.ts:1443"), p), ux(requireValue(a[12] ?? null, "src/vm/rv64.ts:1443")), !(fl & 0x100)); }
@@ -1361,14 +1361,18 @@ export class Rv64 {
     this.mem(at, pos, true); this.m.write(at, out.subarray(0, pos)); return pos;
   }
 
-  private pread(fd: number, at: bigint, n: number, off: number): number {
-    const f = this.s.p.fds.get(fd) ?? bad("EBADF", String(fd)), old = f.pos; f.pos = off;
+  private async pread(fd: number, at: bigint, n: number, off: number): Promise<number> {
+    const f = this.s.p.fds.get(fd) ?? bad("EBADF", String(fd));
+    await f.materialiseFile();
+    const old = f.pos; f.pos = off;
     try { const b = this.s.fdr(fd, n); this.mem(at, b.length, true); this.m.write(at, b); return b.length; }
     finally { f.pos = old; }
   }
 
-  private pwrite(fd: number, at: bigint, n: number, off: number): number {
-    const f = this.s.p.fds.get(fd) ?? bad("EBADF", String(fd)), old = f.pos; f.pos = off;
+  private async pwrite(fd: number, at: bigint, n: number, off: number): Promise<number> {
+    const f = this.s.p.fds.get(fd) ?? bad("EBADF", String(fd));
+    await f.materialiseFile();
+    const old = f.pos; f.pos = off;
     try { this.mem(at, n); return this.s.fdw(fd, this.m.read(at, n)); }
     finally { f.pos = old; }
   }
@@ -1656,7 +1660,6 @@ default: { q = [MASK, MASK]; }
     this.mem(at, q.length, true); this.m.write(at, q); return q.length;
   }
 
-  private trunc(p: string, z: number): void { const b = this.s.readb(p), q = new Uint8Array(z); q.set(b.subarray(0, z)); this.s.writeb(p, q); }
 
   private str(at0: bigint): string { return readString(this.m, this.mem.bind(this), at0, "RV64 string"); }
 

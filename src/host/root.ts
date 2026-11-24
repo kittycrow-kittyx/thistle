@@ -1,5 +1,4 @@
 import type { HostProcess } from "./process.js";
-import type { HostBacking } from "./backing.js";
 import { mountHostTree } from "./mount.js";
 import { dumpHostTree } from "./snapshot.js";
 import { withVfsLock } from "./native-access.js";
@@ -11,7 +10,7 @@ import { currentDirectory, checkFilesystemInstance } from "./cwd.js";
 
 /** One mounted root and its byte-transport handle. Namespace state is native. */
 export class RootVolume {
-  backing: HostBacking;
+  backing: ReturnType<typeof mountHostTree>;
 
   constructor(readonly authority: HostProcess, readonly cap: number) {
     const now = Date.now();

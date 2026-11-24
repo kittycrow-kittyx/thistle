@@ -31,3 +31,21 @@ test("hosted Sys and the native ABI observe one mounted root", () => {
   const tree = kernel.fs.dump();
   assert.ok(tree.some(entry => entry.p === "/renamed/alias" && entry.data !== null && entry.data.length === 3));
 });
+
+test("truncate preserves the opened inode, cursor and write-only authority", async () => {
+  const kernel = createHostKernel(), output = new MemOut();
+  const parent = kernel.session({ sin: new MemIn(), sout: output, serr: output });
+  const sys = new Sys(kernel, parent);
+  sys.mkfile("/file", "abcd");
+  const descriptor = HostDescriptor.openPath(parent.native, "/file", 1);
+  descriptor.seekFile(2, 0);
+  sys.mv("/file", "/renamed");
+  await descriptor.resizeFile(6);
+  assert.deepEqual([...sys.readb("/renamed")], [97, 98, 99, 100, 0, 0]);
+  assert.equal(descriptor.offset, 2);
+  sys.rm("/renamed");
+  await descriptor.resizeFile(1);
+  assert.equal(descriptor.inodeView()?.metadata().size ?? null, 1n);
+  assert.equal(descriptor.offset, 2);
+  descriptor.close();
+});

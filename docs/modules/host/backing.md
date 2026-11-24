@@ -39,3 +39,5 @@ A mount has one registered host byte carrier registry per root incarnation. `for
 `forWritableDescriptor` selects the mounted byte transport for a regular descriptor, including arena files. `replaceDescriptor` atomically replaces the whole resident payload without loading the discarded content or moving the cursor. `readView` uses the existing inode incarnation for provider completion.
 
 `writeDescriptor` accepts an explicit whole-transfer mode for synchronous path appends; the ordinary descriptor contract remains bounded to 1 MiB.
+
+`resizeDescriptor` changes the size using open write authority and the resident quota. Zero length drops lazy data without fetching it.
