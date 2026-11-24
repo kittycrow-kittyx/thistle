@@ -39,3 +39,28 @@ test("host inode descriptors share native reads and survive unlink", () => {
   append.close();
   assert.throws(() => HostDescriptor.open(process, root, THISTLE_FD_WRITE), { code: "EISDIR" });
 });
+
+test("native file descriptor writes and seeks preserve access after unlink and chmod", () => {
+  const memory = mountedKernel(), process = new HostProcess(memory, 0);
+  const root = HostInode.resolve(process, "/"), file = root.create(process, "file", 1, 0o600);
+  file.write(process, Uint8Array.of(1, 2, 3), 0, true);
+  const fd = HostDescriptor.open(process, file, THISTLE_FD_READ | THISTLE_FD_WRITE);
+  const append = HostDescriptor.open(process, file, THISTLE_FD_WRITE | THISTLE_FD_APPEND);
+  file.chmod(process, 0);
+  root.unlink(process, "file");
+  assert.equal(fd.seekFile(1, 0), 1);
+  assert.equal(fd.writeFile(Uint8Array.of(9)), 1);
+  assert.equal(fd.offset, 2);
+  assert.equal(append.seekFile(0, 0), 0);
+  assert.equal(append.writeFile(Uint8Array.of(4)), 1);
+  assert.equal(append.offset, 4);
+  assert.equal(fd.seekFile(0, 0), 0);
+  assert.deepEqual([...fd.readFile(8)], [1, 9, 3, 4]);
+  assert.throws(() => append.readFile(1), { code: "EBADF" });
+  assert.throws(() => fd.seekFile(-5, 0), { code: "EINVAL" });
+  assert.equal(fd.offset, 4);
+  append.close();
+  assert.equal(file.metadata().nlink, 0);
+  fd.close();
+  assert.throws(() => file.metadata(), { code: "ENOENT" });
+});

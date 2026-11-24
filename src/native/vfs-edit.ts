@@ -194,6 +194,7 @@ export const thistleVfsWriteDescriptor = (memory: ThistleMemory, state: Ptr, inp
   if (length === 0) return 0;
   if (!inputContains(memory, input, length)) return -14;
   const inode = loadU32(memory, state + FD_INODE);
+  if ((loadU32(memory, inodeAt(memory, inode) + V_FLAGS) & THISTLE_VFS_HOST_BACKING) !== 0) return -18;
   const offset = (flags & THISTLE_FD_APPEND) !== 0 ? thistleVfsFileSize(memory, inode) : loadU64(memory, state + FD_OFFSET);
   if (offset > 0x7fffffffn) return -27;
   const amount = writeInodeData(memory, inode, input, length, wordToU32(offset), false, now);

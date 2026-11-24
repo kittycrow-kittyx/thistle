@@ -31,3 +31,5 @@ work before the new operations can replace the hosted entry points.
 | `thistleVfsUtime` | Set access/modification times as root or owner; update change time from the supplied clock value. |
 
 Removing or replacing a directory held as a process cwd returns `EBUSY`. Renaming a referenced directory retains its inode and updates the path observed by the process.
+
+`thistleVfsWriteDescriptor` writes arena bytes through a live writable descriptor. Append selects the current inode size under lock. Access is retained after unlink or permission changes, and the descriptor offset advances only on success.

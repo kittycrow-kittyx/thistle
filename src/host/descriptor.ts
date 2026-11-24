@@ -138,10 +138,14 @@ export class HostDescriptor {
   seekFile(offset: number, whence: number): number {
     if (!Number.isSafeInteger(offset) || !Number.isInteger(whence) || whence < 0 || whence > 2) bad("EINVAL", "invalid descriptor seek");
     const memory = this.process.memory;
-    const result = this.access(state => withVfsLock(memory, () => thistleVfsSeekDescriptor(memory, state, BigInt(offset), whence)));
-    if (result < 0n) checkNative(Number(result));
-    if (result > BigInt(Number.MAX_SAFE_INTEGER)) bad("EFBIG", "descriptor offset exceeds host integer range");
-    return Number(result);
+    return this.access(state => withVfsLock(memory, () => {
+      const previous = loadU64(memory, state + FD_OFFSET);
+      const result = thistleVfsSeekDescriptor(memory, state, BigInt(offset), whence);
+      if (result < 0n) checkNative(Number(result));
+      if (result <= BigInt(Number.MAX_SAFE_INTEGER)) return Number(result);
+      storeU64(memory, state + FD_OFFSET, previous);
+      return bad("EFBIG", "descriptor offset exceeds host integer range");
+    }));
   }
 
   close(): void {

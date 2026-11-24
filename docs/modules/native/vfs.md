@@ -44,3 +44,5 @@ Path resolution checks that the current component is a searchable directory befo
 `freeDescriptor` locates a reusable slot. `installDescriptor` establishes its next incarnation and initial state; both native file open and standard host descriptor initialization use it. `releaseDescriptor` retains the incarnation counter while clearing live state.
 
 `thistleVfsOpenInode` validates file or directory access, finds a descriptor and binds its inode. Append opens start at the current file size. Native read-only path opens use this same allocator and permission check.
+
+`descriptorReadStatus` checks file kind and read flags. `thistleVfsReadDescriptor` copies arena bytes to a reserved image and advances the canonical offset. `thistleVfsSeekDescriptor` implements signed, checked seek and publishes the new offset only on success.
