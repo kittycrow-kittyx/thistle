@@ -196,7 +196,7 @@ test("RV64 shared mapping writes follow the renamed inode after close", async ()
     0xf9c00513, 0x000205b7, 0xf9c00613, 0x000206b7, 0x00868693, 0x02600893, 0x73,
     0x02a00293, 0x00548023, 0x00000513, 0x05d00893, 0x73,
   ];
-  sys.mkfile("/mapping.thx", executable(words, enc("/mapped\0/moved\0")), 0o755);
+  sys.mkfile("/mapping.thx", executable(words, new TextEncoder().encode("/mapped\0/moved\0")), 0o755);
   const child = sys.start("/mapping.thx", []);
   assert.equal(await sys.wait(child.pid), 0, output.text());
   assert.deepEqual(sys.readb("/moved"), Uint8Array.of(42, 2, 3));

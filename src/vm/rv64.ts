@@ -985,16 +985,7 @@ export class Rv64 {
       }
     }
 
-    if (!this.vf) {
-      this.flushAllShared();
-      try {
-        await this.s.exec(path, argv.length ? argv : [path], env);
-      } catch (error) {
-        if (!(error instanceof ExecReplace)) throw error instanceof Error ? error : new Error("exec failed");
-        this.releaseFileMappings();
-        throw error;
-      }
-    }
+    if (!this.vf) return this.execImage(path, argv.length ? argv : [path], env);
 
     const io: StartIo = { sin: null, sout: null, serr: null }, f0 = (this.s.p.fds.get(0) ?? null), f1 = (this.s.p.fds.get(1) ?? null), f2 = (this.s.p.fds.get(2) ?? null);
     if (f0 && f0.input) io.sin = f0.input;
@@ -1006,6 +997,18 @@ export class Rv64 {
     this.restoreVf();
     this.dropFds(kid);
     return BigInt(p.pid);
+  }
+
+  private async execImage(path: string, argv: string[], env: Map<string, string>): Promise<never> {
+    this.flushAllShared();
+    try {
+      return await this.s.exec(path, argv, env);
+    } catch (error) {
+      if (!(error instanceof ExecReplace)) throw error instanceof Error ? error : new Error("exec failed");
+      this.s.chk();
+      this.releaseFileMappings();
+      throw error;
+    }
   }
 
   private vfExit(code: bigint): bigint {
@@ -1662,10 +1665,8 @@ default: { q = [MASK, MASK]; }
     const hart = this.thistleActiveHart, memory = requireValue(this.nativeMemory, "canonical memory");
     if (length === 0) return -22n;
     const fixed = (flags & 0x100010) === 0x10;
-    if ((flags & 0x20) !== 0) {
-      if (fixed) this.flushShared(ux(addr0), length);
-      return thistleMapHostAnonymous(memory, hart, ux(addr0), len0, prot0, flags0);
-    }
+    if ((flags & 0x20) !== 0 && fixed) this.flushShared(ux(addr0), length);
+    if ((flags & 0x20) !== 0) return thistleMapHostAnonymous(memory, hart, ux(addr0), len0, prot0, flags0);
     const fd = this.fd(fd0), file = this.s.p.fds.get(fd) ?? bad("EBADF", String(fd));
     if (!file.rd || file.inode === 0) return -9n;
     if ((flags & 3) === 1 && (prot & 2) !== 0 && !file.wr) return -13n;
@@ -1690,8 +1691,7 @@ default: { q = [MASK, MASK]; }
 
   private remap(old0: bigint, oz0: bigint, nz0: bigint): bigint {
     const old = ux(old0), oldSize = al(ux(oz0)), newSize = al(ux(nz0));
-    const carrier = mappedRanges(this.s.p.native).find(mapping => mapping.at === old && mapping.end === old + oldSize);
-    if (carrier === undefined) return -22n;
+    if (!mappedRanges(this.s.p.native).some(mapping => mapping.at === old && mapping.end === old + oldSize)) return -22n;
     if (newSize < oldSize) this.flushShared(old + newSize, this.nat(oldSize - newSize, "truncated mapping", Number.MAX_SAFE_INTEGER));
     const result = thistleRemapHostFile(requireValue(this.nativeMemory, "canonical memory"), this.thistleActiveHart);
     if (result < 0n || newSize <= oldSize) return result;
