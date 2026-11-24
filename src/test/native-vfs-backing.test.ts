@@ -1,4 +1,3 @@
-import { readDirectory } from "../host/directory.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mountedKernel } from "./vfs-fixture.js";
@@ -64,5 +63,4 @@ test("canonical directory cursors reflect unlink and inode reuse", () => {
   assert.equal(thistleVfsReadEntry(memory, proc, 1, 0, input, 256), 17);
   assert.equal(memory.view.getUint8(input + 16), 98);
   assert.equal(thistleImageRelease(memory, input, 512), 0);
-  assert.deepEqual(readDirectory(memory, proc, 1), [{ name: "b", inode, kind: 1 }]);
 });

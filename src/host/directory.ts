@@ -1,8 +1,9 @@
 import { bad } from "../core/err.js";
 import { loadU32 } from "../native/memory.js";
-import type { ThistleMemory } from "../native/memory.js";
+import type { HostInode } from "./inode.js";
+import type { HostProcess } from "./process.js";
 import { thistleVfsReadEntry } from "../native/vfs.js";
-import { withImage, withVfsLock, checkNative } from "./native-access.js";
+import { withImage, checkNative } from "./native-access.js";
 
 export interface DirectoryItem {
   readonly name: string;
@@ -11,12 +12,13 @@ export interface DirectoryItem {
 }
 
 /** Materialise a directory snapshot from canonical entries without a second tree. */
-export const readDirectory = (memory: ThistleMemory, proc: number, parent: number): DirectoryItem[] =>
-  withImage(memory, 272, input => withVfsLock(memory, () => {
+export const readDirectory = (directory: HostInode, process: HostProcess): DirectoryItem[] => {
+  const memory = directory.memory;
+  return withImage(memory, 272, input => directory.access(process, proc => {
     const result: DirectoryItem[] = [], decoder = new TextDecoder();
     let cursor = 0;
     for (;;) {
-      const status = thistleVfsReadEntry(memory, proc, parent, cursor, input, 272);
+      const status = thistleVfsReadEntry(memory, proc, directory.ino, cursor, input, 272);
       if (status === 0) return result;
       checkNative(status);
       const next = loadU32(memory, input + 8);
@@ -26,3 +28,4 @@ export const readDirectory = (memory: ThistleMemory, proc: number, parent: numbe
       cursor = next;
     }
   }));
+};

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mountedKernel, rootVfsImage } from "./vfs-fixture.js";
+import { readDirectory } from "../host/directory.js";
 import { HostInode } from "../host/inode.js";
 import { HostProcess } from "../host/process.js";
 import { withImage } from "../host/native-access.js";
@@ -22,6 +23,9 @@ test("inode views survive edits and renames but reject recycled slots", () => {
     assert.equal(view.access(process, record => thistleVfsRename(memory, record, 1, input, 4, 1, input + 9, 3, 4n)), 0);
     return view;
   });
+  assert.deepEqual(readDirectory(new HostInode(memory, 1), process), [
+    { name: "new", inode: view.ino, kind: 1 }, { name: "alias", inode: view.ino, kind: 1 },
+  ]);
   assert.deepEqual(view.read(process, 0n, 8), enc("file"));
   withImage(memory, 16, input => {
     memory.bytes.set(enc("filealiasnew"), input);
@@ -47,6 +51,7 @@ test("remount expires inode views and reads validate the live process authority"
     assert.equal(thistleLoadVfs(memory, input, image.length), 0);
   });
   assert.throws(() => directory.metadata(), { code: "ENOENT" });
+  assert.throws(() => readDirectory(directory, root), { code: "ENOENT" });
   assert.equal(thistleHartInit(memory, 1, 0x10000000n, 0n), 0);
   assert.equal(thistleProcessInit(memory, 1, 2, 1, 1000, 1000, 1000, 1000, 1000, 1000), 0);
   const other = new HostProcess(memory, 1);

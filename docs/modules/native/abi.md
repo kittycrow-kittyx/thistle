@@ -371,4 +371,4 @@ host callback phase does not park sibling guest harts.
 | `P_SIGNAL_LAST` | Offset 332, most recently delivered signal |
 | `P_SIGNAL_MASK` | Offset 336, unsigned 64-bit blocked mask |
 
-Candidate ABI 11 now uses an 88-byte inode stride. `V_IDENTITY` at byte 80 identifies one incarnation of an inode slot independently of its mutable payload version. The on-disk image retains 56-byte inode records.
+Candidate ABI 11 uses an 88-byte inode stride. `V_IDENTITY` at byte 80 identifies one incarnation of an inode slot independently of its mutable payload version. The on-disk image retains 56-byte inode records.

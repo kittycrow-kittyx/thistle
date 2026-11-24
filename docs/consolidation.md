@@ -187,3 +187,5 @@ Host pipe and terminal readers now use a shared cancellation queue. Aborting a p
 The candidate inode layout includes a separate incarnation token. Host views read canonical metadata under locks and reject recycled slots and remounted filesystems. Checked reads use the live canonical process and credentials. The legacy object filesystem still needs replacement with these views.
 
 `HostBacking` now uses those inode and process views. Lazy provider completion rechecks both identities before committing metadata, covering reaped readers and recycled inode slots.
+
+Directory snapshots use the same checked process/inode views. Native path traversal checks search permission for dot components and follows symlinks before resolving subsequent parent components.

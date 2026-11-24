@@ -288,13 +288,13 @@ const resolveRange = (
     const length = cursor - component;
     if (length > 255) return -36;
     const final = !moreComponents(memory, cursor, end);
+    if (thistleVfsKind(memory, current) !== THISTLE_VFS_KIND_DIRECTORY) return -20;
+    if (!allowed(memory, proc, current, 1)) return -13;
     if (length === 1 && loadU8(memory, component) === 46) continue;
     const dotdot = length === 2 && loadU8(memory, component) === 46 && loadU8(memory, component + 1) === 46;
     const parent = dotdot ? parentOf(memory, current) : current;
     if (dotdot && parent === 0) return -2;
     if (dotdot) { current = parent; continue; }
-    if (thistleVfsKind(memory, current) !== THISTLE_VFS_KIND_DIRECTORY) return -20;
-    if (!allowed(memory, proc, current, 1)) return -13;
     const child = findChild(memory, current, component, length);
     if (child === 0) return -2;
     const follow = thistleVfsKind(memory, child) === THISTLE_VFS_KIND_LINK && (!final || followFinal || cursor < end);

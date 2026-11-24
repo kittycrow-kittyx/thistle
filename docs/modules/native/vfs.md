@@ -32,3 +32,5 @@ The result is the record length. Short buffers return ERANGE; directory read
 permission is checked by the canonical `allowed` function.
 
 `thistleVfsIdentity` returns the immutable incarnation token of a live inode, or zero for a missing inode. Content and metadata edits preserve identity; slot reuse and remount assign a new token.
+
+Path resolution checks that the current component is a searchable directory before processing `.` or `..`. Symlink targets determine traversal before a following parent component.

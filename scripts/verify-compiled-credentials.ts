@@ -134,6 +134,16 @@ for (const threaded of [false, true]) {
   assert.equal(invoke("ProcessSignalMask", 0, 0, 1, 2, signals), 0);
   assert.equal(view.getBigUint64(signals, true), 1n << 63n);
   assert.equal(invoke("ImageRelease", 0, signals, 16), 0);
+  const pathRequest = Number(invoke("ImageReserve", 0, 32));
+  data.set(new TextEncoder().encode("denied"), pathRequest);
+  const denied = Number(invoke("VfsCreate", 0, proc, 1, pathRequest, 6, 2, 0, 1n));
+  assert.ok(denied > 1);
+  data.set(new TextEncoder().encode("/denied/.."), pathRequest);
+  assert.equal(invoke("VfsResolve", 0, proc, 1, pathRequest, 10, 1), 1);
+  assert.equal(invoke("ProcessIdentity", 0, 0, 6, 1000, 0xffffffff, 0xffffffff), 0n);
+  assert.equal(invoke("VfsResolve", 0, proc, 1, pathRequest, 10, 1), -13);
+  assert.equal(invoke("ProcessIdentity", 0, 0, 6, 0, 0xffffffff, 0xffffffff), 1000n);
+  assert.equal(invoke("ImageRelease", 0, pathRequest, 32), 0);
   assert.equal(invoke("ProcessFinish", 0, 0, 999, 9), -3);
   assert.equal(invoke("ProcessFinish", 0, 0, 1, 9), 0);
   assert.equal(invoke("HartExitCode", 0, 0), 9);

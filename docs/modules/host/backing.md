@@ -17,4 +17,10 @@ Provider results are length-checked and copied before publication. The returned
 read buffer is also a copy. Failed provider reads can be retried. This adapter
 has not replaced the hosted filesystem node classes.
 
-Operations take a `HostProcess` view. Lazy materialisation revalidates both the process PID binding and the inode incarnation after awaiting the provider. Reaping the reader or recycling the inode causes the old completion to fail before it commits storage metadata.
+Operations take a `HostProcess` view. Provider completion checks process and inode identity before committing.
+
+| Completion condition | Result |
+| --- | --- |
+| Reader reaped or its hart rebound | `ESRCH` |
+| Inode unlinked and its slot recycled | `ENOENT` |
+| Payload replaced during the read | `EAGAIN` |

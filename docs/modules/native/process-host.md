@@ -26,6 +26,6 @@ CPU readiness while the process records host callback phase.
 
 The 16-byte mask request contains the requested u64 mask at offset 0. On
 success, offset 0 contains the previous mask and offset 8 a newly unblocked
-signal, or zero. Negative numeric errors are separate from the full-width mask.
+signal, or zero. The function returns zero on success or a negative errno on failure.
 Supported signals are 0, 1, 2, 9, 13 and 15. The pending slot retains the hosted
 single-deferred-signal contract.
