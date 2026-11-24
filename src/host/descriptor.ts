@@ -44,9 +44,10 @@ export class HostDescriptor {
   }
 
   static find(process: HostProcess, number: number): HostDescriptor | null {
+    if (!Number.isInteger(number) || number < 0 || number > 0xffffffff) return null;
+    const memory = process.memory;
     return process.withDescriptors(record => {
-      const memory = process.memory;
-      if (!Number.isInteger(number) || number < 0 || number >= loadU32(memory, record + P_DESCRIPTOR_CAPACITY)) return null;
+      if (number >= loadU32(memory, record + P_DESCRIPTOR_CAPACITY)) return null;
       const state = descriptorAt(memory, record, number);
       if (loadU32(memory, state + FD_KIND) === THISTLE_FD_EMPTY) return null;
       return new HostDescriptor(process, number, loadU32(memory, state + FD_IDENTITY));
@@ -58,16 +59,16 @@ export class HostDescriptor {
   }
 
   static active(process: HostProcess): HostDescriptor[] {
-    return process.withDescriptors(record => {
-      const memory = process.memory, count = loadU32(memory, record + P_DESCRIPTOR_CAPACITY);
-      const result: HostDescriptor[] = [];
+    const memory = process.memory, result: HostDescriptor[] = [];
+    process.withDescriptors(record => {
+      const count = loadU32(memory, record + P_DESCRIPTOR_CAPACITY);
       for (let number = 0; number < count; number++) {
         const state = descriptorAt(memory, record, number);
         if (loadU32(memory, state + FD_KIND) === THISTLE_FD_EMPTY) continue;
         result.push(new HostDescriptor(process, number, loadU32(memory, state + FD_IDENTITY)));
       }
-      return result;
     });
+    return result;
   }
 
   static open(process: HostProcess, inode: HostInode, flags: number, minimum = 3): HostDescriptor {
