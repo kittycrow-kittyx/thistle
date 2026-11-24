@@ -1,5 +1,5 @@
 import { bad } from "../core/err.js";
-import { P_CWD_INODE, V_ATIME, V_CTIME, V_GID, V_KIND, V_MODE, V_MTIME, V_NLINK, V_SIZE, V_UID } from "../native/abi.js";
+import { THISTLE_VFS_KIND_CHARACTER, THISTLE_VFS_KIND_DIRECTORY, THISTLE_VFS_KIND_FILE, THISTLE_VFS_KIND_LINK, P_CWD_INODE, V_ATIME, V_CTIME, V_GID, V_KIND, V_MODE, V_MTIME, V_NLINK, V_SIZE, V_UID } from "../native/abi.js";
 import { loadU32, loadU64 } from "../native/memory.js";
 import type { ThistleMemory } from "../native/memory.js";
 import { inodeAt, thistleVfsAccess, thistleVfsIdentity, thistleVfsReadData, thistleVfsResolve } from "../native/vfs.js";
@@ -7,6 +7,15 @@ import { withImage, withVfsLock, checkNative } from "./native-access.js";
 import type { HostProcess } from "./process.js";
 import { enc } from "../io/stream.js";
 import { thistleVfsChmod, thistleVfsChown, thistleVfsUtime, thistleVfsCreate, thistleVfsLink, thistleVfsUnlink, thistleVfsRename, thistleVfsWrite } from "../native/vfs-edit.js";
+
+/** Translate the native inode kind for host-facing persistence and presentation. */
+export const inodeKind = (kind: number): "d" | "f" | "l" | "c" => {
+  if (kind === THISTLE_VFS_KIND_DIRECTORY) return "d";
+  if (kind === THISTLE_VFS_KIND_FILE) return "f";
+  if (kind === THISTLE_VFS_KIND_LINK) return "l";
+  if (kind === THISTLE_VFS_KIND_CHARACTER) return "c";
+  return bad("EIO", "unknown canonical inode kind");
+};
 
 export interface InodeMetadata {
   readonly ino: number;

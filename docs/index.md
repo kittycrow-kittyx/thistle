@@ -157,6 +157,7 @@ bun run test
 - [test/host-restore.test](modules/test/host-restore.test.md)
 
 - [host/mount](modules/host/mount.md)
+- [host/snapshot](modules/host/snapshot.md)
 - [test/host-mount.test](modules/test/host-mount.test.md)
 
 - [test/native-vfs-mount.test](modules/test/native-vfs-mount.test.md)

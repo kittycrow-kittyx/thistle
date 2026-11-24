@@ -2,7 +2,7 @@ import { thistleProcessFinish, thistleProcessSetHostState, thistleProcessQueueSi
 import { bad } from "../core/err.js";
 import type { ProcCred } from "../fs/vfs.js";
 import {
-  C_PROCESS_LOCK, C_PROCESS_CAPACITY, C_CREDENTIAL_LOCK, P_PID, P_RUID, P_EUID, P_SUID,
+  C_PROCESS_LOCK, C_PROCESS_CAPACITY, C_CREDENTIAL_LOCK, C_VFS_GENERATION, P_PID, P_RUID, P_EUID, P_SUID,
   P_RGID, P_EGID, P_SGID, P_FSUID, P_FSGID, P_GROUP_COUNT, P_UMASK, P_PPID, P_PGID, P_STATE, P_EXIT_CODE,
   THISTLE_PROCESS_RUNNABLE, THISTLE_PROCESS_WAITING, THISTLE_PROCESS_ZOMBIE,
   THISTLE_PROCESS_RUNNING, THISTLE_PROCESS_STOPPED, P_SIGNAL_LAST, P_SIGNAL_MASK,
@@ -72,6 +72,14 @@ export class HostProcess {
   withFilesystem<T>(operation: (record: number) => T): T {
     return this.withRecord(record => withNativeLock(this.memory, C_CREDENTIAL_LOCK,
       () => withVfsLock(this.memory, () => operation(record))));
+  }
+
+  /** Root-only persistence generation receipt under live process and VFS locks. */
+  snapshotGeneration(): bigint {
+    return this.withFilesystem(record => {
+      if (loadU32(this.memory, record + P_FSUID) !== 0) bad("EPERM", "root snapshot requires filesystem UID zero");
+      return atomicLoadU64(this.memory, C_VFS_GENERATION);
+    });
   }
 
   get parentPid(): number { return this.withRecord(record => loadU32(this.memory, record + P_PPID)); }

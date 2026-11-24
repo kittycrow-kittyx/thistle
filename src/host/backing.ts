@@ -109,7 +109,8 @@ export class HostBacking {
       if (handle === 0) return null;
       const payload = this.payloads.get(handle) ?? bad("EIO", "missing host byte carrier");
       if (payload.bytes !== null) return payload.bytes.slice();
-      return payload.source?.source ?? bad("EIO", "missing lazy byte source");
+      const source = payload.source ?? bad("EIO", "missing lazy byte source");
+      return source.source;
     });
   }
 
