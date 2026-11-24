@@ -979,13 +979,11 @@ export class Rv64 {
 
   private async read(fd: number, n: number): Promise<Uint8Array> {
     const f = this.s.p.fds.get(fd) ?? bad("EBADF", String(fd));
-    if (!f.input) {
-      if (f.inode === 0) return this.s.fdr(fd, n);
-      if (n !== 0) await f.materialiseFile();
-      return f.readFile(n);
-    }
+    const input = f.input;
+    if (input === null && f.inode !== 0 && n !== 0) await f.materialiseFile();
+    if (input === null) return f.inode === 0 ? this.s.fdr(fd, n) : f.readFile(n);
     let q = (this.ins.get(fd) ?? null);
-    if (!q || q.at >= q.b.length) { q = { b: await f.input.rd(this.s.p.ac.signal), at: 0 }; this.ins.set(fd, q); }
+    if (!q || q.at >= q.b.length) { q = { b: await input.rd(this.s.p.ac.signal), at: 0 }; this.ins.set(fd, q); }
     const b = q.b.slice(q.at, q.at + n); q.at += b.length; return b;
   }
 
