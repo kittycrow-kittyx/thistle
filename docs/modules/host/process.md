@@ -33,3 +33,7 @@ updates the canonical phase through the PID-checked native operation.
 
 `children` snapshots live child PIDs from native parent fields under the
 process lock, including processes allocated without hosted callback metadata.
+
+`HostSignal` names supported host deliveries. `HostSignalChange` contains the
+previous mask and an unblocked signal. `signalMask` and `lastSignal` read native
+metadata; `queueSignal` and `changeSignalMask` marshal the native operations.

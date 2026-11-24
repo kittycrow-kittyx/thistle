@@ -8,3 +8,6 @@ requests also exercise native permission checks and snapshot isolation.
 Concurrent guests use distinct harts and pages in shared kernel memory. An
 execve fixture replaces its image while retaining the canonical PID, then
 verifies that reaping returns the allocator to its initial position.
+
+A killed guest's delayed output is released while another guest occupies the
+same hart. The new guest must remain waiting for its own output completion.

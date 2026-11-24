@@ -216,6 +216,7 @@ export class Rv64 {
   private readonly miss = new Set<number>();
   private readonly localSockets = new Set<number>();
   private thistleThreads: ThistleThreadRuntime | null = null;
+  private interrupted: Promise<void> | null = null;
   private thistleActiveHart = 0;
   private readonly thistleFutexWaiters = new Map<bigint, Set<FutexWake>>();
   private readonly events: RvLinuxEvents;
@@ -319,14 +320,30 @@ export class Rv64 {
       thistleExitHart: (_memory, hart, code) => thistleExitHart(memory, hart, code),
     };
     this.executionActive = true;
+    const interrupt = this.bindInterrupt();
+    this.interrupted = interrupt.promise;
     try {
+      this.s.chk();
       return await this.runThistleCore(exe, argv, image, { memory, exports, label: "Thistle native source" }, physicalBytes);
     } finally {
       this.executionActive = false;
+      interrupt.dispose();
+      this.interrupted = null;
       for (const waiters of this.thistleFutexWaiters.values()) {
         for (const wake of [...waiters]) wake(-4n);
       }
     }
+  }
+
+  private bindInterrupt(): { promise: Promise<void>; dispose: () => void } {
+    const signal = this.s.p.ac.signal;
+    const hook = { abort: (): void => { throw new Error("interrupt hook not initialised"); } };
+    const promise = new Promise<void>(resolve => {
+      hook.abort = () => { this.executionActive = false; resolve(); };
+      signal.addEventListener("abort", hook.abort, { once: true });
+    });
+    if (signal.aborted) hook.abort();
+    return { promise, dispose: () => signal.removeEventListener("abort", hook.abort) };
   }
 
   /** Thin-host packaging for strings and the random capability consumed by Thistle. */
@@ -421,7 +438,10 @@ export class Rv64 {
         if (this.done) break;
         if (session.failure) throw session.failure;
         if (progressed) { await this.s.yield(); continue; }
-        if (session.pending.size) { await Promise.race(session.pending.values()); continue; }
+        if (session.pending.size) {
+          await Promise.race([...session.pending.values(), requireValue(this.interrupted, "guest interruption")]);
+          continue;
+        }
         bad("EPROTO", "Thistle has no runnable harts or pending syscalls");
       }
       return this.code & 255;

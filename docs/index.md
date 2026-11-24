@@ -143,3 +143,5 @@ bun run test
 - [test/native-host-map.test](modules/test/native-host-map.test.md)
 
 - [test/host-lifecycle.test](modules/test/host-lifecycle.test.md)
+
+- [test/native-signals.test](modules/test/native-signals.test.md)

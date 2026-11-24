@@ -363,3 +363,9 @@ ABI identities, fixed region sizes, status/error values, flags and capacities us
 
 Hart status and events determine CPU readiness within a process. Updating a
 host callback phase does not park sibling guest harts.
+
+| Signal field in the existing ABI 11 process stride | Layout |
+| --- | --- |
+| `P_SIGNAL_PENDING` | Offset 328, one deferred supported signal |
+| `P_SIGNAL_LAST` | Offset 332, most recently delivered signal |
+| `P_SIGNAL_MASK` | Offset 336, unsigned 64-bit blocked mask |

@@ -20,3 +20,8 @@ that host cleanup and the completion promise have finished, which can occur
 after native exit. The completed exit receipt remains readable after reaping.
 
 `kids` is a read-only snapshot of canonical child membership.
+
+Signal masks, deferred signals and the latest delivery live in native process
+metadata. `signal` and `setSignalMask` delegate policy there. The host abort
+controller carries delivery to JavaScript callbacks. Completed receipts retain
+the terminal signal alongside the exit code.

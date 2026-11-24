@@ -154,7 +154,9 @@
       "thistleMapHostFile",
       "thistleUnmapHostFile",
       "thistleRemapHostFile",
-      "thistleProcessSetHostState"
+      "thistleProcessSetHostState",
+      "thistleProcessQueueSignal",
+      "thistleProcessSignalMask"
     ],
     "verify": {
       "init": "tetoKernelInit",
@@ -277,7 +279,9 @@
       "thistleMapHostFile": "tetoMapHostFile",
       "thistleUnmapHostFile": "tetoUnmapHostFile",
       "thistleRemapHostFile": "tetoRemapHostFile",
-      "thistleProcessSetHostState": "tetoProcessSetHostState"
+      "thistleProcessSetHostState": "tetoProcessSetHostState",
+      "thistleProcessQueueSignal": "tetoProcessQueueSignal",
+      "thistleProcessSignalMask": "tetoProcessSignalMask"
     }
   },
   "memory": {

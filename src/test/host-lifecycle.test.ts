@@ -69,3 +69,19 @@ test("child membership follows native allocation without a hosted registration",
   kernel.canonical.reap(parent.native, child.pid);
   assert.ok(!parent.kids.has(child.pid));
 });
+
+test("unblocked canonical signals reach the host abort capability", () => {
+  const kernel = new Kern(), output = new MemOut(), term = 1n << 14n;
+  const process = kernel.session({ sin: new MemIn(), sout: output, serr: output });
+  assert.equal(process.setSignalMask(0, term), 0n);
+  assert.equal(process.signal(15), false);
+  assert.equal(process.ac.signal.aborted, false);
+  assert.equal(process.sig, null);
+  assert.equal(process.setSignalMask(1, term), term);
+  assert.equal(process.ac.signal.aborted, true);
+  assert.equal(process.sig, 15);
+  process.end(143);
+  kernel.canonical.reap(kernel.init().native, process.pid);
+  assert.equal(process.sig, 15);
+  assert.equal(process.code, 143);
+});

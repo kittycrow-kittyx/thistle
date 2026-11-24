@@ -18,3 +18,14 @@ hart under the process and hart locks.
 checking the allocated PID. Ready, running, sleeping and stopped phases are
 accepted; a zombie cannot be made live again. Hart events retain per-thread
 CPU readiness while the process records host callback phase.
+
+| Signal operation | Contract |
+| --- | --- |
+| `thistleProcessQueueSignal` | Check the allocated PID and supported signal; return 1 for host delivery or 0 for deferred/no delivery. |
+| `thistleProcessSignalMask` | Apply block/unblock/replace under the process lock; SIGKILL remains unblocked. |
+
+The 16-byte mask request contains the requested u64 mask at offset 0. On
+success, offset 0 contains the previous mask and offset 8 a newly unblocked
+signal, or zero. Negative numeric errors are separate from the full-width mask.
+Supported signals are 0, 1, 2, 9, 13 and 15. The pending slot retains the hosted
+single-deferred-signal contract.

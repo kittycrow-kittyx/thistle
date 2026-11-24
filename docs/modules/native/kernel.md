@@ -73,8 +73,14 @@ process-host. The allocated PID must still match the hart binding.
 
 `thistleGuestAccess` accepts a hart, expected PID, guest address, byte length and
 read/write/execute permission bits. It checks canonical mappings under the hart
-lock. Success returns zero; EFAULT denies inaccessible memory, ESRCH rejects
-an expired binding and EAGAIN reports contention.
+lock.
+
+| Access result | Meaning |
+| --- | --- |
+| `0` | Access permitted |
+| `-EFAULT` | Inaccessible guest memory |
+| `-ESRCH` | Expired process binding |
+| `-EAGAIN` | Hart lock contention |
 
 `thistleRemapHostFile` reads the calling hart's mremap arguments from a0-a4
 and applies the shared canonical mapping resize policy to hosted file mappings.
@@ -85,3 +91,8 @@ both hart and process locks against reaping or concurrent execution.
 `thistleProcessSetHostState` re-exports the PID-checked callback phase update
 from process-host. The native process state word also supplies host listings
 and ready snapshots.
+
+
+`thistleProcessQueueSignal` and `thistleProcessSignalMask` re-export canonical
+signal metadata operations from process-host. Host adapters marshal delivery
+through their abort capabilities.

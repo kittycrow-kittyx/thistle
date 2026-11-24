@@ -162,6 +162,9 @@ export const P_CWD_INODE: U32 = 312;
 export const P_UMASK: U32 = 316;
 export const P_DESCRIPTOR_TABLE: U32 = 320;
 export const P_DESCRIPTOR_CAPACITY: U32 = 324;
+export const P_SIGNAL_PENDING: U32 = 328;
+export const P_SIGNAL_LAST: U32 = 332;
+export const P_SIGNAL_MASK: U32 = 336;
 
 export const THISTLE_DESCRIPTOR_STRIDE: U32 = 32;
 export const THISTLE_DESCRIPTOR_CAPACITY: U32 = 64;

@@ -163,3 +163,16 @@ Host completion follows I/O cleanup. A process may be a native zombie before
 its host completion promise resolves; the hosted reaper waits for completion
 before releasing its canonical record. A terminal completion receipt survives
 reaping without retaining a live process-state owner.
+
+## Signal metadata and aborted host operations
+
+Canonical process fields own the blocked mask, one deferred signal and the
+latest delivery. Host callbacks receive delivery through their abort controller.
+The supported signal set and one-slot pending semantics match the hosted API.
+Full Linux signal-action and rt_sigprocmask syscall coverage remains a separate
+integration requirement; the existing RV64 compatibility stubs need review.
+
+Aborting a hosted RV64 guest immediately expires its execution view and wakes
+its pending-operation loop. Late host I/O cannot resume a hart after reaping and
+reuse. Host transport cancellation still requires review for outstanding reads
+on shared input endpoints.

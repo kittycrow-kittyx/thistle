@@ -1,9 +1,9 @@
 import type { In, Out } from "../io/stream.js";
-import type { HostProcess, HostProcessState } from "../host/process.js";
+import type { HostProcess, HostProcessState, HostSignal } from "../host/process.js";
 import type { ProcCred } from "../fs/vfs.js";
 
 export type PState = HostProcessState;
-export type Sig = 0 | 1 | 2 | 9 | 13 | 15;
+export type Sig = HostSignal;
 
 export interface Io {
   sin: In;
@@ -66,18 +66,19 @@ export interface ProcInit {
 export class Proc {
   // Completion retains a terminal receipt after reaping; live state belongs to native memory.
   private finishedCode: number | null = null;
+  private finishedSignal: Sig | null = null;
   get completed(): boolean { return this.finishedCode !== null; }
   get state(): PState { return this.finishedCode === null ? this.native.phase.state : "zombie"; }
   set state(value: PState) { this.native.setState(value); }
   get code(): number | null { return this.finishedCode ?? this.native.phase.code; }
-  sig: Sig | null = null;
+  get sig(): Sig | null { return this.completed ? this.finishedSignal : this.native.lastSignal; }
   readonly born = Date.now();
   readonly ac = new AbortController();
   readonly fds = new Map<number, Fd>();
   get kids(): ReadonlySet<number> { return this.native.children; }
   allHeld = false;
-  signalMask = 0n;
-  private pending: Sig | null = null;
+  get signalMask(): bigint { return this.native.signalMask; }
+  set signalMask(value: bigint) { this.setSignalMask(2, value); }
   readonly done: Promise<number>;
   private fin: ((n: number) => void) | null = null;
 
@@ -119,6 +120,7 @@ export class Proc {
   end(n: number): void {
     if (this.finishedCode !== null) return;
     this.native.finish(n & 0xff);
+    this.finishedSignal = this.native.lastSignal;
     this.finishedCode = n & 0xff;
     const finish = this.fin;
     if (finish === null) throw new Error("missing process completion resolver");
@@ -126,30 +128,19 @@ export class Proc {
   }
 
   signal(s: Sig): boolean {
-    if (s === 0) return true;
-    if (this.code !== null) return false;
-    const bit = 1n << BigInt(s - 1);
-    if (s !== 9 && (this.signalMask & bit)) { this.pending = s; return false; }
-    this.sig = s;
-    this.ac.abort(new Error(`signal ${s}`));
-    return true;
+    if (this.completed) return s === 0;
+    const deliver = this.native.queueSignal(s);
+    if (deliver && s !== 0) this.deliverSignal(s);
+    return deliver;
   }
 
   setSignalMask(how: 0 | 1 | 2, mask: bigint): bigint {
-    const old = this.signalMask, kill = 1n << 8n;
-    switch (how) {
-      case 0: this.signalMask |= mask; break;
-      case 1: this.signalMask &= ~mask; break;
-      default: this.signalMask = mask;
-    }
-    this.signalMask &= ~kill;
-    const p = this.pending;
-    if (p !== null && !(this.signalMask & (1n << BigInt(p - 1)))) {
-      this.pending = null;
-      this.signal(p);
-    }
-    return old;
+    const change = this.native.changeSignalMask(how, mask);
+    if (change.signal !== null) this.deliverSignal(change.signal);
+    return change.previous;
   }
+
+  private deliverSignal(signal: Sig): void { this.ac.abort(new Error(`signal ${signal}`)); }
 
   ms(): number { return Date.now() - this.born; }
 }

@@ -40,3 +40,19 @@ test("host process views read shared native credentials and reject expired ident
   assert.equal(thistleProcessInit(memory, 1, 3, 1, 0, 0, 0, 0, 0, 0), 0);
   assert.throws(() => first.identity(), { code: "ESRCH" });
 });
+
+test("host signal views share canonical masks and pending delivery", () => {
+  const memory = mountedKernel(2), first = new HostProcess(memory, 0), term = 1n << 14n;
+  assert.equal(thistleHartInit(memory, 1, 0x10000000n, 0n), 0);
+  assert.equal(thistleProcessAttach(memory, 1, 1), 0);
+  const second = new HostProcess(memory, 1);
+  assert.deepEqual(first.changeSignalMask(2, term), { previous: 0n, signal: null });
+  assert.equal(second.signalMask, term);
+  assert.equal(second.queueSignal(15), false);
+  assert.equal(first.lastSignal, null);
+  assert.deepEqual(second.changeSignalMask(1, term), { previous: term, signal: 15 });
+  assert.equal(first.signalMask, 0n);
+  assert.equal(first.lastSignal, 15);
+  assert.equal(first.changeSignalMask(2, 1n << 63n).previous, 0n);
+  assert.equal(second.changeSignalMask(2, 0n).previous, 1n << 63n);
+});

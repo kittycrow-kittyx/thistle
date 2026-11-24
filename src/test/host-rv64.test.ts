@@ -4,11 +4,11 @@ import { Kern } from "../core/kernel.js";
 import { emptyStart } from "../core/kernel.js";
 import { Sys } from "../core/sys.js";
 import { defaultKernelOptions } from "../core/host-options.js";
-import { MemIn, MemOut } from "../io/stream.js";
+import { MemIn, MemOut, FnOut } from "../io/stream.js";
 import { Exe, codec } from "../../thistle-asm/fmt.js";
-import { thistleProcessCount, thistleProcessIdentity } from "../native/kernel.js";
+import { thistleProcessCount, thistleProcessIdentity, thistleHartStatus } from "../native/kernel.js";
 import { loadU32 } from "../native/memory.js";
-import { C_PHYSICAL_NEXT } from "../native/abi.js";
+import { C_PHYSICAL_NEXT, THISTLE_HART_WAITING } from "../native/abi.js";
 
 const executable = (words: number[], data = new Uint8Array()): Uint8Array => {
   const code = new Uint8Array(words.length * 4), view = new DataView(code.buffer);
@@ -121,4 +121,41 @@ test("exec replaces an image in the existing canonical process", async () => {
   assert.equal(thistleProcessCount(memory), 3);
   assert.equal(await sys.wait(pid), 7);
   assert.equal(loadU32(memory, C_PHYSICAL_NEXT), initial);
+});
+
+test("delayed I/O from a killed guest cannot resume a reused hart", async () => {
+  const kernel = new Kern(), errors = new MemOut();
+  const parent = kernel.session({ sin: new MemIn(), sout: errors, serr: errors });
+  const sys = new Sys(kernel, parent), memory = kernel.canonical.memory;
+  const latch = {
+    firstEntered: (): void => { throw new Error("first entry not initialised"); },
+    secondEntered: (): void => { throw new Error("second entry not initialised"); },
+    releaseFirst: (): void => { throw new Error("first release not initialised"); },
+    releaseSecond: (): void => { throw new Error("second release not initialised"); },
+  };
+  const firstEntered = new Promise<void>(resolve => { latch.firstEntered = resolve; });
+  const secondEntered = new Promise<void>(resolve => { latch.secondEntered = resolve; });
+  const firstGate = new Promise<void>(resolve => { latch.releaseFirst = resolve; });
+  const secondGate = new Promise<void>(resolve => { latch.releaseSecond = resolve; });
+  const firstOut = new FnOut(async () => { latch.firstEntered(); await firstGate; });
+  const secondOut = new FnOut(async () => { latch.secondEntered(); await secondGate; });
+  sys.mkfile("/blocked.thx", executable([
+    0x00100513, 0x000205b7, 0x00100613, 0x04000893, 0x73,
+    0x00700513, 0x05d00893, 0x73,
+  ], Uint8Array.of(65)), 0o755);
+  const first = sys.start("/blocked.thx", [], { ...emptyStart(), io: { sin: null, sout: firstOut, serr: errors } });
+  await firstEntered;
+  assert.equal(sys.kill(first.pid, 9), 1);
+  assert.equal(await sys.wait(first.pid), 137);
+  const second = sys.start("/blocked.thx", [], { ...emptyStart(), io: { sin: null, sout: secondOut, serr: errors } });
+  await secondEntered;
+  assert.equal(second.native.hart, first.native.hart);
+  latch.releaseFirst();
+  // Drain settled I/O continuations before checking the reused hart.
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(thistleHartStatus(memory, second.native.hart), THISTLE_HART_WAITING);
+  latch.releaseSecond();
+  assert.equal(await second.done, 7, errors.text());
+  assert.equal(await sys.wait(second.pid), 7);
+  assert.equal(thistleProcessCount(memory), 2);
 });

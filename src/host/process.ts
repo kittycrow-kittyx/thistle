@@ -1,13 +1,13 @@
-import { thistleProcessFinish, thistleProcessSetHostState } from "../native/process-host.js";
+import { thistleProcessFinish, thistleProcessSetHostState, thistleProcessQueueSignal, thistleProcessSignalMask } from "../native/process-host.js";
 import { bad } from "../core/err.js";
 import type { ProcCred } from "../fs/vfs.js";
 import {
   C_PROCESS_LOCK, C_PROCESS_CAPACITY, C_CREDENTIAL_LOCK, P_PID, P_RUID, P_EUID, P_SUID,
   P_RGID, P_EGID, P_SGID, P_FSUID, P_FSGID, P_GROUP_COUNT, P_UMASK, P_PPID, P_PGID, P_STATE, P_EXIT_CODE,
   THISTLE_PROCESS_RUNNABLE, THISTLE_PROCESS_WAITING, THISTLE_PROCESS_ZOMBIE,
-  THISTLE_PROCESS_RUNNING, THISTLE_PROCESS_STOPPED,
+  THISTLE_PROCESS_RUNNING, THISTLE_PROCESS_STOPPED, P_SIGNAL_LAST, P_SIGNAL_MASK,
 } from "../native/abi.js";
-import { atomicStoreI32, loadI32, loadU32, storeU32 } from "../native/memory.js";
+import { atomicLoadU64, atomicStoreI32, loadI32, loadU32, loadU64, storeU32, storeU64 } from "../native/memory.js";
 import type { ThistleMemory } from "../native/memory.js";
 import { readGroup } from "../native/credentials.js";
 import { processAt } from "../native/state.js";
@@ -18,6 +18,13 @@ const identityRequest = (id: number | null): number =>
   id === null ? 0xffffffff : id === 0xffffffff ? Number.NaN : id;
 
 export type HostProcessState = "ready" | "run" | "sleep" | "stop" | "zombie";
+export type HostSignal = 0 | 1 | 2 | 9 | 13 | 15;
+export interface HostSignalChange { readonly previous: bigint; readonly signal: HostSignal | null }
+const decodeSignal = (signal: number): HostSignal | null => {
+  if (signal === 0) return null;
+  if (signal === 1 || signal === 2 || signal === 9 || signal === 13 || signal === 15) return signal;
+  return bad("EPROTO", "unsupported canonical signal");
+};
 export interface HostProcessPhase { readonly state: HostProcessState; readonly code: number | null }
 const phaseCodes: Readonly<Record<HostProcessState, number>> = {
   ready: THISTLE_PROCESS_RUNNABLE, run: THISTLE_PROCESS_RUNNING, sleep: THISTLE_PROCESS_WAITING,
@@ -94,6 +101,28 @@ export class HostProcess {
 
   setState(state: HostProcessState): void {
     checkNative(thistleProcessSetHostState(this.memory, this.hart, this.pid, phaseCodes[state]));
+  }
+
+  get lastSignal(): HostSignal | null {
+    return this.withRecord(record => decodeSignal(loadU32(this.memory, record + P_SIGNAL_LAST)));
+  }
+
+  get signalMask(): bigint {
+    return this.withRecord(record => atomicLoadU64(this.memory, record + P_SIGNAL_MASK));
+  }
+
+  queueSignal(signal: HostSignal): boolean {
+    const result = thistleProcessQueueSignal(this.memory, this.hart, this.pid, signal);
+    checkNative(result);
+    return result === 1;
+  }
+
+  changeSignalMask(how: 0 | 1 | 2, mask: bigint): HostSignalChange {
+    return withImage(this.memory, 16, input => {
+      storeU64(this.memory, input, mask);
+      checkNative(thistleProcessSignalMask(this.memory, this.hart, this.pid, how, input));
+      return { previous: loadU64(this.memory, input), signal: decodeSignal(loadU32(this.memory, input + 8)) };
+    });
   }
 
   id(field: HostIdentityField): number {
