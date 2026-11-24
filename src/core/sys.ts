@@ -1,3 +1,6 @@
+import { changeDirectoryInode, currentDirectory, directoryPath } from "../host/cwd.js";
+import { inodeKind } from "../host/inode.js";
+import type { Kind } from "../fs/vfs.js";
 import { bad, KErr } from "./err.js";
 import { emptyStart } from "./kernel.js";
 import type { Kern, PInfo, Start } from "./kernel.js";
@@ -7,6 +10,9 @@ import { Chr, Dir, Reg, credGid, credUid } from "../fs/vfs.js";
 import type { Cred, St, VNode } from "../fs/vfs.js";
 import { dec, enc, Pipe } from "../io/stream.js";
 import type { NReq, NRes } from "../net/net.js";
+
+const kinds: Readonly<Record<"d" | "f" | "l" | "c", Kind>> = { d: "dir", f: "file", l: "link", c: "char" };
+const fileKind = (kind: number): Kind => kinds[inodeKind(kind)];
 
 export class Sys {
   constructor(readonly k: Kern, readonly p: Proc) {}
@@ -232,6 +238,60 @@ export class Sys {
     if (n < 0) bad("EINVAL", "negative seek");
     f.pos = n;
     return n;
+  }
+
+  /** Use the native inode for descriptor metadata; legacy paths remain until root cutover. */
+  fdStat(fd: number): St {
+    const descriptor = this.p.fds.get(fd) ?? bad("EBADF", String(fd));
+    const inode = descriptor.inodeView();
+    if (inode === null) return this.stat(descriptor.path ?? bad("EBADF", String(fd)));
+    const meta = inode.metadata();
+    return { ...meta, kind: fileKind(meta.kind), size: Number(meta.size), at: Number(meta.at), mt: Number(meta.mt), ct: Number(meta.ct) };
+  }
+
+  fdList(fd: number): Array<[string, { ino: number; kind: Kind }]> {
+    const descriptor = this.p.fds.get(fd) ?? bad("EBADF", String(fd));
+    if (descriptor.inode === 0) return this.list(descriptor.path ?? bad("EBADF", String(fd)));
+    return descriptor.directoryEntries().map(item => [item.name, { ino: item.inode, kind: fileKind(item.kind) }]);
+  }
+
+  fdPath(fd: number): string {
+    const descriptor = this.p.fds.get(fd) ?? bad("EBADF", String(fd));
+    const inode = descriptor.inodeView();
+    if (inode === null) return descriptor.path ?? bad("EBADF", String(fd));
+    return directoryPath(this.p.native, inode);
+  }
+
+  fdChdir(fd: number): void {
+    const descriptor = this.p.fds.get(fd) ?? bad("EBADF", String(fd));
+    const inode = descriptor.inodeView();
+    if (inode === null) { this.cd(descriptor.path ?? bad("EBADF", String(fd))); return; }
+    const previous = this.cwd;
+    changeDirectoryInode(this.p.native, inode);
+    this.p.cwd = currentDirectory(this.p.native);
+    this.setenv("OLDPWD", previous);
+    this.setenv("PWD", this.p.cwd);
+  }
+
+  fdChmod(fd: number, mode: number): void {
+    const descriptor = this.p.fds.get(fd) ?? bad("EBADF", String(fd));
+    const inode = descriptor.inodeView();
+    if (inode === null) { this.chmod(descriptor.path ?? bad("EBADF", String(fd)), mode); return; }
+    inode.chmod(this.p.native, mode);
+  }
+
+  fdChown(fd: number, uid: number, gid: number): void {
+    const descriptor = this.p.fds.get(fd) ?? bad("EBADF", String(fd));
+    const inode = descriptor.inodeView();
+    if (inode === null) { this.chown(descriptor.path ?? bad("EBADF", String(fd)), uid, gid); return; }
+    inode.chown(this.p.native, uid, gid);
+  }
+
+  fdUtime(fd: number, at: number, mt: number): void {
+    const descriptor = this.p.fds.get(fd) ?? bad("EBADF", String(fd));
+    const inode = descriptor.inodeView();
+    if (inode === null) { this.utime(descriptor.path ?? bad("EBADF", String(fd)), at, mt); return; }
+    inode.utime(this.p.native, BigInt(at), BigInt(mt));
   }
 
   start(name: string, a: string[], opt: Start = emptyStart()): Proc { return this.k.start(name, a, this.p, opt); }

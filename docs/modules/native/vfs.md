@@ -57,3 +57,5 @@ with `-EXDEV`; native arena reads and writes share this check.
 Character-device opens with the explicit host-transport flag bind a canonical inode in a host descriptor. Access is checked by the native open operation. The device is nonseekable, and native-only callers without a host transport receive EXDEV. Closing an unlinked device follows the ordinary inode lifetime rule.
 
 `copyDescriptor` copies kind, open rights, inode, offset and directory cursor into a destination slot under both descriptor locks and the VFS lock. It does not repeat path permission checks. The destination receives a new slot incarnation, and close-on-exec is explicitly selected by the caller. Offsets retain the existing independent-copy semantics, not POSIX shared open-file-description semantics.
+
+`thistleVfsChdirInode` changes cwd with the same search-rights check as path-based chdir. `thistleVfsDirectoryPath` reconstructs the unique directory path. `thistleVfsReadDescriptorEntry` reads directory entries using the open descriptor's retained rights; pathname and descriptor enumeration share the dentry cursor and record format.

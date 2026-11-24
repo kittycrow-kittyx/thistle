@@ -847,16 +847,16 @@ export class Rv64 {
         return 0n;
       }
       case 43: this.s.stat(this.str(requireValue(a[10] ?? null, "src/vm/rv64.ts:1393"))); return this.statfs(ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1393")));
-      case 44: { const fd = this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1394")), f = this.s.p.fds.get(fd) ?? bad("EBADF", String((a[10] ?? null))); if (fd >= 3) this.s.stat(f.path ?? bad("EBADF", String(fd))); return this.statfs(ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1394"))); }
+      case 44: { const fd = this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1394")); if (fd >= 3) this.s.fdStat(fd); return this.statfs(ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1394"))); }
       case 45: this.trunc(this.str(requireValue(a[10] ?? null, "src/vm/rv64.ts:1395")), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1395"), "file length", this.s.k.fs.cap)); return 0n;
       case 46: { const f = this.s.p.fds.get(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1396"))) ?? bad("EBADF", String((a[10] ?? null))); this.trunc(f.path ?? bad("EBADF", String((a[10] ?? null))), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1396"), "file length", this.s.k.fs.cap)); return 0n; }
       case 48: this.s.stat(this.path(requireValue(a[10] ?? null, "src/vm/rv64.ts:1397"), this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1397")))); return 0n;
       case 49: this.s.cd(this.str(requireValue(a[10] ?? null, "src/vm/rv64.ts:1398"))); return 0n;
-      case 50: { const f = this.s.p.fds.get(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1399"))) ?? bad("EBADF", String((a[10] ?? null))); this.s.cd(f.path ?? bad("EBADF", String((a[10] ?? null)))); return 0n; }
-      case 52: { const f = this.s.p.fds.get(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1400"))) ?? bad("EBADF", String((a[10] ?? null))); this.s.chmod(f.path ?? bad("EBADF", String((a[10] ?? null))), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1400"), "mode", 0xffff)); return 0n; }
+      case 50: { this.s.fdChdir(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1399")); return 0n; }
+      case 52: { this.s.fdChmod(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1400"), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1400"), "mode", 0xffff)); return 0n; }
       case 53: this.s.chmod(this.path(requireValue(a[10] ?? null, "src/vm/rv64.ts:1401"), this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1401"))), this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1401"), "mode", 0xffff)); return 0n;
       case 54: this.s.chown(this.path(requireValue(a[10] ?? null, "src/vm/rv64.ts:1402"), this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1402"))), this.owner(requireValue(a[12] ?? null, "src/vm/rv64.ts:1402"), "uid"), this.owner(requireValue(a[13] ?? null, "src/vm/rv64.ts:1402"), "gid")); return 0n;
-      case 55: { const f = this.s.p.fds.get(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1403"))) ?? bad("EBADF", String((a[10] ?? null))); this.s.chown(f.path ?? bad("EBADF", String((a[10] ?? null))), this.owner(requireValue(a[11] ?? null, "src/vm/rv64.ts:1403"), "uid"), this.owner(requireValue(a[12] ?? null, "src/vm/rv64.ts:1403"), "gid")); return 0n; }
+      case 55: { this.s.fdChown(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1403"), this.owner(requireValue(a[11] ?? null, "src/vm/rv64.ts:1403"), "uid"), this.owner(requireValue(a[12] ?? null, "src/vm/rv64.ts:1403"), "gid")); return 0n; }
       case 56: return BigInt(await this.openat(requireValue(a[10] ?? null, "src/vm/rv64.ts:1404"), this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1404")), this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1404"), "open flags", 0xffffffff), this.nat(requireValue(a[13] ?? null, "src/vm/rv64.ts:1404"), "open mode", 0xffff)));
       case 57: {
         const fd = this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1406"));
@@ -1210,9 +1210,9 @@ export class Rv64 {
     if (p.startsWith("/")) return norm(p);
     const fd = hostNumber(fd0, "directory descriptor");
     if (fd === AT_FDCWD) return norm(p, this.s.cwd);
-    const f = this.s.p.fds.get(fd) ?? bad("EBADF", String(fd)), base = f.path ?? bad("EBADF", String(fd));
-    if (this.s.stat(base).kind !== "dir") bad("ENOTDIR", base);
-    return norm(p, base);
+    const base = this.s.fdPath(fd);
+    if (this.s.fdStat(fd).kind !== "dir") bad("ENOTDIR", base);
+    return base === "/" ? "/" + p : base + "/" + p;
   }
 
   private fcntl(fd: number, cmd: number, arg: bigint): number {
@@ -1349,8 +1349,8 @@ export class Rv64 {
   }
 
   private getdents(fd: number, at: bigint, n: number): number {
-    const f = this.s.p.fds.get(fd) ?? bad("EBADF", String(fd)), p = f.path ?? bad("EBADF", String(fd));
-    const a = this.s.list(p), out = new Uint8Array(n), v = new DataView(out.buffer); let pos = 0;
+    const f = this.s.p.fds.get(fd) ?? bad("EBADF", String(fd));
+    const a = this.s.fdList(fd), out = new Uint8Array(n), v = new DataView(out.buffer); let pos = 0;
     while (f.pos < a.length) {
       const [name, q] = requireValue(a[f.pos] ?? null, "src/vm/rv64.ts:1900"), b = enc(name + "\0"), z = (19 + b.length + 7) & -8;
       if (pos + z > n) { ensure(pos, () => bad("EINVAL", "directory buffer is too small")); break; }
@@ -1408,8 +1408,9 @@ break; }
       }, at);
       return 0n;
     }
+    if (f.inode !== 0) { this.putStat(this.s.fdStat(fd), at); return 0n; }
     if (fd < 3) this.putStat({ ino: fd + 1, kind: "char", mode: 0o620, uid: this.s.uid, gid: this.s.gid, nlink: 1, size: 0, at: Date.now(), mt: Date.now(), ct: Date.now() }, at);
-    else this.putStat(this.s.stat(f.path ?? bad("EBADF", String(fd))), at);
+    else this.putStat(this.s.fdStat(fd), at);
     return 0n;
   }
 

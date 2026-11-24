@@ -6,7 +6,7 @@ import { loadU32, loadU64, storeU32, storeU64 } from "../native/memory.js";
 import { descriptorAt, freeDescriptor, installDescriptor, copyDescriptor, releaseDescriptor, thistleVfsIdentity, thistleVfsOpenInode, thistleVfsReadDescriptor, thistleVfsSeekDescriptor, thistleVfsWriteDescriptor, thistleVfsOpenPath } from "../native/vfs-api.js";
 import { checkNative, withVfsLock, withNativeLock, withImage } from "./native-access.js";
 import type { HostProcess } from "./process.js";
-import type { HostInode } from "./inode.js";
+import { HostInode } from "./inode.js";
 
 const slot = (process: HostProcess, record: number, number: number): number => {
   if (!Number.isInteger(number) || number < 0 || number >= loadU32(process.memory, record + P_DESCRIPTOR_CAPACITY)) bad("EBADF", "descriptor outside canonical table");
@@ -125,6 +125,16 @@ export class HostDescriptor {
   withStorage<T>(operation: (state: number) => T): T {
     const memory = this.process.memory;
     return this.access(state => withVfsLock(memory, () => operation(state)));
+  }
+
+  /** Capture the live inode incarnation without resolving the original pathname. */
+  inodeView(): HostInode | null {
+    const memory = this.process.memory;
+    const found = this.withStorage(state => {
+      const ino = loadU32(memory, state + FD_INODE);
+      return ino === 0 ? null : { ino, identity: thistleVfsIdentity(memory, ino) };
+    });
+    return found === null ? null : new HostInode(memory, found.ino, found.identity);
   }
 
   get kind(): number { return this.access(state => loadU32(this.process.memory, state + FD_KIND)); }

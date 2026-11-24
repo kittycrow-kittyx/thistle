@@ -452,7 +452,11 @@ export const allocateInodeDescriptor = (memory: ThistleMemory, proc: Ptr, inode:
 export const thistleVfsChdir = (memory: ThistleMemory, proc: Ptr, path: Ptr, length: U32): I32 => {
   const result = thistleVfsResolve(memory, proc, loadU32(memory, proc + P_CWD_INODE), path, length, true);
   if (result < 0) return result;
-  const inode = wordToU32(word(result));
+  return thistleVfsChdirInode(memory, proc, wordToU32(word(result)));
+};
+
+/** Select an existing directory inode with the live process search permission. */
+export const thistleVfsChdirInode = (memory: ThistleMemory, proc: Ptr, inode: U32): I32 => {
   if (thistleVfsKind(memory, inode) !== THISTLE_VFS_KIND_DIRECTORY) return -20;
   if (!allowed(memory, proc, inode, 1)) return -13;
   storeU32(memory, proc + P_CWD_INODE, inode);
@@ -472,10 +476,14 @@ export const thistleVfsCwdHeld = (memory: ThistleMemory, inode: U32): boolean =>
 };
 
 /** Write the current canonical directory path, including NUL, into a reserved image. */
-export const thistleVfsCwdPath = (memory: ThistleMemory, proc: Ptr, output: Ptr, capacity: U32): I32 => {
+export const thistleVfsCwdPath = (memory: ThistleMemory, proc: Ptr, output: Ptr, capacity: U32): I32 =>
+  thistleVfsDirectoryPath(memory, loadU32(memory, proc + P_CWD_INODE), output, capacity);
+
+/** Reconstruct the unique live directory path from canonical dentries. */
+export const thistleVfsDirectoryPath = (memory: ThistleMemory, directory: U32, output: Ptr, capacity: U32): I32 => {
   if (capacity < 2 || !inputContains(memory, output, capacity)) return -34;
   const root = thistleVfsRoot(memory);
-  let inode = loadU32(memory, proc + P_CWD_INODE);
+  let inode = directory;
   if (root === 0 || thistleVfsKind(memory, inode) !== THISTLE_VFS_KIND_DIRECTORY) return -2;
   let cursor = capacity - 1;
   storeU8(memory, output + cursor, 0);
@@ -826,6 +834,17 @@ export const thistleVfsReadEntry = (
 ): I32 => {
   if (thistleVfsKind(memory, parent) !== THISTLE_VFS_KIND_DIRECTORY) return -20;
   if (!allowed(memory, proc, parent, 4)) return -13;
+  return readEntryAt(memory, parent, cursor, output, capacity);
+};
+
+/** Enumerate a directory using the rights granted when its descriptor was opened. */
+export const thistleVfsReadDescriptorEntry = (memory: ThistleMemory, state: Ptr, cursor: U32, output: Ptr, capacity: U32): I32 => {
+  if (loadU32(memory, state + FD_KIND) !== THISTLE_FD_DIRECTORY) return -20;
+  if ((loadU32(memory, state + FD_FLAGS) & THISTLE_FD_READ) === 0) return -9;
+  return readEntryAt(memory, loadU32(memory, state + FD_INODE), cursor, output, capacity);
+};
+
+const readEntryAt = (memory: ThistleMemory, parent: U32, cursor: U32, output: Ptr, capacity: U32): I32 => {
   if (!inputContains(memory, output, capacity)) return -14;
   const count = loadU32(memory, C_VFS_DENTRY_COUNT);
   let index = cursor;

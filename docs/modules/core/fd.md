@@ -9,3 +9,5 @@ Inode-bound `Fd` views expose native `readFile`, `writeFile` and `seekFile` oper
 `materialiseFile` prepares deferred bytes through the descriptor's registered host transport. RV64 read/write callbacks await this method before using the synchronous descriptor operations.
 
 `Fd.copyTo` and `FdTable.inherit` retain the canonical slot's inode when duplicating or inheriting a live descriptor. Detached stream requests still bind as host capabilities. The destination owns its stream holds.
+
+`inodeView` and `directoryEntries` expose the native inode and directory data of a live descriptor without resolving its original path.

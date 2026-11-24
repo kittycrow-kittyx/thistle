@@ -5,3 +5,5 @@
 Input reads pass the calling process abort signal to the host transport.
 
 `fdr`, `fdw` and `seek` dispatch inode-bound descriptors to canonical descriptor operations. The legacy path-bound case remains during the root filesystem migration.
+
+`fdStat`, `fdList`, `fdPath`, `fdChdir`, `fdChmod`, `fdChown` and `fdUtime` operate on a descriptor's canonical inode. Existing unmounted legacy descriptors retain their original path behaviour until the root cutover.

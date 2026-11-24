@@ -6,3 +6,5 @@
 Subsequent calls read current native entries, including unlink and inode reuse.
 
 `readDirectory` takes a `HostInode` directory view and a `HostProcess` caller. It checks their bindings while holding the process, credential and VFS locks, then returns `DirectoryItem` snapshots from native cursor records.
+
+`readOpenDirectory` enumerates the same native records through a live directory descriptor. It uses the open rights instead of rechecking pathname permissions.

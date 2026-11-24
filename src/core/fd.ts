@@ -1,6 +1,8 @@
 import type { In, Out } from "../io/stream.js";
 import { bad } from "./err.js";
 import { HostDescriptor } from "../host/descriptor.js";
+import type { HostInode } from "../host/inode.js";
+import { readOpenDirectory, type DirectoryItem } from "../host/directory.js";
 import type { HostProcess } from "../host/process.js";
 import { THISTLE_FD_READ, THISTLE_FD_WRITE, THISTLE_FD_APPEND, THISTLE_FD_CLOEXEC } from "../native/abi.js";
 
@@ -55,6 +57,9 @@ export class Fd {
     return current !== null && current.process === native.process &&
       current.number === native.number && current.identity === native.identity;
   }
+
+  inodeView(): HostInode | null { return this.native === null ? null : this.native.inodeView(); }
+  directoryEntries(): DirectoryItem[] { return readOpenDirectory(this.native ?? bad("EBADF")); }
 
   get inode(): number { return this.native === null ? 0 : this.native.inode; }
 

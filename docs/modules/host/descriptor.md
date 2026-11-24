@@ -17,3 +17,5 @@
 Character descriptor reads and writes delegate only byte transport to the registered host device. The canonical descriptor provides access rights, inode identity and offset. Callbacks run outside kernel locks and completion revalidates the descriptor before advancing its offset.
 
 `copyTo` copies a live native slot to a target process and descriptor number, checking both lifetimes and preserving the inode reference even after unlink.
+
+`inodeView` captures a live inode and incarnation from a descriptor under its native lock. Stream-only descriptors return null.

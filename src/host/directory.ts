@@ -1,8 +1,10 @@
 import { bad } from "../core/err.js";
+import type { ThistleMemory } from "../native/memory.js";
 import { loadU32 } from "../native/memory.js";
 import type { HostInode } from "./inode.js";
 import type { HostProcess } from "./process.js";
-import { thistleVfsReadEntry } from "../native/vfs.js";
+import type { CarrierDescriptor } from "./backing.js";
+import { thistleVfsReadEntry, thistleVfsReadDescriptorEntry } from "../native/vfs.js";
 import { withImage, checkNative } from "./native-access.js";
 
 export interface DirectoryItem {
@@ -11,21 +13,32 @@ export interface DirectoryItem {
   readonly kind: number;
 }
 
+/** Decode the shared native entry format within the caller's existing lease. */
+const entries = (memory: ThistleMemory, input: number, nextEntry: (cursor: number) => number): DirectoryItem[] => {
+  const result: DirectoryItem[] = [], decoder = new TextDecoder();
+  let cursor = 0;
+  for (;;) {
+    const status = nextEntry(cursor);
+    if (status === 0) return result;
+    checkNative(status);
+    const next = loadU32(memory, input + 8);
+    if (next <= cursor) bad("EIO", "directory cursor did not advance");
+    result.push({ inode: loadU32(memory, input), kind: loadU32(memory, input + 4),
+      name: decoder.decode(memory.bytes.subarray(input + 16, input + status)) });
+    cursor = next;
+  }
+};
+
 /** Materialise a directory snapshot from canonical entries without a second tree. */
 export const readDirectory = (directory: HostInode, process: HostProcess): DirectoryItem[] => {
   const memory = directory.memory;
-  return withImage(memory, 272, input => directory.access(process, proc => {
-    const result: DirectoryItem[] = [], decoder = new TextDecoder();
-    let cursor = 0;
-    for (;;) {
-      const status = thistleVfsReadEntry(memory, proc, directory.ino, cursor, input, 272);
-      if (status === 0) return result;
-      checkNative(status);
-      const next = loadU32(memory, input + 8);
-      if (next <= cursor) bad("EIO", "directory cursor did not advance");
-      result.push({ inode: loadU32(memory, input), kind: loadU32(memory, input + 4),
-        name: decoder.decode(memory.bytes.subarray(input + 16, input + status)) });
-      cursor = next;
-    }
-  }));
+  return withImage(memory, 272, input => directory.access(process, proc =>
+    entries(memory, input, cursor => thistleVfsReadEntry(memory, proc, directory.ino, cursor, input, 272))));
+};
+
+/** Enumerate an opened directory even after its pathname or permissions change. */
+export const readOpenDirectory = (descriptor: CarrierDescriptor): DirectoryItem[] => {
+  const memory = descriptor.process.memory;
+  return withImage(memory, 272, input => descriptor.withStorage(state =>
+    entries(memory, input, cursor => thistleVfsReadDescriptorEntry(memory, state, cursor, input, 272))));
 };
