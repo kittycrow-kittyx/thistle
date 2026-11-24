@@ -4,11 +4,11 @@ import { SourceLoad } from "./bytes.js";
 import { HostInode } from "./inode.js";
 import type { HostProcess } from "./process.js";
 import type { RegSource } from "./bytes.js";
-import { C_VFS_INODE_CAPACITY, FD_INODE, FD_KIND, FD_OFFSET, THISTLE_FD_READ, THISTLE_FD_WRITE, THISTLE_FD_FILE, V_DATA, V_RESIDENT } from "../native/abi.js";
+import { C_VFS_INODE_CAPACITY, FD_INODE, FD_KIND, FD_OFFSET, THISTLE_FD_READ, THISTLE_FD_WRITE, THISTLE_FD_FILE, V_DATA, V_RESIDENT, P_MAP_TABLE, P_MAP_COUNT, THISTLE_MAP_STRIDE, M_INODE, M_ADDRESS, M_END, M_FLAGS, M_FILE_RIGHTS, M_FILE_OFFSET, M_PROTECTION } from "../native/abi.js";
 import { loadU32, loadU64, storeU32, storeU64 } from "../native/memory.js";
 import type { ThistleMemory } from "../native/memory.js";
 import { thistleVfsAccess, thistleVfsFileSize, thistleVfsRoot, thistleVfsIdentity, descriptorAccessStatus, descriptorReadCount, descriptorWriteOffset, residentFits, inodeAt, arenaInodeStatus } from "../native/vfs.js";
-import { thistleVfsBacking, thistleVfsBackingVersion, thistleVfsCommitBacking, thistleVfsCommitDescriptorBacking } from "../native/vfs-backing.js";
+import { thistleVfsBacking, thistleVfsBackingVersion, thistleVfsCommitBacking, thistleVfsCommitDescriptorBacking, thistleVfsMappingInode, thistleVfsCommitMappingBacking } from "../native/vfs-backing.js";
 
 /** Live descriptor capability; the callback holds its lifetime and VFS locks. */
 export interface CarrierDescriptor {
@@ -16,9 +16,16 @@ export interface CarrierDescriptor {
   withStorage<T>(operation: (state: number) => T): T;
 }
 
-interface BackingAuthority {
-  readonly record: number;
-  readonly length: number | null;
+type BackingAuthority = { readonly record: number; readonly length: number | null } |
+  { readonly process: number; readonly mapping: number };
+
+export interface MappedRange {
+  readonly index: number;
+  readonly at: bigint;
+  readonly end: bigint;
+  readonly inode: number;
+  readonly prot: number;
+  readonly writable: boolean;
 }
 
 interface BackingUpdate {
@@ -99,9 +106,11 @@ export class HostBacking {
     storeU64(this.memory, input + 8, BigInt(size));
     storeU64(this.memory, input + 16, BigInt(payload.bytes === null ? 0 : payload.bytes.byteLength));
     const now = BigInt(Date.now());
-    const status = authority.length === null
-      ? thistleVfsCommitBacking(this.memory, authority.record, inode, expected, input, now)
-      : thistleVfsCommitDescriptorBacking(this.memory, authority.record, expected, input, authority.length, now);
+    const status = "mapping" in authority
+      ? thistleVfsCommitMappingBacking(this.memory, authority.process, authority.mapping, expected, input, now)
+      : authority.length === null
+        ? thistleVfsCommitBacking(this.memory, authority.record, inode, expected, input, now)
+        : thistleVfsCommitDescriptorBacking(this.memory, authority.record, expected, input, authority.length, now);
     checkNative(status);
     this.payloads.set(handle, payload);
   }
@@ -290,6 +299,68 @@ export class HostBacking {
         expected: thistleVfsBackingVersion(this.memory, inode), operation: 1 }, { record: state, length: amount }, input);
       this.collectLocked();
       return amount;
+    }));
+  }
+
+  /** A transient view of the native map table; no host mapping registry is retained. */
+  static mappedRanges(process: HostProcess): MappedRange[] {
+    const memory = process.memory;
+    return process.withDescriptors(record => {
+      const ranges: MappedRange[] = [], table = loadU32(memory, record + P_MAP_TABLE);
+      const count = loadU32(memory, record + P_MAP_COUNT);
+      for (let index = 0; index < count; index++) {
+        const state = table + index * THISTLE_MAP_STRIDE, inode = loadU32(memory, state + M_INODE);
+        if (inode === 0) continue;
+        ranges.push({ index, inode, at: loadU64(memory, state + M_ADDRESS), end: loadU64(memory, state + M_END),
+          prot: loadU32(memory, state + M_PROTECTION), writable: (loadU32(memory, state + M_FLAGS) & 3) === 1 &&
+            (loadU32(memory, state + M_FILE_RIGHTS) & THISTLE_FD_WRITE) !== 0 });
+      }
+      return ranges;
+    });
+  }
+
+  private static mappingStorage<T>(process: HostProcess, index: number, write: boolean,
+    operation: (backing: HostBacking, record: number, state: number, inode: number) => T): T {
+    if (!Number.isInteger(index) || index < 0 || index > 0xffffffff) bad("EINVAL", "invalid mapping index");
+    const memory = process.memory;
+    return process.withDescriptors(record => withVfsLock(memory, () => {
+      const inode = thistleVfsMappingInode(memory, record, index, write);
+      checkNative(inode);
+      const backing = HostBacking.mounts.get(memory) ?? bad("EIO", "mount has no byte carrier registry");
+      backing.checkMountLocked();
+      return operation(backing, record, loadU32(memory, record + P_MAP_TABLE) + index * THISTLE_MAP_STRIDE, inode);
+    }));
+  }
+
+  private mappingOffset(state: number, address: bigint, length: number): bigint {
+    const start = loadU64(this.memory, state + M_ADDRESS), end = loadU64(this.memory, state + M_END);
+    if (!Number.isSafeInteger(length) || length < 0 || address < start || address > end ||
+        BigInt(length) > end - address) bad("EINVAL", "transfer outside retained mapping");
+    return loadU64(this.memory, state + M_FILE_OFFSET) + address - start;
+  }
+
+  /** Copy resident bytes through a canonical mapping without moving any descriptor cursor. */
+  static readMapping(process: HostProcess, index: number, address: bigint, length: number): Uint8Array {
+    return HostBacking.mappingStorage(process, index, false, (backing, _record, state, inode) => {
+      const offset = backing.mappingOffset(state, address, length), bytes = backing.residentBytes(inode);
+      if (offset >= BigInt(bytes.length)) return new Uint8Array();
+      return bytes.slice(Number(offset), Number(offset) + length);
+    });
+  }
+
+  /** Flush a shared range through retained open authority, bounded by the current EOF. */
+  static writeMapping(process: HostProcess, index: number, address: bigint, bytes: Uint8Array): void {
+    withImage(process.memory, 24, input => HostBacking.mappingStorage(process, index, true, (backing, record, state, inode) => {
+      const offset = backing.mappingOffset(state, address, bytes.length), previous = backing.residentBytes(inode);
+      if (offset >= BigInt(previous.length) || bytes.length === 0) return;
+      const start = Number(offset), amount = Math.min(bytes.length, previous.length - start);
+      const part = bytes.subarray(0, amount);
+      if (part.every((byte, i) => byte === previous[start + i])) return;
+      const replacement = previous.slice();
+      replacement.set(part, start);
+      backing.commit({ inode, payload: { bytes: replacement, source: null }, size: replacement.length,
+        expected: thistleVfsBackingVersion(process.memory, inode), operation: 3 }, { process: record, mapping: index }, input);
+      backing.collectLocked();
     }));
   }
 

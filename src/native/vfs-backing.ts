@@ -2,12 +2,13 @@ import {
   C_VFS_DIRTY, C_VFS_GENERATION, C_VFS_QUOTA, THISTLE_VFS_HOST_BACKING,
   THISTLE_VFS_KIND_FILE, THISTLE_FD_READ, THISTLE_FD_WRITE, FD_INODE, FD_OFFSET, V_CAPACITY, V_CTIME, V_DATA, V_FLAGS,
   V_MODE, V_MTIME, V_RESIDENT, V_SIZE, V_VERSION, P_FSUID,
+  P_MAP_COUNT, P_MAP_TABLE, THISTLE_MAP_STRIDE, M_INODE, M_FILE_RIGHTS, M_FLAGS, M_BACKING, THISTLE_MAP_BACKING_HOST_FILE,
 } from "./abi.js";
 import { inputContains } from "./arena.js";
 import { atomicLoadU64, atomicStoreU64, loadU32, loadU64, storeU32, storeU64 } from "./memory.js";
 import type { ThistleMemory } from "./memory.js";
 import type { I32, Ptr, U32, U64 } from "./types.js";
-import { u32word } from "./word.js";
+import { u32word, word, wordToI32 } from "./word.js";
 import { allowed, descriptorAccessStatus, descriptorWriteOffset, inodeAt, residentFits, thistleVfsKind, thistleVfsResidentUsage } from "./vfs.js";
 
 /** Configure an explicit resident quota before attaching host storage. Caller holds VFS lock. */
@@ -90,4 +91,30 @@ export const thistleVfsCommitDescriptorBacking = (
   const result = publishBacking(memory, inode, expected, descriptor, now);
   if (result === 0 && operation === 1) storeU64(memory, state + FD_OFFSET, next);
   return result;
+};
+
+/** Resolve retained mapping authority while the process and VFS locks are held. */
+export const thistleVfsMappingInode = (memory: ThistleMemory, proc: Ptr, index: U32, write: boolean): I32 => {
+  if (index >= loadU32(memory, proc + P_MAP_COUNT)) return -22;
+  const mapping = loadU32(memory, proc + P_MAP_TABLE) + index * THISTLE_MAP_STRIDE;
+  const inode = loadU32(memory, mapping + M_INODE);
+  if (loadU32(memory, mapping + M_BACKING) !== THISTLE_MAP_BACKING_HOST_FILE ||
+      thistleVfsKind(memory, inode) !== THISTLE_VFS_KIND_FILE) return -9;
+  const rights = loadU32(memory, mapping + M_FILE_RIGHTS);
+  if ((rights & THISTLE_FD_READ) === 0) return -13;
+  if (write && ((rights & THISTLE_FD_WRITE) === 0 || (loadU32(memory, mapping + M_FLAGS) & 3) !== 1)) return -13;
+  return wordToI32(word(inode));
+};
+
+/** Publish mapped bytes without pathname authority or changing the file's logical size. */
+export const thistleVfsCommitMappingBacking = (
+  memory: ThistleMemory, proc: Ptr, index: U32, expected: U64, descriptor: Ptr, now: U64,
+): I32 => {
+  const inode = thistleVfsMappingInode(memory, proc, index, true);
+  if (inode < 0) return inode;
+  if (!inputContains(memory, descriptor, 24)) return -14;
+  const size = loadU64(memory, descriptor + 8);
+  if (loadU32(memory, descriptor + 4) !== 3 || size !== loadU64(memory, descriptor + 16) ||
+      size !== loadU64(memory, inodeAt(memory, inode) + V_SIZE)) return -22;
+  return publishBacking(memory, inode, expected, descriptor, now);
 };

@@ -28,3 +28,5 @@ The descriptor operation selects materialisation (`0`), ordinary writing (`1`) o
 `thistleVfsCommitDescriptorBacking` publishes a materialisation or write using an open descriptor's rights, while holding the descriptor and VFS locks. Materialisation preserves its cursor; a successful write advances it from the canonical write offset by the transferred length. Trusted restoration is not available through descriptors.
 
 Descriptor operation `3` replaces the complete resident payload, clears set-ID bits, updates timestamps and preserves the descriptor cursor. It requires write rights; size and resident length must match. Ordinary descriptor writes may promote an arena inode to a carrier without changing inode identity.
+
+`thistleVfsMappingInode` validates a live mapping's read or shared-write rights. `thistleVfsCommitMappingBacking` publishes resident bytes through that authority, with the existing version and quota checks. It rejects a changed file size.

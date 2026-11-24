@@ -41,3 +41,5 @@ A mount has one registered host byte carrier registry per root incarnation. `for
 `writeDescriptor` accepts an explicit whole-transfer mode for synchronous path appends; the ordinary descriptor contract remains bounded to 1 MiB.
 
 `resizeDescriptor` changes the size using open write authority and the resident quota. Zero length drops lazy data without fetching it.
+
+`mappedRanges` derives an ephemeral view from the canonical mapping table. `readMapping` and `writeMapping` use retained inode authority. Shared write-back is clipped at current EOF and does not alter a descriptor cursor.
