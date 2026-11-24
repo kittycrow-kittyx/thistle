@@ -1,32 +1,18 @@
 import {
   C_CREDENTIAL_LOCK, C_MAX_HARTS, C_MEMORY_LOCK, C_PROCESS_COUNT, C_PROCESS_LOCK,
   C_VFS_LOCK, FD_INODE, H_LOCK, H_PROCESS_SLOT, P_DESCRIPTOR_CAPACITY,
-  P_DESCRIPTOR_TABLE, P_EUID, P_PAGE_CAPACITY, P_PAGE_TABLE, P_PID, P_PPID,
-  P_STATE, THISTLE_DESCRIPTOR_STRIDE, THISTLE_HART_STRIDE, THISTLE_PAGE_ENTRY_SIZE,
+  P_DESCRIPTOR_TABLE, P_EUID, P_PID, P_PPID,
+  P_STATE, THISTLE_DESCRIPTOR_STRIDE, THISTLE_HART_STRIDE,
   THISTLE_PROCESS_STRIDE, THISTLE_PROCESS_ZOMBIE,
 } from "./abi.js";
-import { releaseFrame, trimFreeFrames, validFrame } from "./arena.js";
+import { validProcessFrames, releaseProcessFrames, trimFreeFrames } from "./arena.js";
 import { releaseGroups } from "./credentials.js";
-import { atomicStoreI32, compareExchangeI32, fill, loadU32, loadU64, storeU32 } from "./memory.js";
+import { atomicStoreI32, compareExchangeI32, fill, loadU32, storeU32 } from "./memory.js";
 import type { ThistleMemory } from "./memory.js";
 import { lockProcessHarts, unlockProcessHarts, INVALID_POINTER, hartAt, processAt, processForHart, processSlotByPid, validHart, validKernel } from "./state.js";
 import type { I32, Ptr, U32 } from "./types.js";
 import { thistleVfsRelease } from "./vfs.js";
 import { word, wordToU32 } from "./word.js";
-
-const validProcessFrames = (memory: ThistleMemory, proc: Ptr): boolean => {
-  const table = loadU32(memory, proc + P_PAGE_TABLE);
-  const count = loadU32(memory, proc + P_PAGE_CAPACITY);
-  let index: U32 = 0;
-  while (index < count) {
-    const entry = table + index * THISTLE_PAGE_ENTRY_SIZE;
-    const frame = loadU32(memory, entry + 8);
-    if (loadU64(memory, entry) !== 0n &&
-        !validFrame(memory, frame)) return false;
-    index += 1;
-  }
-  return true;
-};
 
 const releaseProcessDescriptors = (memory: ThistleMemory, proc: Ptr): void => {
   const table = loadU32(memory, proc + P_DESCRIPTOR_TABLE);
@@ -39,21 +25,6 @@ const releaseProcessDescriptors = (memory: ThistleMemory, proc: Ptr): void => {
     thistleVfsRelease(memory, inode);
     index += 1;
   }
-};
-
-const releaseProcessFrames = (memory: ThistleMemory, proc: Ptr): void => {
-  const table = loadU32(memory, proc + P_PAGE_TABLE);
-  const count = loadU32(memory, proc + P_PAGE_CAPACITY);
-  let index: U32 = 0;
-  while (index < count) {
-    const entry = table + index * THISTLE_PAGE_ENTRY_SIZE;
-    if (loadU64(memory, entry) !== 0n) {
-      const frame = loadU32(memory, entry + 8);
-      releaseFrame(memory, frame);
-    }
-    index += 1;
-  }
-  fill(memory, table, count * THISTLE_PAGE_ENTRY_SIZE, 0);
 };
 
 const clearProcessHarts = (memory: ThistleMemory, slot: U32): void => {

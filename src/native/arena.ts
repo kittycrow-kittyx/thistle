@@ -1,5 +1,5 @@
-import { C_IMAGE_TOP, C_IMAGE_LOCK, C_IMAGE_SIZE, THISTLE_CONTROL_BASE, C_PHYSICAL_FREE, C_PHYSICAL_NEXT, C_VFS_DATA_END, THISTLE_GUEST_PAGE_SIZE } from "./abi.js";
-import { atomicLoadI32, fill, loadU32, storeU32 } from "./memory.js";
+import { P_PAGE_TABLE, P_PAGE_CAPACITY, THISTLE_PAGE_ENTRY_SIZE, C_IMAGE_TOP, C_IMAGE_LOCK, C_IMAGE_SIZE, THISTLE_CONTROL_BASE, C_PHYSICAL_FREE, C_PHYSICAL_NEXT, C_VFS_DATA_END, THISTLE_GUEST_PAGE_SIZE } from "./abi.js";
+import { atomicLoadI32, fill, loadU32, loadU64, storeU32 } from "./memory.js";
 import type { ThistleMemory } from "./memory.js";
 import type { Ptr, U32 } from "./types.js";
 
@@ -62,3 +62,33 @@ export const inputContains = (memory: ThistleMemory, at: Ptr, size: U32): boolea
   const length = loadU32(memory, THISTLE_CONTROL_BASE + C_IMAGE_SIZE);
   return at >= start && at - start <= length && size <= length - (at - start);
 };
+
+export const validProcessFrames = (memory: ThistleMemory, proc: Ptr): boolean => {
+  const table = loadU32(memory, proc + P_PAGE_TABLE);
+  const count = loadU32(memory, proc + P_PAGE_CAPACITY);
+  let index: U32 = 0;
+  while (index < count) {
+    const entry = table + index * THISTLE_PAGE_ENTRY_SIZE;
+    const frame = loadU32(memory, entry + 8);
+    if (loadU64(memory, entry) !== 0n &&
+        !validFrame(memory, frame)) return false;
+    index += 1;
+  }
+  return true;
+};
+
+export const releaseProcessFrames = (memory: ThistleMemory, proc: Ptr): void => {
+  const table = loadU32(memory, proc + P_PAGE_TABLE);
+  const count = loadU32(memory, proc + P_PAGE_CAPACITY);
+  let index: U32 = 0;
+  while (index < count) {
+    const entry = table + index * THISTLE_PAGE_ENTRY_SIZE;
+    if (loadU64(memory, entry) !== 0n) {
+      const frame = loadU32(memory, entry + 8);
+      releaseFrame(memory, frame);
+    }
+    index += 1;
+  }
+  fill(memory, table, count * THISTLE_PAGE_ENTRY_SIZE, 0);
+};
+

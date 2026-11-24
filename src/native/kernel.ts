@@ -1,5 +1,5 @@
 import { bindProcess, INVALID_POINTER, hartAt, processAt, processForHart, processSlotByPid, validHart, validKernel } from "./state.js";
-import { inputContains, allocateFrame } from "./arena.js";
+import { inputContains, allocateFrame, validProcessFrames, releaseProcessFrames, trimFreeFrames } from "./arena.js";
 import { updateIdentity, readGroup, replaceGroups } from "./credentials.js";
 import { rv64Branch, rv64RegisterWordValid, rv64RegisterWordValue, rv64ImmediateWordValid, rv64ImmediateWordValue, rv64ImmediateOpValid, rv64ImmediateOpValue, rv64RegisterValid, rv64RegisterValue, rv64FloatClass, rv64CompressedJump, rv64ImmediateB, rv64ImmediateI, rv64ImmediateJ, rv64ImmediateS, rv64ImmediateU } from "../core/rv64-decode.js";
 import {
@@ -1616,6 +1616,21 @@ const guestWritable = (memory: ThistleMemory, hart: U32, address: U64, size: U32
   return true;
 };
 
+// Loading is an embedding-controlled operation: the process is quiescent.
+// Host-file mappings must be flushed/unmapped before their page table is discarded.
+const resetImagePages = (memory: ThistleMemory, proc: Ptr): I32 => {
+  if (overlapsHostFile(memory, proc, 0n, atomicLoadU64(memory, proc + P_VIRTUAL_TOP))) return THISTLE_THX_BUSY;
+  if (!acquire(memory, C_MEMORY_LOCK)) return THISTLE_THX_BUSY;
+  if (!validProcessFrames(memory, proc)) {
+    release(memory, C_MEMORY_LOCK);
+    return THISTLE_THX_MEMORY;
+  }
+  releaseProcessFrames(memory, proc);
+  trimFreeFrames(memory);
+  release(memory, C_MEMORY_LOCK);
+  return THISTLE_THX_OK;
+};
+
 //@cg-expect-error
 export const thistleImageBegin = (
   memory: ThistleMemory,
@@ -1631,13 +1646,12 @@ export const thistleImageBegin = (
       phdr >= virtualTop && phdr !== 0n) return THISTLE_THX_MEMORY;
   const proc = processForHart(memory, hart);
   if (proc === INVALID_POINTER) return THISTLE_THX_MEMORY;
-  const pageTable = loadU32(memory, proc + P_PAGE_TABLE);
-  const pageCapacity = loadU32(memory, proc + P_PAGE_CAPACITY);
+  const reset = resetImagePages(memory, proc);
+  if (reset !== THISTLE_THX_OK) return reset;
   const segmentTable = loadU32(memory, proc + P_SEGMENT_TABLE);
   const segmentCapacity = loadU32(memory, THISTLE_CONTROL_BASE + C_SEGMENT_CAPACITY);
   const mapTable = loadU32(memory, proc + P_MAP_TABLE);
   const mapCapacity = loadU32(memory, proc + P_MAP_CAPACITY);
-  fill(memory, pageTable, pageCapacity * THISTLE_PAGE_ENTRY_SIZE, 0);
   fill(memory, segmentTable, segmentCapacity * THISTLE_SEGMENT_STRIDE, 0);
   fill(memory, mapTable, mapCapacity * THISTLE_MAP_STRIDE, 0);
   atomicStoreI32(memory, proc + P_PAGE_COUNT, 0);

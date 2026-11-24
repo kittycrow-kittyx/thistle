@@ -83,5 +83,19 @@ for (const threaded of [false, true]) {
   assert.equal(invoke("HartSetX", 0, 0, 17, 174n), 0);
   assert.equal(invoke("RunRv64Batch", 0, 0, 1, 0n, -1), 0);
   assert.equal(invoke("HartGetX", 0, 0, 10), 0xfffffffen);
+  const highWater = view.getUint32(C_PHYSICAL_NEXT, true);
+  for (let cycle = 0; cycle < 8; cycle++) {
+    const oldPage = Number(invoke("GuestPage", 0, 0, 0x200000n, 0));
+    view.setUint8(oldPage + 100, 123);
+    const source = Number(invoke("ImageReserve", 0, 4));
+    view.setUint32(source, 0x73, true);
+    assert.equal(invoke("ImageBegin", 0, 0, 0x10000000n, 0x200000n, 0n, 0, 0), 0);
+    assert.equal(invoke("ImageSegment", 0, 0, 1, 1, 0x200000n, 4n, 5, source, 4), 0);
+    assert.equal(invoke("ImageFinish", 0, 0, 4), 0);
+    assert.equal(invoke("ImageRelease", 0, source, 4), 0);
+    const page = Number(invoke("GuestPage", 0, 0, 0x200000n, 0));
+    assert.equal(view.getUint8(page + 100), 0);
+    assert.equal(view.getUint32(C_PHYSICAL_NEXT, true), highWater);
+  }
   console.log(name + ": ABI " + THISTLE_ABI_VERSION + ", extended groups, identity and frame reuse passed");
 }

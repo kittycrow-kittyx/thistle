@@ -10,3 +10,7 @@
 
 Frame allocation, release and trimming require the canonical memory lock.
 Guest pages and supplementary-group extensions share the allocator.
+
+`validProcessFrames` validates the process page table's physical frame bounds.
+`releaseProcessFrames` returns its frames to the shared free list and clears
+the table under the memory lock. Reaping and image reload reuse these operations.

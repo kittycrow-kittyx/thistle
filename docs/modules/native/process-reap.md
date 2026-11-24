@@ -10,3 +10,5 @@ Associated harts are locked before cleanup and cleared after success.
 | EFAULT | Invalid guest-frame metadata. |
 | ECHILD | Caller lacks parent/root authority. |
 | ESRCH | No process with the requested PID. |
+
+Page validation and release use the same arena functions as image reload.

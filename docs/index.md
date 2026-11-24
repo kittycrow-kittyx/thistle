@@ -130,3 +130,5 @@ bun run test
 - [core/errno](modules/core/errno.md)
 - [host/process](modules/host/process.md)
 - [test/host-process.test](modules/test/host-process.test.md)
+
+- [test/native-image-lifetime.test](modules/test/native-image-lifetime.test.md)

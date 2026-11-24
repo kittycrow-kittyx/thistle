@@ -57,3 +57,8 @@ kernel instance without assuming that every leader is hart zero.
 `thistleProcessInstallCredentials` re-exports the loader batch from process-state.
 Get-ID syscalls zero-extend the unsigned 32-bit identity words before returning
 a 64-bit guest result.
+
+Image loading requires a quiescent process controlled by the embedding driver.
+`thistleImageBegin` returns old guest pages through the shared allocator before
+resetting image metadata. Contended allocation or remaining host-file mappings
+return THISTLE_THX_BUSY; invalid frame metadata returns THISTLE_THX_MEMORY.
