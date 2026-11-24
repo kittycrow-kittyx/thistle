@@ -108,6 +108,7 @@ import {
   H_STACK_POINTER,
   H_INSTRUCTIONS,
   H_LAST_INSTRUCTION,
+  H_SHARED_WRITE,
   H_F,
   H_X,
   H_PROCESS_SLOT,
@@ -391,7 +392,8 @@ export class Rv64 {
     this.xState = new BigInt64Array(memory.buffer, THISTLE_HART_BASE + this.s.p.native.hart * THISTLE_HART_STRIDE + H_X, 32);
     this.fState = new BigUint64Array(memory.buffer, THISTLE_HART_BASE + this.s.p.native.hart * THISTLE_HART_STRIDE + H_F, 32);
     this.m = new ThistleMem64(memory, this.s.p.native.hart, exports.thistleHartVirtualTop(0, this.s.p.native.hart), physicalBytes,
-      (hart, address, create) => exports.thistleGuestPage(0, hart, address, create ? 1 : 0));
+      (hart, address, create) => exports.thistleGuestPage(0, hart, address, create ? 1 : 0),
+      (address, length) => this.flushShared(address, length));
     this.thistleDescribeImage(exe);
     checkNative(thistleProcessRunImage(memory, this.s.p.native.hart));
     this.floor = exports.thistleHartImageFloor(0, this.s.p.native.hart);
@@ -459,14 +461,16 @@ export class Rv64 {
   }
 
   private thistleStepHart(session: ThistleThreadRuntime, hart: number): bigint | null {
-    const { exports } = session.core;
+    const { memory, exports } = session.core;
     const status = exports.thistleHartStatus(0, hart);
     if (status === THISTLE_HART_EXITED) { this.thistleObserveExit(session, hart); return null; }
     if (status === THISTLE_HART_FAULTED) this.thistleFault(session, hart);
     if (status !== THISTLE_HART_RUNNABLE) return null;
+    this.refreshSharedMappings();
     const before = exports.thistleHartMetric(0, hart, H_INSTRUCTIONS);
     const result = exports.thistleRunRv64Batch(0, hart, 16384, BigInt(Date.now()) * 1000n, 0);
     const executed = exports.thistleHartMetric(0, hart, H_INSTRUCTIONS) - before;
+    if (loadU32(memory, THISTLE_HART_BASE + hart * THISTLE_HART_STRIDE + H_SHARED_WRITE) !== 0) this.flushAllShared();
     switch (result) {
       case THISTLE_BATCH_SYSCALL: this.thistleScheduleSyscall(session, hart); break;
       case THISTLE_BATCH_HOST: this.thistleScheduleHost(session, hart); break;
@@ -1680,7 +1684,7 @@ default: { q = [MASK, MASK]; }
     try {
       const range = mappedRanges(this.s.p.native).find(mapping => mapping.at === at)
         ?? bad("EPROTO", "missing canonical file mapping");
-      this.m.populate(at, HostBacking.forMapping(this.s.p.native).readMapping(this.s.p.native, range.index, at, Number(range.end - at)));
+      this.populateMapping(range);
       return at;
     } catch (error) {
       checkNative(Number(thistleUnmapHostFile(memory, hart, at, al(len0))));
@@ -1708,6 +1712,23 @@ default: { q = [MASK, MASK]; }
     checkNative(Number(result));
   }
 
+  private refreshMapping(range: MappedRange): void {
+    HostBacking.forMapping(this.s.p.native).refreshMapping(this.s.p.native, range.index, (address, length, bytes) => {
+      this.m.populate(address, bytes);
+      this.m.drop(address + BigInt(bytes.length), length - bytes.length);
+    });
+  }
+
+  private populateMapping(range: MappedRange): void {
+    if (range.shared) { this.refreshMapping(range); return; }
+    const bytes = HostBacking.forMapping(this.s.p.native).readMapping(this.s.p.native, range.index, range.at, Number(range.end - range.at));
+    this.m.populate(range.at, bytes);
+  }
+
+  private refreshSharedMappings(): void {
+    for (const range of mappedRanges(this.s.p.native, true)) this.refreshMapping(range);
+  }
+
   private flushRange(range: MappedRange, at: bigint, end: bigint): void {
     if (!range.writable) return;
     const lo = at > range.at ? at : range.at, hi = end < range.end ? end : range.end;
@@ -1720,11 +1741,11 @@ default: { q = [MASK, MASK]; }
   private flushShared(at0: bigint, len: number): void {
     if (len <= 0) return;
     const at = at0 & -PAGE, end = al(at0 + BigInt(len));
-    for (const range of mappedRanges(this.s.p.native)) this.flushRange(range, at, end);
+    for (const range of mappedRanges(this.s.p.native, true)) this.flushRange(range, at, end);
   }
 
   private flushAllShared(): void {
-    for (const range of mappedRanges(this.s.p.native)) this.flushRange(range, range.at, range.end);
+    for (const range of mappedRanges(this.s.p.native, true)) this.flushRange(range, range.at, range.end);
   }
 
   private releaseFileMappings(): void {

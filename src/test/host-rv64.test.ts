@@ -223,3 +223,23 @@ test("RV64 shared mapping flush preserves later descriptor writes to clean bytes
   assert.equal(await sys.wait(child.pid), 0, output.text());
   assert.deepEqual(sys.readb("/mapped"), Uint8Array.of(42, 99, 3));
 });
+
+test("RV64 shared aliases observe a store before the next guest instruction", async () => {
+  const kernel = createHostKernel(), output = new MemOut();
+  const parent = kernel.session({ sin: new MemIn(), sout: output, serr: output }), sys = new Sys(kernel, parent);
+  sys.mkfile("/alias", Uint8Array.of(1, 2, 3));
+  const words = [
+    0xf9c00513, 0x000205b7, 0x00200613, 0x00000693, 0x03800893, 0x73,
+    0x00050413,
+    0x00040713, 0x00000513, 0x000015b7, 0x00300613, 0x00100693, 0x00000793, 0x0de00893, 0x73,
+    0x00050493,
+    0x00040713, 0x00000513, 0x000015b7, 0x00100613, 0x00100693, 0x00000793, 0x0de00893, 0x73,
+    0x00050913,
+    0x02a00293, 0x00548023,
+    0x00094503, 0x05d00893, 0x73,
+  ];
+  sys.mkfile("/alias.thx", executable(words, new TextEncoder().encode("/alias\0")), 0o755);
+  const child = sys.start("/alias.thx", []);
+  assert.equal(await sys.wait(child.pid), 42, output.text());
+  assert.deepEqual(sys.readb("/alias"), Uint8Array.of(42, 2, 3));
+});

@@ -2,7 +2,7 @@ import {
   C_VFS_DIRTY, C_VFS_GENERATION, C_VFS_QUOTA, THISTLE_VFS_HOST_BACKING,
   THISTLE_VFS_KIND_FILE, THISTLE_FD_READ, THISTLE_FD_WRITE, FD_INODE, FD_OFFSET, V_CAPACITY, V_CTIME, V_DATA, V_FLAGS,
   V_MODE, V_MTIME, V_RESIDENT, V_SIZE, V_VERSION, P_FSUID,
-  P_MAP_COUNT, P_MAP_TABLE, THISTLE_MAP_STRIDE, M_INODE, M_FILE_RIGHTS, M_FLAGS, M_BACKING, THISTLE_MAP_BACKING_HOST_FILE,
+  P_MAP_COUNT, P_MAP_TABLE, THISTLE_MAP_STRIDE, M_INODE, M_FILE_RIGHTS, M_FLAGS, M_BACKING, THISTLE_MAP_BACKING_HOST_FILE, M_VIEW_VERSION,
 } from "./abi.js";
 import { inputContains } from "./arena.js";
 import { atomicLoadU64, atomicStoreU64, loadU32, loadU64, storeU32, storeU64 } from "./memory.js";
@@ -117,4 +117,24 @@ export const thistleVfsCommitMappingBacking = (
   if (loadU32(memory, descriptor + 4) !== 3 || size !== loadU64(memory, descriptor + 16) ||
       size !== loadU64(memory, inodeAt(memory, inode) + V_SIZE)) return -22;
   return publishBacking(memory, inode, expected, descriptor, now);
+};
+
+/** Compare the materialised shared view with the canonical inode payload revision. */
+export const thistleVfsMappingStale = (memory: ThistleMemory, proc: Ptr, index: U32): I32 => {
+  const inode = thistleVfsMappingInode(memory, proc, index, false);
+  if (inode < 0) return inode;
+  const mapping = loadU32(memory, proc + P_MAP_TABLE) + index * THISTLE_MAP_STRIDE;
+  if ((loadU32(memory, mapping + M_FLAGS) & 3) !== 1) return 0;
+  return loadU64(memory, mapping + M_VIEW_VERSION) === thistleVfsBackingVersion(memory, inode) ? 0 : 1;
+};
+
+/** Acknowledge a refreshed shared view only while the inode revision still matches. */
+export const thistleVfsMappingRefreshed = (memory: ThistleMemory, proc: Ptr, index: U32, revision: U64): I32 => {
+  const inode = thistleVfsMappingInode(memory, proc, index, false);
+  if (inode < 0) return inode;
+  const mapping = loadU32(memory, proc + P_MAP_TABLE) + index * THISTLE_MAP_STRIDE;
+  if ((loadU32(memory, mapping + M_FLAGS) & 3) !== 1) return -22;
+  if (thistleVfsBackingVersion(memory, inode) !== revision) return -11;
+  storeU64(memory, mapping + M_VIEW_VERSION, revision);
+  return 0;
 };

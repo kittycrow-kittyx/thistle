@@ -53,6 +53,7 @@ export class ThistleMem64 implements RvMemory {
     readonly top: bigint,
     readonly cap: number,
     private readonly page: ThistlePageLookup = (hart, address, create) => thistleGuestPage(memory, hart, address, create),
+    private readonly onWrite: ((address: bigint, length: number) => void) | null = null,
   ) {
     const record = processForHart(memory, hart);
     if (record === INVALID_POINTER) bad("ESRCH", "unbound guest memory view");
@@ -92,8 +93,10 @@ break; }
   write(at: bigint, bytes: Uint8Array): void {
     this.check(at, bytes.length);
     if (bytes.length === 0) return;
-    checkNative(thistleMarkGuestWrite(this.memory, this.hart, at, bytes.length));
+    const marked = thistleMarkGuestWrite(this.memory, this.hart, at, bytes.length);
+    checkNative(marked);
     this.populate(at, bytes);
+    if (marked !== 0 && this.onWrite !== null) this.onWrite(at, bytes.length);
   }
 
   /** Load mapping bytes without recording guest write authority. */
@@ -130,19 +133,16 @@ break; }
 
   drop(at: bigint, n: number): void {
     this.check(at, n);
-    let position = 0;
-    while (position < n) {
-      const address = at + BigInt(position);
-      const offset = Number(address & 0xffffn);
-      const length = Math.min(n - position, THISTLE_GUEST_PAGE_SIZE - offset);
-      const frame = this.page(this.hart, address, false) >>> 0;
-      switch (true) {
-case !!(frame < UNMAPPED): { this.memory.bytes.fill(0, frame + offset, frame + offset + length);
-break; }
-case !!(frame === INVALID): { bad("ENOMEM", "Thistle page-table lookup failed");
-break; }
-}
-      position += length;
+    const record = this.record(), table = loadU32(this.memory, record + P_PAGE_TABLE);
+    const count = loadU32(this.memory, record + P_PAGE_CAPACITY), end = at + BigInt(n);
+    for (let index = 0; index < count; index++) {
+      const entry = table + index * THISTLE_PAGE_ENTRY_SIZE, key = loadU64(this.memory, entry);
+      if (key === 0n) continue;
+      const base = (key - 1n) << 16n, stop = base + BigInt(THISTLE_GUEST_PAGE_SIZE);
+      const low = at > base ? at : base, high = end < stop ? end : stop;
+      if (low >= high) continue;
+      const frame = loadU32(this.memory, entry + 8);
+      this.memory.bytes.fill(0, frame + Number(low - base), frame + Number(high - base));
     }
   }
 

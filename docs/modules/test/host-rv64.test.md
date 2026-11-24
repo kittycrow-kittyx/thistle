@@ -17,3 +17,5 @@ A blocked RV64 stdin fixture is killed and reaped before its hart is reused. The
 A guest mapping fixture closes its descriptor, renames the file and writes through the mapped address before exit. The renamed inode retains the write.
 
 The shared mapping dirty-byte fixture suspends a guest after writing one byte, changes a different byte through the filesystem, and checks both changes after exit.
+
+The alias fixture maps the same file twice, stores through one mapping and immediately loads through the other without a syscall between the instructions.

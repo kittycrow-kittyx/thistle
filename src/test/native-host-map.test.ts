@@ -110,7 +110,7 @@ test("shared mapping dirty bytes remain canonical and block destructive unmap", 
     const inode = thistleVfsCreate(memory, proc, 1, input, 5, THISTLE_VFS_KIND_FILE, 0o644, 1n);
     const fd = thistleVfsOpenInode(memory, proc, inode, THISTLE_FD_READ | THISTLE_FD_WRITE, 3);
     assert.equal(thistleMapHostDescriptor(memory, 0, address, 4096n, 3n, 0x100001n, fd, 0n), address);
-    assert.equal(thistleMarkGuestWrite(memory, 0, address + 31n, 3), 0);
+    assert.equal(thistleMarkGuestWrite(memory, 0, address + 31n, 3), 1);
     const table = loadU32(memory, proc + P_PAGE_TABLE), capacity = loadU32(memory, proc + P_PAGE_CAPACITY);
     let entry = 0;
     for (let index = 0; index < capacity; index++) {

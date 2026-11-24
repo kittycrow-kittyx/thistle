@@ -30,3 +30,5 @@ The descriptor operation selects materialisation (`0`), ordinary writing (`1`) o
 Descriptor operation `3` replaces the complete resident payload, clears set-ID bits, updates timestamps and preserves the descriptor cursor. It requires write rights; size and resident length must match. Ordinary descriptor writes may promote an arena inode to a carrier without changing inode identity.
 
 `thistleVfsMappingInode` validates a live mapping's read or shared-write rights. `thistleVfsCommitMappingBacking` publishes resident bytes through that authority, with the existing version and quota checks. It rejects a changed file size.
+
+`thistleVfsMappingStale` compares the shared view revision with the live inode revision. `thistleVfsMappingRefreshed` acknowledges an exact revision after transport; a changed revision is rejected.

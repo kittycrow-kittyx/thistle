@@ -121,6 +121,7 @@ export const H_STACK_POINTER: U32 = 904;
 export const H_STARTUP_LOADS: U32 = 912;
 // Eight bytes of private conversion scratch, protected by H_LOCK.
 export const H_FLOAT_SCRATCH: U32 = 920;
+export const H_SHARED_WRITE: U32 = 928;
 
 export const THISTLE_PROCESS_STRIDE: U32 = 352;
 export const P_LOCK: U32 = 0;
@@ -197,7 +198,7 @@ export const THISTLE_SEGMENT_READ: U32 = 1;
 export const THISTLE_SEGMENT_WRITE: U32 = 2;
 export const THISTLE_SEGMENT_EXECUTE: U32 = 4;
 
-export const THISTLE_MAP_STRIDE: U32 = 48;
+export const THISTLE_MAP_STRIDE: U32 = 56;
 export const THISTLE_MAP_CAPACITY: U32 = 256;
 export const M_ADDRESS: U32 = 0;
 export const M_END: U32 = 8;
@@ -208,6 +209,7 @@ export const M_FILE_RIGHTS: U32 = 28;
 export const M_FILE_OFFSET: U32 = 32;
 export const M_BACKING: U32 = 40;
 export const M_INODE: U32 = 44;
+export const M_VIEW_VERSION: U32 = 48;
 export const THISTLE_MAP_BACKING_ANONYMOUS: U32 = 0;
 export const THISTLE_MAP_BACKING_HOST_FILE: U32 = 1;
 

@@ -4,11 +4,11 @@ import { SourceLoad } from "./bytes.js";
 import { HostInode } from "./inode.js";
 import type { HostProcess } from "./process.js";
 import type { RegSource, DirtyWrite } from "./bytes.js";
-import { C_VFS_INODE_CAPACITY, FD_INODE, FD_KIND, FD_OFFSET, THISTLE_FD_READ, THISTLE_FD_WRITE, THISTLE_FD_FILE, V_DATA, V_RESIDENT, P_MAP_TABLE, P_MAP_COUNT, THISTLE_MAP_STRIDE, M_INODE, M_ADDRESS, M_END, M_FLAGS, M_FILE_RIGHTS, M_FILE_OFFSET, M_PROTECTION } from "../native/abi.js";
+import { C_VFS_INODE_CAPACITY, FD_INODE, FD_KIND, FD_OFFSET, THISTLE_FD_READ, THISTLE_FD_WRITE, THISTLE_FD_FILE, V_DATA, V_RESIDENT, P_MAP_TABLE, P_MAP_COUNT, THISTLE_MAP_STRIDE, M_INODE, M_ADDRESS, M_END, M_FLAGS, M_FILE_RIGHTS, M_FILE_OFFSET, M_PROTECTION, P_SHARED_FILE_MAPS } from "../native/abi.js";
 import { loadU32, loadU64, storeU32, storeU64 } from "../native/memory.js";
 import type { ThistleMemory } from "../native/memory.js";
 import { thistleVfsAccess, thistleVfsFileSize, thistleVfsRoot, thistleVfsIdentity, descriptorAccessStatus, descriptorReadCount, descriptorWriteOffset, residentFits, inodeAt, arenaInodeStatus } from "../native/vfs.js";
-import { thistleVfsBacking, thistleVfsBackingVersion, thistleVfsCommitBacking, thistleVfsCommitDescriptorBacking, thistleVfsMappingInode, thistleVfsCommitMappingBacking } from "../native/vfs-backing.js";
+import { thistleVfsBacking, thistleVfsBackingVersion, thistleVfsCommitBacking, thistleVfsCommitDescriptorBacking, thistleVfsMappingInode, thistleVfsCommitMappingBacking, thistleVfsMappingStale, thistleVfsMappingRefreshed } from "../native/vfs-backing.js";
 
 /** Live descriptor capability; the callback holds its lifetime and VFS locks. */
 export interface CarrierDescriptor {
@@ -25,20 +25,23 @@ export interface MappedRange {
   readonly end: bigint;
   readonly inode: number;
   readonly prot: number;
+  readonly shared: boolean;
   readonly writable: boolean;
 }
 
 /** A transient view of the native map table; no host mapping registry is retained. */
-export const mappedRanges = (process: HostProcess): MappedRange[] => {
+export const mappedRanges = (process: HostProcess, sharedOnly = false): MappedRange[] => {
   const memory = process.memory;
   return process.withDescriptors(record => {
+    if (sharedOnly && loadU32(memory, record + P_SHARED_FILE_MAPS) === 0) return [];
     const ranges: MappedRange[] = [], table = loadU32(memory, record + P_MAP_TABLE);
     const count = loadU32(memory, record + P_MAP_COUNT);
     for (let index = 0; index < count; index++) {
       const state = table + index * THISTLE_MAP_STRIDE, inode = loadU32(memory, state + M_INODE);
-      if (inode === 0) continue;
+      const shared = (loadU32(memory, state + M_FLAGS) & 3) === 1;
+      if (inode === 0 || sharedOnly && !shared) continue;
       ranges.push({ index, inode, at: loadU64(memory, state + M_ADDRESS), end: loadU64(memory, state + M_END),
-        prot: loadU32(memory, state + M_PROTECTION), writable: (loadU32(memory, state + M_FLAGS) & 3) === 1 &&
+        prot: loadU32(memory, state + M_PROTECTION), shared, writable: shared &&
           (loadU32(memory, state + M_FILE_RIGHTS) & THISTLE_FD_WRITE) !== 0 });
     }
     return ranges;
@@ -344,12 +347,28 @@ export class HostBacking {
     return loadU64(this.memory, state + M_FILE_OFFSET) + address - start;
   }
 
+  private mappedBytes(state: number, inode: number, address: bigint, length: number): Uint8Array {
+    const offset = this.mappingOffset(state, address, length), bytes = this.residentBytes(inode);
+    if (offset >= BigInt(bytes.length)) return new Uint8Array();
+    return bytes.slice(Number(offset), Number(offset) + length);
+  }
+
   /** Copy resident bytes through a canonical mapping without moving any descriptor cursor. */
   readMapping(process: HostProcess, index: number, address: bigint, length: number): Uint8Array {
-    return this.mappingStorage(process, index, false, (_record, state, inode) => {
-      const offset = this.mappingOffset(state, address, length), bytes = this.residentBytes(inode);
-      if (offset >= BigInt(bytes.length)) return new Uint8Array();
-      return bytes.slice(Number(offset), Number(offset) + length);
+    return this.mappingStorage(process, index, false, (_record, state, inode) => this.mappedBytes(state, inode, address, length));
+  }
+
+  /** Transport an updated shared view and acknowledge its exact inode revision. */
+  refreshMapping(process: HostProcess, index: number, populate: (address: bigint, length: number, bytes: Uint8Array) => void): void {
+    this.mappingStorage(process, index, false, (record, state, inode) => {
+      const status = thistleVfsMappingStale(this.memory, record, index);
+      checkNative(status);
+      if (status === 0) return;
+      const address = loadU64(this.memory, state + M_ADDRESS);
+      const length = Number(loadU64(this.memory, state + M_END) - address);
+      const revision = thistleVfsBackingVersion(this.memory, inode);
+      populate(address, length, this.mappedBytes(state, inode, address, length));
+      checkNative(thistleVfsMappingRefreshed(this.memory, record, index, revision));
     });
   }
 

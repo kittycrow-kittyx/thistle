@@ -62,6 +62,7 @@ import {
   H_F,
   H_FCSR,
   H_FLOAT_SCRATCH,
+  H_SHARED_WRITE,
   H_HOST_TO_WASM,
   H_HOST_ADDRESS,
   H_HOST_DESCRIPTOR,
@@ -200,6 +201,7 @@ import {
   M_FILE_DESCRIPTOR,
   M_FILE_RIGHTS,
   M_INODE,
+  M_VIEW_VERSION,
   M_FILE_OFFSET,
   M_FLAGS,
   M_PROTECTION,
@@ -1051,7 +1053,7 @@ const markMappedSpan = (memory: ThistleMemory, hart: U32, start: U64, end: U64):
 const markGuestWrite = (memory: ThistleMemory, hart: U32, address: U64, size: U32): boolean => {
   const proc = processForHart(memory, hart);
   if (proc === INVALID_POINTER) return false;
-  if (atomicLoadI32(memory, proc + P_SHARED_FILE_MAPS) === 0) return true;
+  if ((atomicLoadI32(memory, proc + P_SHARED_FILE_MAPS) & 2) === 0) return true;
   const end = address + ux(word(size));
   const count = loadU32(memory, proc + P_MAP_COUNT);
   let index: U32 = 0;
@@ -1060,8 +1062,9 @@ const markGuestWrite = (memory: ThistleMemory, hart: U32, address: U64, size: U3
     const start = loadU64(memory, mapping + M_ADDRESS), stop = loadU64(memory, mapping + M_END);
     const shared = loadU32(memory, mapping + M_INODE) !== 0 && (loadU32(memory, mapping + M_FLAGS) & 3) === 1;
     const writable = (loadU32(memory, mapping + M_FILE_RIGHTS) & THISTLE_FD_WRITE) !== 0;
-    if (shared && writable && address < stop && end > start &&
-        !markMappedSpan(memory, hart, address > start ? address : start, end < stop ? end : stop)) return false;
+    if (!shared || !writable || address >= stop || end <= start) { index += 1; continue; }
+    if (!markMappedSpan(memory, hart, address > start ? address : start, end < stop ? end : stop)) return false;
+    storeU32(memory, hartAt(hart) + H_SHARED_WRITE, 1);
     index += 1;
   }
   return true;
@@ -1070,8 +1073,11 @@ const markGuestWrite = (memory: ThistleMemory, hart: U32, address: U64, size: U3
 /** Record host syscall writes in the same canonical bitmap used by guest stores. */
 export const thistleMarkGuestWrite = (memory: ThistleMemory, hart: U32, address: U64, size: U32): I32 => {
   if (!validKernel(memory) || !validHart(memory, hart) || !guestRange(memory, hart, address, size)) return -14;
+  if (size === 0) return 0;
   if (!acquire(memory, hartAt(hart) + H_LOCK)) return -11;
-  const result: I32 = markGuestWrite(memory, hart, address, size) ? 0 : -12;
+  storeU32(memory, hartAt(hart) + H_SHARED_WRITE, 0);
+  const marked = markGuestWrite(memory, hart, address, size);
+  const result: I32 = marked ? loadI32(memory, hartAt(hart) + H_SHARED_WRITE) : -12;
   release(memory, hartAt(hart) + H_LOCK);
   return result;
 };
@@ -1124,6 +1130,7 @@ const copyMap = (memory: ThistleMemory, to: Ptr, from: Ptr): void => {
   storeU32(memory, to + M_BACKING, loadU32(memory, from + M_BACKING));
   storeU32(memory, to + M_FILE_RIGHTS, loadU32(memory, from + M_FILE_RIGHTS));
   storeU32(memory, to + M_INODE, loadU32(memory, from + M_INODE));
+  storeU64(memory, to + M_VIEW_VERSION, loadU64(memory, from + M_VIEW_VERSION));
 };
 
 const mappingConflict = (memory: ThistleMemory, proc: Ptr, address: U64, end: U64): boolean => {
@@ -1282,7 +1289,8 @@ const mapDescriptorLocked = (
   storeU32(memory, mapping + M_INODE, loadU32(memory, state + FD_INODE));
   storeU32(memory, mapping + M_FILE_RIGHTS, rights);
   storeU64(memory, mapping + M_FILE_OFFSET, offset);
-  if ((flags & 3n) === 1n && (rights & THISTLE_FD_WRITE) !== 0) atomicStoreI32(memory, proc + P_SHARED_FILE_MAPS, 1);
+  storeU64(memory, mapping + M_VIEW_VERSION, 0xffffffffffffffffn);
+  refreshSharedFileMaps(memory, proc, loadU32(memory, proc + P_MAP_COUNT));
   return result;
 };
 
@@ -1373,16 +1381,19 @@ const eraseMapEntry = (memory: ThistleMemory, proc: Ptr, index: U32, count: U32)
 
 const refreshSharedFileMaps = (memory: ThistleMemory, proc: Ptr, count: U32): void => {
   let index: U32 = 0;
+  let flags: I32 = 0;
   while (index < count) {
     const mapping = mapAt(memory, proc, index);
-    if (loadU32(memory, mapping + M_INODE) !== 0 && (loadU32(memory, mapping + M_FLAGS) & 3) === 1 &&
-        (loadU32(memory, mapping + M_FILE_RIGHTS) & THISTLE_FD_WRITE) !== 0) {
-      atomicStoreI32(memory, proc + P_SHARED_FILE_MAPS, 1);
-      return;
+    if (loadU32(memory, mapping + M_INODE) === 0 || (loadU32(memory, mapping + M_FLAGS) & 3) !== 1) {
+      index += 1;
+      continue;
     }
+    if ((flags & 1) !== 0) flags |= 4;
+    flags |= 1;
+    if ((loadU32(memory, mapping + M_FILE_RIGHTS) & THISTLE_FD_WRITE) !== 0) flags |= 2;
     index += 1;
   }
-  atomicStoreI32(memory, proc + P_SHARED_FILE_MAPS, 0);
+  atomicStoreI32(memory, proc + P_SHARED_FILE_MAPS, flags);
 };
 
 const applyUnmap = (memory: ThistleMemory, proc: Ptr, address: U64, end: U64): void => {
@@ -1626,6 +1637,7 @@ const moveMapping = (memory: ThistleMemory, hart: U32, proc: Ptr, mapping: Ptr, 
   storeU64(memory, target + M_FILE_OFFSET, loadU64(memory, mapping + M_FILE_OFFSET));
   storeU32(memory, target + M_INODE, loadU32(memory, mapping + M_INODE));
   storeU32(memory, target + M_FILE_RIGHTS, loadU32(memory, mapping + M_FILE_RIGHTS));
+  storeU64(memory, target + M_VIEW_VERSION, loadU64(memory, mapping + M_VIEW_VERSION));
   const removed = anonymousUnmap(memory, proc, oldAddress, oldSize);
   if (removed !== 0n) return -12n;
   return sx(destination, 64);
@@ -3093,9 +3105,12 @@ const runHartLocked = (
   let result = THISTLE_BATCH_BUDGET;
   let count: U32 = 0;
   const status = atomicLoadI32(memory, at + H_STATUS);
+  const proc = processForHart(memory, hart);
+  const aliasBoundary = proc !== INVALID_POINTER && (atomicLoadI32(memory, proc + P_SHARED_FILE_MAPS) & 6) === 6;
+  storeU32(memory, at + H_SHARED_WRITE, 0);
   if (status !== THISTLE_HART_RUNNABLE) result = status === THISTLE_HART_EXITED ? THISTLE_BATCH_EXITED : status === THISTLE_HART_FAULTED ? THISTLE_BATCH_FAULT : THISTLE_BATCH_BUSY;
   if (status === THISTLE_HART_RUNNABLE) {
-    while (count < budget && result === THISTLE_BATCH_BUDGET) {
+    while (count < budget && result === THISTLE_BATCH_BUDGET && (!aliasBoundary || loadU32(memory, at + H_SHARED_WRITE) === 0)) {
       result = step(memory, hart, nowMicros);
       bump(memory, at + H_INSTRUCTIONS);
       count += 1;

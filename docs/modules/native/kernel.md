@@ -118,3 +118,5 @@ The dispatcher imports the filesystem surface from [vfs-api](vfs-api.md), which 
 `thistleMarkGuestWrite` marks host writes through the native page bitmap. Guest stores and atomic writes use the same operation. Unmap and file remap reject dirty spans until write-back is acknowledged.
 
 The shared-file mapping flag avoids scanning the map table for ordinary guest stores. It tracks retained shared write authority, including mappings temporarily protected against writes.
+
+Guest batches with multiple shared views yield after a mapped write, allowing the byte transport to publish the change before another guest instruction. `thistleMarkGuestWrite` returns one when shared bytes were marked, zero for other writes, and a negative errno on failure.

@@ -47,3 +47,5 @@ A mount has one registered host byte carrier registry per root incarnation. `for
 `MappedRange` describes a transient file mapping. `forMapping` selects the mount registry for a process; subsequent byte operations validate the process and retained mapping under lock.
 
 `writeMappedSpans` merges dirty byte spans into the current resident payload, clips each at EOF and publishes the result once. It leaves clean bytes unchanged.
+
+`refreshMapping` copies a stale shared view and acknowledges its current inode revision under the canonical locks. `mappedRanges(process, true)` enumerates shared views only.
