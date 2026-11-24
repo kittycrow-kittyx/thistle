@@ -108,3 +108,5 @@ a byte count or negative errno, and does not resolve the pathname again.
 Mounted RV64 `openat` accepts existing-file read, write, read/write, append, directory and close-on-exec flags. Native arena writes use the same descriptor write policy as host calls; host-backed data and non-console host capabilities delegate to the registered transport when `THISTLE_FLAG_HOST_TRANSPORT` is enabled. Creation, exclusive, truncate and no-follow flags use the common `thistleVfsOpenPath` implementation. `thistleOpenPath` supplies default mode 0666 and timestamp zero; RV64 supplies mode and batch time.
 
 The dispatcher imports the filesystem surface from [vfs-api](vfs-api.md), which re-exports the existing VFS implementations without additional state. Path open holds the descriptor, credential and VFS locks.
+
+`thistleVfsCreateSymlink` creates and attaches a complete symlink in one VFS transaction; the caller supplies the validated buffer and holds the filesystem locks.

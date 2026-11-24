@@ -129,6 +129,13 @@ const createInode = (
   memory: ThistleMemory, proc: Ptr, parent: U32, name: Ptr, length: U32,
   kind: U32, mode: U32, now: U64,
 ): I32 => {
+  const result = prepareInode(memory, proc, kind, mode, now);
+  if (result < 0) return result;
+  const inode = wordToU32(word(result));
+  return completeInode(memory, inode, attachEntry(memory, proc, parent, inode, name, length, now));
+};
+
+const prepareInode = (memory: ThistleMemory, proc: Ptr, kind: U32, mode: U32, now: U64): I32 => {
   if (kind < THISTLE_VFS_KIND_FILE || kind > THISTLE_VFS_KIND_CHARACTER) return -22;
   if (!residentFits(memory, 0n, 128n)) return -28;
   const inode = freeInode(memory);
@@ -144,11 +151,45 @@ const createInode = (
   storeU32(memory, at + V_GID, loadU32(memory, proc + P_FSGID));
   storeU64(memory, at + V_ATIME, now);
   storeU64(memory, at + V_MTIME, now);
-  const result = attachEntry(memory, proc, parent, inode, name, length, now);
-  if (result < 0) { fill(memory, at, THISTLE_VFS_INODE_STRIDE, 0); return result; }
+  return wordToI32(word(inode));
+};
+
+const completeInode = (memory: ThistleMemory, inode: U32, result: I32): I32 => {
+  if (result < 0) { fill(memory, inodeAt(memory, inode), THISTLE_VFS_INODE_STRIDE, 0); return result; }
   const count = loadU32(memory, THISTLE_CONTROL_BASE + C_VFS_INODE_COUNT);
   storeU32(memory, THISTLE_CONTROL_BASE + C_VFS_INODE_COUNT, count + 1);
-  return inode;
+  return wordToI32(word(inode));
+};
+
+/** Publish a complete symlink, never an empty or partially written live entry.
+ * Input contains name length, target length, then both UTF-8 byte strings.
+ */
+export const thistleVfsCreateSymlink = (memory: ThistleMemory, proc: Ptr, parent: U32, input: Ptr, now: U64): I32 => {
+  if (!inputContains(memory, input, 8)) return -14;
+  const nameLength = loadU32(memory, input), targetLength = loadU32(memory, input + 4);
+  if (nameLength > 255 || targetLength > 4096) return -36;
+  if (targetLength === 0) return -2;
+  if (!inputContains(memory, input, 8 + nameLength + targetLength)) return -14;
+  const name = input + 8, target = name + nameLength;
+  if (!validName(memory, name, nameLength)) return -22;
+  const access = parentAccess(memory, proc, parent);
+  if (access !== 0) return access;
+  if (findChild(memory, parent, name, nameLength) !== 0) return -17;
+  let offset: U32 = 0;
+  while (offset < targetLength) {
+    if (loadU8(memory, target + offset) === 0) return -22;
+    offset += 1;
+  }
+  const result = prepareInode(memory, proc, THISTLE_VFS_KIND_LINK, 0o777, now);
+  if (result < 0) return result;
+  const inode = wordToU32(word(result)), at = inodeAt(memory, inode);
+  const data = allocateData(memory, targetLength);
+  if (data === 0xffffffff) return completeInode(memory, inode, -28);
+  copyMemory(memory, data, target, targetLength);
+  storeU32(memory, at + V_DATA, data);
+  storeU32(memory, at + V_CAPACITY, targetLength);
+  storeU64(memory, at + V_SIZE, ux(word(targetLength)));
+  return completeInode(memory, inode, attachEntry(memory, proc, parent, inode, name, nameLength, now));
 };
 
 const OPEN_CREATE: U32 = 0x40;

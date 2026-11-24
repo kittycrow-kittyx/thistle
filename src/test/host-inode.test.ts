@@ -129,3 +129,22 @@ test("host directory mutations share native entry identity and arena bytes", () 
   directory.unlink(root, "dir", true);
   assert.deepEqual(readDirectory(directory, root), []);
 });
+
+test("canonical symlink creation publishes the complete target or nothing", () => {
+  const memory = mountedKernel(), process = new HostProcess(memory, 0);
+  const root = HostInode.resolve(process, "/");
+  const file = root.create(process, "file", 1, 0o644);
+  const link = root.symlink(process, "alias", "file");
+  assert.equal(link.metadata().mode, 0o777);
+  assert.equal(link.metadata().size, 4n);
+  assert.equal(HostInode.resolve(process, "/alias").identity, file.identity);
+  assert.equal(HostInode.resolve(process, "/alias", false).identity, link.identity);
+  assert.deepEqual(link.read(process, 0n, 4), enc("file"));
+  const before = process.snapshotGeneration();
+  assert.throws(() => root.symlink(process, "alias", "other"), { code: "EEXIST" });
+  assert.throws(() => root.symlink(process, "empty", ""), { code: "ENOENT" });
+  assert.throws(() => root.symlink(process, "invalid", "a\0b"), { code: "EINVAL" });
+  assert.throws(() => root.symlink(process, "too-large", "a".repeat(4096)), { code: "ENOSPC" });
+  assert.equal(process.snapshotGeneration(), before);
+  assert.deepEqual(readDirectory(root, process).map(item => item.name).sort(), ["alias", "file"]);
+});

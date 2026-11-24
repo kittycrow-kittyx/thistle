@@ -211,3 +211,5 @@ Canonical directory changes and path reconstruction use dentries and process cwd
 ## Explicit host capability boundary
 
 `Kern` no longer imports host defaults. Its constructor accepts explicit limits, network and WASI capabilities. RAM discovery and environment overrides moved from `core/cap.ts` to `host/limits.ts`; the `createHostKernel` entry owns host defaults. mikuOS will obtain these services at its host boundary during repinning. The original native kernel graph and the supported host capability implementations remain intact.
+
+The canonical namespace now supports atomic creation of symlinks with their target bytes, through `HostInode.symlink`. The production filesystem adapter will use this operation in place of mutable object nodes. Native failures leave no partially published link.

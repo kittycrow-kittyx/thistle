@@ -9,3 +9,5 @@
 Directory entry creation, hard links, rename and unlink pass through native VFS mutation functions. Cross-directory rename and links validate both inode incarnations while holding the same native VFS lock. Arena byte writes likewise invoke the existing native write operation; host-backed payloads retain their separate byte-carrier contract.
 
 `inodeKind` maps native file, directory, link and character kinds to `f`, `d`, `l` and `c`; an unknown kind raises `EIO`.
+
+`symlink` marshals both the entry name and target into the native atomic creation operation. It never exposes an empty intermediate symlink to another caller.

@@ -157,7 +157,8 @@
       "thistleProcessSetHostState",
       "thistleProcessQueueSignal",
       "thistleProcessSignalMask",
-      "thistleVfsIdentity"
+      "thistleVfsIdentity",
+      "thistleVfsCreateSymlink"
     ],
     "verify": {
       "init": "tetoKernelInit",
@@ -283,7 +284,8 @@
       "thistleProcessSetHostState": "tetoProcessSetHostState",
       "thistleProcessQueueSignal": "tetoProcessQueueSignal",
       "thistleProcessSignalMask": "tetoProcessSignalMask",
-      "thistleVfsIdentity": "tetoVfsIdentity"
+      "thistleVfsIdentity": "tetoVfsIdentity",
+      "thistleVfsCreateSymlink": "tetoVfsCreateSymlink"
     }
   },
   "memory": {

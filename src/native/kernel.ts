@@ -3089,7 +3089,7 @@ export const thistleExitHart = (memory: ThistleMemory, hart: U32, code: I32): I3
   return 0;
 };
 
-export { thistleVfsCreate, thistleVfsWrite, thistleVfsWriteDescriptor, thistleVfsOpenPath, thistleVfsLink, thistleVfsUnlink, thistleVfsCanMove, thistleVfsRename, thistleVfsChmod, thistleVfsChown, thistleVfsUtime } from "./vfs-edit.js";
+export { thistleVfsCreate, thistleVfsCreateSymlink, thistleVfsWrite, thistleVfsWriteDescriptor, thistleVfsOpenPath, thistleVfsLink, thistleVfsUnlink, thistleVfsCanMove, thistleVfsRename, thistleVfsChmod, thistleVfsChown, thistleVfsUtime } from "./vfs-edit.js";
 
 
 export { thistleProcessReap } from "./process-reap.js";

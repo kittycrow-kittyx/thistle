@@ -1,12 +1,12 @@
 import { bad } from "../core/err.js";
 import { THISTLE_VFS_KIND_CHARACTER, THISTLE_VFS_KIND_DIRECTORY, THISTLE_VFS_KIND_FILE, THISTLE_VFS_KIND_LINK, P_CWD_INODE, V_ATIME, V_CTIME, V_GID, V_KIND, V_MODE, V_MTIME, V_NLINK, V_SIZE, V_UID } from "../native/abi.js";
-import { loadU32, loadU64 } from "../native/memory.js";
+import { loadU32, loadU64, storeU32 } from "../native/memory.js";
 import type { ThistleMemory } from "../native/memory.js";
 import { inodeAt, thistleVfsAccess, thistleVfsIdentity, thistleVfsReadData, thistleVfsResolve } from "../native/vfs.js";
 import { withImage, withVfsLock, checkNative } from "./native-access.js";
 import type { HostProcess } from "./process.js";
 import { enc } from "../io/stream.js";
-import { thistleVfsChmod, thistleVfsChown, thistleVfsUtime, thistleVfsCreate, thistleVfsLink, thistleVfsUnlink, thistleVfsRename, thistleVfsWrite } from "../native/vfs-edit.js";
+import { thistleVfsChmod, thistleVfsChown, thistleVfsUtime, thistleVfsCreate, thistleVfsCreateSymlink, thistleVfsLink, thistleVfsUnlink, thistleVfsRename, thistleVfsWrite } from "../native/vfs-edit.js";
 
 /** Translate the native inode kind for host-facing persistence and presentation. */
 export const inodeKind = (kind: number): "d" | "f" | "l" | "c" => {
@@ -66,6 +66,22 @@ export class HostInode {
   create(process: HostProcess, name: string, kind: number, mode: number): HostInode {
     const found = this.withName(name, (input, length) => this.access(process, record => {
       const ino = thistleVfsCreate(this.memory, record, this.ino, input, length, kind, mode, BigInt(Date.now()));
+      checkNative(ino);
+      return { ino, identity: thistleVfsIdentity(this.memory, ino) };
+    }));
+    return new HostInode(this.memory, found.ino, found.identity);
+  }
+
+  /** Create a symlink with its entire target in one canonical namespace operation. */
+  symlink(process: HostProcess, name: string, target: string): HostInode {
+    const bytes = enc(name), destination = enc(target);
+    if (bytes.length > 255 || destination.length > 4096) bad("ENAMETOOLONG", name);
+    const found = withImage(this.memory, 8 + bytes.length + destination.length, input => this.access(process, record => {
+      storeU32(this.memory, input, bytes.length);
+      storeU32(this.memory, input + 4, destination.length);
+      this.memory.bytes.set(bytes, input + 8);
+      this.memory.bytes.set(destination, input + 8 + bytes.length);
+      const ino = thistleVfsCreateSymlink(this.memory, record, this.ino, input, BigInt(Date.now()));
       checkNative(ino);
       return { ino, identity: thistleVfsIdentity(this.memory, ino) };
     }));
