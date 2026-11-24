@@ -13,7 +13,9 @@ import { enc } from "../io/stream.js";
 import type { Exe } from "../../thistle-asm/fmt.js";
 import { norm } from "../fs/vfs.js";
 import type { RvMemory } from "./mem64.js";
-import { Fd } from "../core/proc.js";
+import { Fd, ExecReplace } from "../core/proc.js";
+import { HostBacking } from "../host/backing.js";
+import type { MappedRange } from "../host/backing.js";
 import { RvLinuxEvents } from "./linux-events.js";
 import type { StartIo } from "../core/kernel.js";
 import { loadI32, loadU32 } from "../native/memory.js";
@@ -47,7 +49,8 @@ import {
   thistleHostLength,
   thistleHostOperation,
   thistleKernelInit,
-  thistleMapHostFile,
+  thistleMapHostDescriptor,
+  thistleMapHostAnonymous,
   thistleRemapHostFile,
   thistleUnmapHostFile,
   thistleImageRelease,
@@ -169,7 +172,6 @@ interface Vf {
 }
 
 interface Seg { name: string; at: bigint; end: bigint; flg: string; }
-interface MapEnt { at: bigint; end: bigint; prot: number; shared: boolean; path: string | null; off: number | null; }
 
 interface ThistleCore {
   memory: ThistleMemory;
@@ -209,10 +211,7 @@ export class Rv64 {
   private set m(value: RvMemory) { this.memoryState = value; }
   private pc = 0n;
   private floor = 0n;
-  private brk = 0n;
   private stackAt = 0n;
-  private mapAt = 0n;
-  private readonly maps: MapEnt[] = [];
   private readonly miss = new Set<number>();
   private readonly localSockets = new Set<number>();
   private thistleThreads: ThistleThreadRuntime | null = null;
@@ -397,8 +396,6 @@ export class Rv64 {
     this.thistleDescribeImage(exe);
     checkNative(thistleProcessRunImage(memory, this.s.p.native.hart));
     this.floor = exports.thistleHartImageFloor(0, this.s.p.native.hart);
-    this.brk = al(this.floor);
-    this.mapAt = 0x4000000000n;
     this.pc = exports.thistleHartPc(0, this.s.p.native.hart);
     this.stackAt = exports.thistleHartStackBottom(0, this.s.p.native.hart);
     return this.runThistleCooperative(core);
@@ -544,13 +541,13 @@ export class Rv64 {
     const guestRegisters = [10, 11, 12, 13, 14, 15, 16, 17].map(reg =>
       `x${reg}=0x${ux(thistleHartGetX(memory, hart, reg)).toString(16)}`
     ).join(",");
-    const hostMappings = this.maps
-      .filter(region => region.path !== null && (
+    const hostMappings = HostBacking.mappedRanges(this.s.p.native)
+      .filter(region => (
         a1 >= region.at && a1 < region.end ||
         ux(thistleHartGetX(memory, hart, 14)) >= region.at &&
         ux(thistleHartGetX(memory, hart, 14)) < region.end
       ))
-      .map(region => `[0x${region.at.toString(16)},0x${region.end.toString(16)}) prot=${region.prot} path=${region.path}`)
+      .map(region => `[0x${region.at.toString(16)},0x${region.end.toString(16)}) prot=${region.prot} inode=${region.inode}`)
       .join(";");
     const traceCount = traceView.getUint32(1000, true);
     const cellWrites: string[] = [];
@@ -593,8 +590,6 @@ export class Rv64 {
     this.fState = new BigUint64Array(memory.buffer, base + H_F, 32);
     this.thistleActiveHart = hart;
     this.pc = exports.thistleHartPc(0, hart);
-    this.brk = exports.thistleHartBreak(0, hart);
-    this.syncThistleMemoryState(exports);
     const registers = this.xState;
     const pc = this.pc;
     const work = this.sys().then(() => {
@@ -738,34 +733,6 @@ export class Rv64 {
       listeners.add(wake);
       if (millis !== null) timer = setTimeout(() => wake(-110n), millis);
     });
-  }
-
-  private syncThistleMemoryState(exports: ThistleExports): void {
-    this.brk = exports.thistleHartBreak(0, this.s.p.native.hart);
-
-    // Retain file-backed mappings maintained by the compatibility bridge.
-    const hostOwned = this.maps.filter(
-      mapping => mapping.path !== null,
-    );
-
-    this.maps.length = 0;
-    this.maps.push(...hostOwned);
-
-    const count = exports.thistleProcessMapCount(0, this.s.p.native.hart);
-
-    for (let index = 0; index < count; index++) {
-      const at = exports.thistleProcessMapAddress(0, this.s.p.native.hart, index);
-      const end = exports.thistleProcessMapEnd(0, this.s.p.native.hart, index);
-      const prot = exports.thistleProcessMapProtection(0, this.s.p.native.hart, index);
-
-      if (end > at && !hostOwned.some(mapping => mapping.at === at && mapping.end === end)) {
-        this.maps.push({"path": null, "off": null, at,
-          end,
-          prot,
-          shared: false,
-        });
-      }
-    }
   }
 
   private async sys(): Promise<void> {
@@ -1020,7 +987,13 @@ export class Rv64 {
 
     if (!this.vf) {
       this.flushAllShared();
-      await this.s.exec(path, argv.length ? argv : [path], env);
+      try {
+        await this.s.exec(path, argv.length ? argv : [path], env);
+      } catch (error) {
+        if (!(error instanceof ExecReplace)) throw error instanceof Error ? error : new Error("exec failed");
+        this.releaseFileMappings();
+        throw error;
+      }
     }
 
     const io: StartIo = { sin: null, sout: null, serr: null }, f0 = (this.s.p.fds.get(0) ?? null), f1 = (this.s.p.fds.get(1) ?? null), f2 = (this.s.p.fds.get(2) ?? null);
@@ -1683,96 +1656,82 @@ default: { q = [MASK, MASK]; }
     return done;
   }
 
-  private mmap(addr0: bigint, len0: bigint, prot0: bigint, flags0: bigint, fd0: bigint, off0: bigint): bigint {
-    // Fixed ranges cannot collide with the image; flexible mappings search free space and retain backing-file metadata for shared flushes.
-    const z0 = this.nat(len0, "mapping length", Number.MAX_SAFE_INTEGER), z = al(BigInt(z0));
-    if (!z) bad("EINVAL", "zero-length mapping");
+  private async mmap(addr0: bigint, len0: bigint, prot0: bigint, flags0: bigint, fd0: bigint, off0: bigint): Promise<bigint> {
+    const length = this.nat(len0, "mapping length", Number.MAX_SAFE_INTEGER);
     const prot = this.nat(prot0, "mapping protection", 7), flags = this.nat(flags0, "mapping flags", 0x7fffffff);
-    const at = thistleMapHostFile(requireValue(this.nativeMemory, "native memory"), this.thistleActiveHart,
-      ux(addr0), BigInt(z0), BigInt(prot), BigInt(flags));
-    if (at < 0n) bad("ENOMEM", "RV64 file mapping reservation failed");
-    let path: string | null = null;
-    let off = 0;
-    if (!(flags & 0x20) && fd0 >= 0n) {
-      const fd = this.fd(fd0), f = this.s.p.fds.get(fd) ?? bad("EBADF", String(fd));
-      path = f.path ?? bad("EBADF", String(fd));
-      off = this.nat(off0, "mapping offset", Number.MAX_SAFE_INTEGER);
-      const b = this.s.readb(path).slice(off, off + z0);
-      this.m.write(at, b);
+    const hart = this.thistleActiveHart, memory = requireValue(this.nativeMemory, "canonical memory");
+    if (length === 0) return -22n;
+    const fixed = (flags & 0x100010) === 0x10;
+    if ((flags & 0x20) !== 0) {
+      if (fixed) this.flushShared(ux(addr0), length);
+      return thistleMapHostAnonymous(memory, hart, ux(addr0), len0, prot0, flags0);
     }
-    const ent: MapEnt = {"path": null, "off": null, at, end: at + z, prot, shared: !!(flags & 1) };
-    if (path !== null) {
-      ent.path = path;
-      ent.off = off;
+    const fd = this.fd(fd0), file = this.s.p.fds.get(fd) ?? bad("EBADF", String(fd));
+    if (!file.rd || file.inode === 0) return -9n;
+    if ((flags & 3) === 1 && (prot & 2) !== 0 && !file.wr) return -13n;
+    await file.materialiseFile();
+    this.s.chk();
+    if (!this.executionActive) return -4n;
+    // Access the captured descriptor incarnation again before passing its slot.
+    if (file.inode === 0) return -9n;
+    if (fixed) this.flushShared(ux(addr0), length);
+    const at = thistleMapHostDescriptor(memory, hart, ux(addr0), len0, prot0, flags0, fd, ux(off0));
+    if (at < 0n) return at;
+    try {
+      const range = HostBacking.mappedRanges(this.s.p.native).find(mapping => mapping.at === at)
+        ?? bad("EPROTO", "missing canonical file mapping");
+      this.m.write(at, HostBacking.readMapping(this.s.p.native, range.index, at, Number(range.end - at)));
+      return at;
+    } catch (error) {
+      checkNative(Number(thistleUnmapHostFile(memory, hart, at, al(len0))));
+      throw error instanceof Error ? error : new Error("mapped byte load failed");
     }
-    this.maps.push(ent);
-    if (at + z > this.mapAt) this.mapAt = al(at + z);
-    return at;
   }
 
   private remap(old0: bigint, oz0: bigint, nz0: bigint): bigint {
     const old = ux(old0), oldSize = al(ux(oz0)), newSize = al(ux(nz0));
-    const carrier = this.maps.find(mapping => mapping.path !== null && mapping.at === old && mapping.end === old + oldSize)
-      ?? bad("EINVAL", "missing host mapping carrier");
+    const carrier = HostBacking.mappedRanges(this.s.p.native).find(mapping => mapping.at === old && mapping.end === old + oldSize);
+    if (carrier === undefined) return -22n;
     if (newSize < oldSize) this.flushShared(old + newSize, this.nat(oldSize - newSize, "truncated mapping", Number.MAX_SAFE_INTEGER));
     const result = thistleRemapHostFile(requireValue(this.nativeMemory, "canonical memory"), this.thistleActiveHart);
-    if (result < 0n) return result;
-    carrier.at = ux(result);
-    carrier.end = ux(result) + newSize;
+    if (result < 0n || newSize <= oldSize) return result;
+    const range = HostBacking.mappedRanges(this.s.p.native).find(mapping => mapping.at === ux(result))
+      ?? bad("EPROTO", "missing resized mapping");
+    const start = ux(result) + oldSize;
+    this.m.write(start, HostBacking.readMapping(this.s.p.native, range.index, start, this.nat(newSize - oldSize, "mapping growth", Number.MAX_SAFE_INTEGER)));
     return result;
   }
 
-  private unmap(at0: bigint, len: number): void {
-    // Flush shared bytes before releasing frames, then split surviving file ranges with adjusted offsets.
-    const at = at0 & -PAGE, end = al(at0 + BigInt(len));
-    this.flushShared(at, this.nat(end - at, "unmapped range", Number.MAX_SAFE_INTEGER));
-    const result = thistleUnmapHostFile(requireValue(this.nativeMemory, "native memory"), this.thistleActiveHart, at, end - at);
-    if (result < 0n) bad("EINVAL", "RV64 mapping release failed");
-    for (let i = this.maps.length - 1; i >= 0; i--) {
-      const q = requireValue(this.maps[i] ?? null, "src/vm/rv64.ts:2274");
-      const lo = at > q.at ? at : q.at, hi = end < q.end ? end : q.end;
-      if (lo < hi) this.m.drop(lo, this.nat(hi - lo, "unmapped range", Number.MAX_SAFE_INTEGER));
-      switch (true) {
-case !!(at <= q.at && end >= q.end): { this.maps.splice(i, 1);
-break; }
-case !!(at > q.at && end < q.end): {
-        const old = q.end, next: MapEnt = {"path": null, "off": null, at: end, end: old, prot: q.prot, shared: q.shared };
-        if (q.path !== null) next.path = q.path;
-        if (q.off !== null) next.off = q.off + this.nat(end - q.at, "mapping offset", Number.MAX_SAFE_INTEGER);
-        q.end = at;
-        this.maps.push(next);
+  private unmap(at: bigint, len: number): void {
+    if (len === 0 || (at & (PAGE - 1n)) !== 0n) bad("EINVAL", "invalid unmap range");
+    this.flushShared(at, len);
+    const result = thistleUnmapHostFile(requireValue(this.nativeMemory, "canonical memory"), this.thistleActiveHart, at, BigInt(len));
+    checkNative(Number(result));
+  }
 
-break; }
-case !!(at <= q.at && end > q.at): {
-        const old = q.at;
-        q.at = end;
-        if (q.off !== null) q.off += this.nat(end - old, "mapping offset", Number.MAX_SAFE_INTEGER);
-
-break; }
-case !!(at < q.end && end >= q.end): { q.end = at;
-break; }
-}
-    }
+  private flushRange(range: MappedRange, at: bigint, end: bigint): void {
+    if (!range.writable) return;
+    const lo = at > range.at ? at : range.at, hi = end < range.end ? end : range.end;
+    if (lo >= hi) return;
+    const length = this.nat(hi - lo, "mapping flush length", Number.MAX_SAFE_INTEGER);
+    HostBacking.writeMapping(this.s.p.native, range.index, lo, this.m.read(lo, length));
   }
 
   private flushShared(at0: bigint, len: number): void {
     if (len <= 0) return;
     const at = at0 & -PAGE, end = al(at0 + BigInt(len));
-    for (const q of this.maps) {
-      if (!q.shared || !q.path || q.off === null) continue;
-      const lo = at > q.at ? at : q.at, hi = end < q.end ? end : q.end;
-      if (lo >= hi) continue;
-      const rel = this.nat(lo - q.at, "mapping relative offset", Number.MAX_SAFE_INTEGER);
-      const n = this.nat(hi - lo, "mapping flush length", Number.MAX_SAFE_INTEGER);
-      const dst = q.off + rel, cur = this.s.readb(q.path), out = new Uint8Array(Math.max(cur.length, dst + n));
-      out.set(cur);
-      out.set(this.m.read(lo, n), dst);
-      this.s.writeb(q.path, out);
-    }
+    for (const range of HostBacking.mappedRanges(this.s.p.native)) this.flushRange(range, at, end);
   }
 
   private flushAllShared(): void {
-    for (const q of [...this.maps]) this.flushShared(q.at, this.nat(q.end - q.at, "mapping length", Number.MAX_SAFE_INTEGER));
+    for (const range of HostBacking.mappedRanges(this.s.p.native)) this.flushRange(range, range.at, range.end);
+  }
+
+  private releaseFileMappings(): void {
+    const memory = requireValue(this.nativeMemory, "canonical memory");
+    for (const range of HostBacking.mappedRanges(this.s.p.native)) {
+      checkNative(Number(thistleUnmapHostFile(memory, this.s.p.native.hart, range.at, range.end - range.at)));
+    }
   }
 
   private random(at: bigint, n: number): number { return randomFill(this.m, this.mem.bind(this), at, n); }

@@ -1233,6 +1233,18 @@ export const thistleMapHostDescriptor = (
   return result;
 };
 
+/** Reserve anonymous memory after host write-back of any replaced file mappings. */
+export const thistleMapHostAnonymous = (
+  memory: ThistleMemory, hart: U32, address: U64, length: U64, protection: U64, flags: U64,
+): I64 => {
+  const locked = lockHostMapping(memory, hart);
+  if (locked < 0n) return locked;
+  const proc = wordToPtr(locked);
+  const result = anonymousMap(memory, proc, address, length, protection, flags);
+  unlockHostMapping(memory, hart, proc);
+  return result;
+};
+
 /** Release a hosted mapping after its shared file data has been flushed. */
 export const thistleUnmapHostFile = (memory: ThistleMemory, hart: U32, address: U64, length: U64): I64 => {
   const locked = lockHostMapping(memory, hart);
@@ -2646,8 +2658,14 @@ const mapSyscall = (memory: ThistleMemory, hart: U32, proc: Ptr, number: U32): I
     setPc(memory, hart, loadU64(memory, at + H_PC) - 4n);
     return THISTLE_BATCH_CONTENDED;
   }
-  const result = anonymousMap(memory, proc, ux(x(memory, hart, 10)), ux(x(memory, hart, 11)),
-    ux(x(memory, hart, 12)), ux(x(memory, hart, 13)));
+  const address = ux(x(memory, hart, 10)), length = ux(x(memory, hart, 11));
+  const flags = ux(x(memory, hart, 13));
+  if ((flags & 0x100010n) === 0x10n && overlapsHostFile(memory, proc, address, length + MAP_PAGE - 1n & -MAP_PAGE)) {
+    release(memory, C_VFS_LOCK);
+    release(memory, lock);
+    return fallbackSyscall(memory, hart);
+  }
+  const result = anonymousMap(memory, proc, address, length, ux(x(memory, hart, 12)), flags);
   traceMappingOperation(memory, hart, number, result);
   release(memory, C_VFS_LOCK);
   release(memory, lock);

@@ -13,3 +13,5 @@ A killed guest's delayed output is released while another guest occupies the
 same hart. The new guest must remain waiting for its own output completion.
 
 A blocked RV64 stdin fixture is killed and reaped before its hart is reused. The next guest receives its input byte, and its parent retains access to the shared stream.
+
+A guest mapping fixture closes its descriptor, renames the file and writes through the mapped address before exit. The renamed inode retains the write.

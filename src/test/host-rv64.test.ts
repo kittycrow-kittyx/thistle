@@ -184,3 +184,21 @@ test("killing a blocked RV64 reader preserves inherited input", async () => {
   await input.wr(enc("parent"));
   assert.deepEqual(await sys.chunkb(), enc("parent"));
 });
+
+test("RV64 shared mapping writes follow the renamed inode after close", async () => {
+  const kernel = createHostKernel(), output = new MemOut();
+  const parent = kernel.session({ sin: new MemIn(), sout: output, serr: output }), sys = new Sys(kernel, parent);
+  sys.mkfile("/mapped", Uint8Array.of(1, 2, 3));
+  const words = [
+    0xf9c00513, 0x000205b7, 0x00200613, 0x00000693, 0x03800893, 0x73,
+    0x00050413, 0x00050713, 0x00000513, 0x000015b7, 0x00300613, 0x00100693, 0x00000793, 0x0de00893, 0x73,
+    0x00050493, 0x00040513, 0x03900893, 0x73,
+    0xf9c00513, 0x000205b7, 0xf9c00613, 0x000206b7, 0x00868693, 0x02600893, 0x73,
+    0x02a00293, 0x00548023, 0x00000513, 0x05d00893, 0x73,
+  ];
+  sys.mkfile("/mapping.thx", executable(words, enc("/mapped\0/moved\0")), 0o755);
+  const child = sys.start("/mapping.thx", []);
+  assert.equal(await sys.wait(child.pid), 0, output.text());
+  assert.deepEqual(sys.readb("/moved"), Uint8Array.of(42, 2, 3));
+  assert.throws(() => sys.readb("/mapped"), { code: "ENOENT" });
+});

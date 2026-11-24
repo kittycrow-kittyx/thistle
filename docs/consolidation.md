@@ -230,3 +230,5 @@ unused words. VFS reclamation and remount validation account for mapped inodes.
 Split, move, unmap and reaping preserve or release these references. Mapping
 mutations share the VFS lock. The RV64 host transport still needs to use the
 retained records for file bytes and shared write-back.
+
+RV64 file mappings use retained native inode records for byte transport. The host mapping array and its split/remap metadata are removed. Shared write-back precedes MAP_FIXED replacement and unmap. Successful exec releases file mappings before loading the next image. Dirty-page and concurrent mapping coherence require further validation.
