@@ -1,7 +1,6 @@
 import { bad } from "../core/err.js";
 import { FD_FLAGS, FD_INODE, FD_KIND, FD_OFFSET, P_FSUID, THISTLE_FD_HOST, THISTLE_FD_READ, THISTLE_FD_WRITE, THISTLE_VFS_KIND_CHARACTER } from "../native/abi.js";
 import { loadU32, loadU64, storeU64 } from "../native/memory.js";
-import type { ThistleMemory } from "../native/memory.js";
 import { thistleVfsIdentity, thistleVfsKind } from "../native/vfs.js";
 import type { HostInode } from "./inode.js";
 import type { HostProcess } from "./process.js";
@@ -13,11 +12,6 @@ export interface CharacterDevice {
   readonly repeat: boolean;
 }
 
-interface Registration {
-  readonly identity: bigint;
-  readonly device: CharacterDevice;
-}
-
 interface DeviceReceipt {
   readonly inode: number;
   readonly identity: bigint;
@@ -25,21 +19,16 @@ interface DeviceReceipt {
   readonly device: CharacterDevice;
 }
 
-// Only external byte-producing/consuming capabilities are stored here.
-// Names, permissions, metadata and open references remain in native memory.
-const registries = new WeakMap<ThistleMemory, Map<number, Registration>>();
-
 /** Attach a trusted host transport to an existing canonical character inode. */
 export function registerDevice(view: HostInode, process: HostProcess, device: CharacterDevice): void {
   view.access(process, record => {
     const memory = view.memory;
     if (loadU32(memory, record + P_FSUID) !== 0) bad("EPERM", "device registration requires root");
     if (thistleVfsKind(memory, view.ino) !== THISTLE_VFS_KIND_CHARACTER) bad("EINVAL", "not a character device");
-    const registry = registries.get(memory) ?? new Map<number, Registration>();
+    const registry = process.memory.transports.devices;
     const previous = registry.get(view.ino) ?? null;
     if (previous !== null && previous.identity === view.identity) bad("EBUSY", "device transport already registered");
     registry.set(view.ino, { identity: view.identity, device });
-    registries.set(memory, registry);
   });
 }
 
@@ -50,7 +39,7 @@ function receipt(descriptor: CarrierDescriptor, rights: number): DeviceReceipt |
     if (loadU32(memory, state + FD_KIND) !== THISTLE_FD_HOST || inode === 0) return null;
     if ((loadU32(memory, state + FD_FLAGS) & rights) === 0) bad("EBADF", "device descriptor access denied");
     const identity = thistleVfsIdentity(memory, inode);
-    const registry = registries.get(memory) ?? bad("EIO", "device transport unavailable");
+    const registry = memory.transports.devices;
     const registered = registry.get(inode) ?? bad("EIO", "device transport unavailable");
     if (registered.identity !== identity || identity === 0n) bad("EIO", "device transport expired");
     return { inode, identity, offset: loadU64(memory, state + FD_OFFSET), device: registered.device };

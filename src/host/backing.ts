@@ -6,7 +6,7 @@ import type { HostProcess } from "./process.js";
 import type { RegSource, DirtyWrite } from "./bytes.js";
 import { C_VFS_INODE_CAPACITY, FD_INODE, FD_KIND, FD_OFFSET, THISTLE_FD_READ, THISTLE_FD_WRITE, THISTLE_FD_FILE, V_DATA, V_RESIDENT, P_MAP_TABLE, P_MAP_COUNT, THISTLE_MAP_STRIDE, M_INODE, M_ADDRESS, M_END, M_FLAGS, M_FILE_RIGHTS, M_FILE_OFFSET, M_PROTECTION, P_SHARED_FILE_MAPS } from "../native/abi.js";
 import { loadU32, loadU64, storeU32, storeU64 } from "../native/memory.js";
-import type { ThistleMemory } from "../native/memory.js";
+import type { HostMemory } from "./native-access.js";
 import { thistleVfsAccess, thistleVfsFileSize, thistleVfsRoot, thistleVfsIdentity, descriptorAccessStatus, descriptorReadCount, descriptorWriteOffset, residentFits, inodeAt, arenaInodeStatus } from "../native/vfs.js";
 import { thistleVfsBacking, thistleVfsBackingVersion, thistleVfsCommitBacking, thistleVfsCommitDescriptorBacking, thistleVfsMappingInode, thistleVfsCommitMappingBacking, thistleVfsMappingStale, thistleVfsMappingRefreshed } from "../native/vfs-backing.js";
 
@@ -70,20 +70,19 @@ interface Payload {
 
 /** Byte carriers only. Kernel memory owns all inode, permission and quota state. */
 export class HostBacking {
-  private static readonly mounts = new WeakMap<ThistleMemory, HostBacking>();
   private readonly payloads = new Map<number, Payload>();
   private sequence = 1;
   private readonly root: { readonly ino: number; readonly identity: bigint };
 
-  constructor(private readonly memory: ThistleMemory, root: { readonly ino: number; readonly identity: bigint } | null = null) {
+  constructor(private readonly memory: HostMemory, root: { readonly ino: number; readonly identity: bigint } | null = null) {
     this.root = root === null ? withVfsLock(memory, () => {
       const ino = thistleVfsRoot(memory);
       return { ino, identity: thistleVfsIdentity(memory, ino) };
     }) : { ino: root.ino, identity: root.identity };
     if (this.root.identity === 0n) bad("ENOENT", "missing backing storage mount");
-    const previous = HostBacking.mounts.get(memory) ?? null;
+    const previous = memory.transports.backing;
     if (previous !== null && previous.root.ino === this.root.ino && previous.root.identity === this.root.identity) bad("EBUSY", "mount already has a byte carrier registry");
-    HostBacking.mounts.set(memory, this);
+    memory.transports.backing = this;
   }
 
   /** Find the host transport only when the live descriptor refers to a carrier. */
@@ -91,7 +90,7 @@ export class HostBacking {
     const memory = descriptor.process.memory;
     return descriptor.withStorage(state => {
       if (thistleVfsBacking(memory, loadU32(memory, state + FD_INODE)) === 0) return null;
-      const backing = HostBacking.mounts.get(memory) ?? bad("EIO", "mount has no byte carrier registry");
+      const backing = memory.transports.backing ?? bad("EIO", "mount has no byte carrier registry");
       backing.checkMountLocked();
       return backing;
     });
@@ -102,7 +101,7 @@ export class HostBacking {
     const memory = descriptor.process.memory;
     return descriptor.withStorage(state => {
       if (loadU32(memory, state + FD_KIND) !== THISTLE_FD_FILE) return null;
-      const backing = HostBacking.mounts.get(memory) ?? null;
+      const backing = memory.transports.backing;
       if (backing !== null) backing.checkMountLocked();
       return backing;
     });
@@ -324,7 +323,7 @@ export class HostBacking {
 
   /** Select the byte registry associated with the process's canonical mount. */
   static forMapping(process: HostProcess): HostBacking {
-    return HostBacking.mounts.get(process.memory) ?? bad("EIO", "mount has no byte carrier registry");
+    return process.memory.transports.backing ?? bad("EIO", "mount has no byte carrier registry");
   }
 
   private mappingStorage<T>(process: HostProcess, index: number, write: boolean,

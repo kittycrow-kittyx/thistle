@@ -8,7 +8,7 @@ import {
   THISTLE_PROCESS_RUNNING, THISTLE_PROCESS_STOPPED, P_SIGNAL_LAST, P_SIGNAL_MASK,
 } from "../native/abi.js";
 import { atomicLoadU64, atomicStoreI32, loadI32, loadU32, loadU64, storeU32, storeU64 } from "../native/memory.js";
-import type { ThistleMemory } from "../native/memory.js";
+import type { HostMemory } from "./native-access.js";
 import { readGroup } from "../native/credentials.js";
 import { processAt } from "../native/state.js";
 import { thistleProcessInstallCredentials, thistleProcessRecord, thistleProcessIdentity, thistleProcessGroups, thistleProcessUmask } from "../native/process-state.js";
@@ -52,7 +52,7 @@ export interface HostIdentity {
 export class HostProcess {
   readonly pid: number;
 
-  constructor(readonly memory: ThistleMemory, readonly hart: number) {
+  constructor(readonly memory: HostMemory, readonly hart: number) {
     this.pid = withNativeLock(memory, C_PROCESS_LOCK, () => {
       const record = thistleProcessRecord(memory, hart);
       if (record === 0xffffffff) bad("ESRCH", "missing canonical process");

@@ -49,3 +49,20 @@ test("character transports use the native open permission and inode lifetime", (
   assert.deepEqual([...fresh.readFile(1)], [0]);
   fresh.close();
 });
+
+test("device transports are isolated between canonical memory instances", () => {
+  const open = (value: number) => {
+    const memory = mountedKernel(), root = new HostProcess(memory, 0);
+    storeU32(memory, C_FLAGS, loadU32(memory, C_FLAGS) | THISTLE_FLAG_HOST_TRANSPORT);
+    const inode = HostInode.resolve(root, "/").create(root, "device", 4, 0o600);
+    registerDevice(inode, root, { repeat: true, read: length => new Uint8Array(length).fill(value), write: bytes => bytes.length });
+    return HostDescriptor.openPath(root, "/device", 0);
+  };
+  const first = open(7), second = open(9);
+  assert.equal(first.inode, second.inode);
+  assert.deepEqual([...first.readFile(2)], [7, 7]);
+  assert.deepEqual([...second.readFile(2)], [9, 9]);
+  first.close();
+  assert.deepEqual([...second.readFile(1)], [9]);
+  second.close();
+});

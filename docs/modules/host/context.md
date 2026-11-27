@@ -16,3 +16,5 @@ failures return EAGAIN. Guest execution receives this same `memory` instance.
 `readyPids` snapshots ready identities from the native process table under
 the process lock. Callers may modify the returned array without changing
 canonical readiness.
+
+External transports are owned by the [host memory carrier](memory.md). The native kernel continues to own permissions and object lifetimes.

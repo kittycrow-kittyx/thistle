@@ -92,3 +92,22 @@ test("lazy completion rejects an unlinked and recycled inode slot", async () => 
   await assert.rejects(pending, { code: "ENOENT" });
   assert.deepEqual([...await store.read(inode, root)], [7, 8]);
 });
+
+test("byte carriers are isolated between canonical memory instances", async () => {
+  const create = (byte: number) => {
+    const memory = mountedKernel(), process = new HostProcess(memory, 0);
+    const inode = withImage(memory, 1, input => {
+      memory.bytes[input] = 102;
+      return process.withFilesystem(proc => thistleVfsCreate(memory, proc, 1, input, 1, 1, 0o644, 0n));
+    });
+    assert.equal(thistleVfsSetQuota(memory, 1024n), 0);
+    const backing = new HostBacking(memory);
+    backing.setBytes(inode, process, Uint8Array.of(byte));
+    return { inode, process, backing };
+  };
+  const first = create(3), second = create(5);
+  assert.equal(first.inode, second.inode);
+  assert.deepEqual([...await first.backing.read(first.inode, first.process)], [3]);
+  assert.deepEqual([...await second.backing.read(second.inode, second.process)], [5]);
+  assert.throws(() => new HostBacking(first.process.memory), { code: "EBUSY" });
+});

@@ -145,6 +145,7 @@ bun run test
 - [test/native-process-host.test](modules/test/native-process-host.test.md)
 
 - [host/context](modules/host/context.md)
+- [host/memory](modules/host/memory.md)
 - [host/limits](modules/host/limits.md)
 
 - [test/native-guest-access.test](modules/test/native-guest-access.test.md)

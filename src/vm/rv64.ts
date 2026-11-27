@@ -606,26 +606,27 @@ export class Rv64 {
   }
 
   private thistleScheduleHost(session: ThistleThreadRuntime, hart: number): void {
+    this.thistleTrack(session, hart, this.thistleWriteHost(session, hart));
+  }
+
+  private async thistleWriteHost(session: ThistleThreadRuntime, hart: number): Promise<void> {
     const { exports } = session.core;
-    const work = (async () => {
-      const operation = exports.thistleHostOperation(0, hart);
-      if (operation !== THISTLE_HOST_WRITE) bad("ENOSYS", `unsupported Thistle host operation ${operation}`);
-      const descriptor = exports.thistleHostDescriptor(0, hart);
-      const address = exports.thistleHostAddress(0, hart);
-      const length = exports.thistleHostLength(0, hart);
-      let value: bigint;
-      try {
-        value = BigInt(await this.write(descriptor, this.m.read(address, length)));
-      } catch (caughtValue) { const error = caughtValue instanceof Error ? caughtValue : new Error(typeof caughtValue === "undefined" ? "undefined" : String(caughtValue));
-        if (!(error instanceof KErr)) throw error;
-        value = -BigInt(eno[error.code] ?? 5);
-      }
-      if (!this.executionActive) return;
-      if (exports.thistleResumeHost(0, hart, value) !== 0) {
-        bad("EPROTO", `Thistle hart ${hart} host resume failed`);
-      }
-    })();
-    this.thistleTrack(session, hart, work);
+    const operation = exports.thistleHostOperation(0, hart);
+    if (operation !== THISTLE_HOST_WRITE) bad("ENOSYS", `unsupported Thistle host operation ${operation}`);
+    const descriptor = exports.thistleHostDescriptor(0, hart);
+    const address = exports.thistleHostAddress(0, hart);
+    const length = exports.thistleHostLength(0, hart);
+    let value: bigint;
+    try {
+      value = BigInt(await this.write(descriptor, this.m.read(address, length)));
+    } catch (caughtValue) { const error = caughtValue instanceof Error ? caughtValue : new Error(typeof caughtValue === "undefined" ? "undefined" : String(caughtValue));
+      if (!(error instanceof KErr)) throw error;
+      value = -BigInt(eno[error.code] ?? 5);
+    }
+    if (!this.executionActive) return;
+    if (exports.thistleResumeHost(0, hart, value) !== 0) {
+      bad("EPROTO", `Thistle hart ${hart} host resume failed`);
+    }
   }
 
   private thistleCloneThread(flags: bigint, stack: bigint, parentTid: bigint, tls: bigint, childTid: bigint): bigint {
@@ -752,41 +753,50 @@ export class Rv64 {
   }
 
   private async call(n: number): Promise<bigint> {
-    const a = this.x;
+    // Capture the issuing hart's six Linux syscall operands before any asynchronous host operation.
+    const memory = this.nativeMemory;
+    if (memory === null) return bad("EPROTO", "syscall without canonical memory");
+    const hart = this.thistleActiveHart;
+    const arg0 = thistleHartGetX(memory, hart, 10);
+    const arg1 = thistleHartGetX(memory, hart, 11);
+    const arg2 = thistleHartGetX(memory, hart, 12);
+    const arg3 = thistleHartGetX(memory, hart, 13);
+    const arg4 = thistleHartGetX(memory, hart, 14);
+    const arg5 = thistleHartGetX(memory, hart, 15);
     switch (n) {
-      case 17: { const b = enc(this.s.cwd + "\0"); return BigInt(this.copy(b, ux(requireValue(a[10] ?? null, "src/vm/rv64.ts:1332")), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1332"), "getcwd length", MAX_IO))); }
+      case 17: { const b = enc(this.s.cwd + "\0"); return BigInt(this.copy(b, ux(arg0), this.nat(arg1, "getcwd length", MAX_IO))); }
       case 19: return BigInt(this.events.createEventfd(
-        this.nat(requireValue(a[10] ?? null, "src/vm/rv64.ts:1334"), "eventfd initial value", 0xffffffff),
-        this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1335"), "eventfd flags", 0xffffffff),
+        this.nat(arg0, "eventfd initial value", 0xffffffff),
+        this.nat(arg1, "eventfd flags", 0xffffffff),
       ));
       case 20: return BigInt(this.events.createEpoll(
-        this.nat(requireValue(a[10] ?? null, "src/vm/rv64.ts:1338"), "epoll flags", 0xffffffff),
+        this.nat(arg0, "epoll flags", 0xffffffff),
       ));
       case 21: return BigInt(this.events.ctl(
-        this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1341")), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1341"), "epoll operation", 3),
-        this.fd(requireValue(a[12] ?? null, "src/vm/rv64.ts:1342")), ux(requireValue(a[13] ?? null, "src/vm/rv64.ts:1342")),
+        this.fd(arg0), this.nat(arg1, "epoll operation", 3),
+        this.fd(arg2), ux(arg3),
       ));
       case 22: return BigInt(await this.events.wait(
-        this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1345")), ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1345")),
-        this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1346"), "epoll maximum events", 4096),
-        Number(BigInt.asIntN(32, requireValue(a[13] ?? null, "src/vm/rv64.ts:1347"))),
+        this.fd(arg0), ux(arg1),
+        this.nat(arg2, "epoll maximum events", 4096),
+        Number(BigInt.asIntN(32, arg3)),
       ));
       case 23: {
-        const original = this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1350"));
+        const original = this.fd(arg0);
         const duplicate = this.s.dup(original, null);
         this.events.duplicate(original, duplicate);
         return BigInt(duplicate);
       }
-      case 24: return BigInt(this.dup3(requireValue(a[10] ?? null, "src/vm/rv64.ts:1355"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1355"), requireValue(a[12] ?? null, "src/vm/rv64.ts:1355")));
-      case 25: return BigInt(this.fcntl(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1356")), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1356"), "fcntl command", 0x7fffffff), requireValue(a[12] ?? null, "src/vm/rv64.ts:1356")));
-      case 29: return this.ioctl(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1357")), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1357"), "ioctl request", 0xffffffff), ux(requireValue(a[12] ?? null, "src/vm/rv64.ts:1357")));
-      case 34: this.s.mkdir(this.path(requireValue(a[10] ?? null, "src/vm/rv64.ts:1358"), this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1358"))), this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1358"), "mode", 0xffff)); return 0n;
-      case 35: { const p = this.path(requireValue(a[10] ?? null, "src/vm/rv64.ts:1359"), this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1359"))); this.s.rm(p, !!(this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1359"), "unlink flags", 0xffff) & 0x200)); return 0n; }
-      case 36: this.s.symlink(this.str(requireValue(a[10] ?? null, "src/vm/rv64.ts:1360")), this.path(requireValue(a[11] ?? null, "src/vm/rv64.ts:1360"), this.str(requireValue(a[12] ?? null, "src/vm/rv64.ts:1360")))); return 0n;
-      case 37: this.s.link(this.path(requireValue(a[10] ?? null, "src/vm/rv64.ts:1361"), this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1361"))), this.path(requireValue(a[12] ?? null, "src/vm/rv64.ts:1361"), this.str(requireValue(a[13] ?? null, "src/vm/rv64.ts:1361")))); return 0n;
-      case 38: this.s.mv(this.path(requireValue(a[10] ?? null, "src/vm/rv64.ts:1362"), this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1362"))), this.path(requireValue(a[12] ?? null, "src/vm/rv64.ts:1362"), this.str(requireValue(a[13] ?? null, "src/vm/rv64.ts:1362")))); return 0n;
+      case 24: return BigInt(this.dup3(arg0, arg1, arg2));
+      case 25: return BigInt(this.fcntl(this.fd(arg0), this.nat(arg1, "fcntl command", 0x7fffffff), arg2));
+      case 29: return this.ioctl(this.fd(arg0), this.nat(arg1, "ioctl request", 0xffffffff), ux(arg2));
+      case 34: this.s.mkdir(this.path(arg0, this.str(arg1)), this.nat(arg2, "mode", 0xffff)); return 0n;
+      case 35: { const p = this.path(arg0, this.str(arg1)); this.s.rm(p, !!(this.nat(arg2, "unlink flags", 0xffff) & 0x200)); return 0n; }
+      case 36: this.s.symlink(this.str(arg0), this.path(arg1, this.str(arg2))); return 0n;
+      case 37: this.s.link(this.path(arg0, this.str(arg1)), this.path(arg2, this.str(arg3))); return 0n;
+      case 38: this.s.mv(this.path(arg0, this.str(arg1)), this.path(arg2, this.str(arg3))); return 0n;
       case 276: {
-        const flags = this.nat(requireValue(a[14] ?? null, "src/vm/rv64.ts:1364"), "renameat2 flags", 0xffffffff);
+        const flags = this.nat(arg4, "renameat2 flags", 0xffffffff);
 
         // Linux RENAME_NOREPLACE is useful to musl and account-management
         // transactions. Exchange and whiteout flags are explicitly unsupported.
@@ -794,8 +804,8 @@ export class Rv64 {
           bad("EINVAL", "unsupported renameat2 flags");
         }
 
-        const from = this.path(requireValue(a[10] ?? null, "src/vm/rv64.ts:1372"), this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1372")));
-        const to = this.path(requireValue(a[12] ?? null, "src/vm/rv64.ts:1373"), this.str(requireValue(a[13] ?? null, "src/vm/rv64.ts:1373")));
+        const from = this.path(arg0, this.str(arg1));
+        const to = this.path(arg2, this.str(arg3));
 
         if (flags & 1) {
           let exists = true;
@@ -817,36 +827,36 @@ export class Rv64 {
         this.s.mv(from, to);
         return 0n;
       }
-      case 43: this.s.stat(this.str(requireValue(a[10] ?? null, "src/vm/rv64.ts:1393"))); return this.statfs(ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1393")));
-      case 44: { const fd = this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1394")); if (fd >= 3) this.s.fdStat(fd); return this.statfs(ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1394"))); }
-      case 45: await this.s.truncate(this.str(requireValue(a[10] ?? null, "src/vm/rv64.ts:1395")), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1395"), "file length", this.s.k.fs.cap)); return 0n;
-      case 46: await this.s.fdTruncate(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1396")), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1396"), "file length", this.s.k.fs.cap)); return 0n;
-      case 48: this.s.stat(this.path(requireValue(a[10] ?? null, "src/vm/rv64.ts:1397"), this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1397")))); return 0n;
-      case 49: this.s.cd(this.str(requireValue(a[10] ?? null, "src/vm/rv64.ts:1398"))); return 0n;
-      case 50: { this.s.fdChdir(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1399"))); return 0n; }
-      case 52: { this.s.fdChmod(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1400")), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1400"), "mode", 0xffff)); return 0n; }
-      case 53: this.s.chmod(this.path(requireValue(a[10] ?? null, "src/vm/rv64.ts:1401"), this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1401"))), this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1401"), "mode", 0xffff)); return 0n;
-      case 54: this.s.chown(this.path(requireValue(a[10] ?? null, "src/vm/rv64.ts:1402"), this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1402"))), this.owner(requireValue(a[12] ?? null, "src/vm/rv64.ts:1402"), "uid"), this.owner(requireValue(a[13] ?? null, "src/vm/rv64.ts:1402"), "gid")); return 0n;
-      case 55: { this.s.fdChown(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1403")), this.owner(requireValue(a[11] ?? null, "src/vm/rv64.ts:1403"), "uid"), this.owner(requireValue(a[12] ?? null, "src/vm/rv64.ts:1403"), "gid")); return 0n; }
-      case 56: return BigInt(await this.openat(requireValue(a[10] ?? null, "src/vm/rv64.ts:1404"), this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1404")), this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1404"), "open flags", 0xffffffff), this.nat(requireValue(a[13] ?? null, "src/vm/rv64.ts:1404"), "open mode", 0xffff)));
+      case 43: this.s.stat(this.str(arg0)); return this.statfs(ux(arg1));
+      case 44: { const fd = this.fd(arg0); if (fd >= 3) this.s.fdStat(fd); return this.statfs(ux(arg1)); }
+      case 45: await this.s.truncate(this.str(arg0), this.nat(arg1, "file length", this.s.k.fs.cap)); return 0n;
+      case 46: await this.s.fdTruncate(this.fd(arg0), this.nat(arg1, "file length", this.s.k.fs.cap)); return 0n;
+      case 48: this.s.stat(this.path(arg0, this.str(arg1))); return 0n;
+      case 49: this.s.cd(this.str(arg0)); return 0n;
+      case 50: { this.s.fdChdir(this.fd(arg0)); return 0n; }
+      case 52: { this.s.fdChmod(this.fd(arg0), this.nat(arg1, "mode", 0xffff)); return 0n; }
+      case 53: this.s.chmod(this.path(arg0, this.str(arg1)), this.nat(arg2, "mode", 0xffff)); return 0n;
+      case 54: this.s.chown(this.path(arg0, this.str(arg1)), this.owner(arg2, "uid"), this.owner(arg3, "gid")); return 0n;
+      case 55: { this.s.fdChown(this.fd(arg0), this.owner(arg1, "uid"), this.owner(arg2, "gid")); return 0n; }
+      case 56: return BigInt(await this.openat(arg0, this.str(arg1), this.nat(arg2, "open flags", 0xffffffff), this.nat(arg3, "open mode", 0xffff)));
       case 57: {
-        const fd = this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1406"));
+        const fd = this.fd(arg0);
         this.localSockets.delete(fd);
         this.events.close(fd);
         this.s.close(fd);
         return 0n;
       }
       case 59: {
-        const at = ux(requireValue(a[10] ?? null, "src/vm/rv64.ts:1413")), fl = this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1413"), "pipe flags", 0xffffffff); this.mem(at, 8, true);
+        const at = ux(arg0), fl = this.nat(arg1, "pipe flags", 0xffffffff); this.mem(at, 8, true);
         if (fl & ~(O_CLOEXEC | O_NONBLOCK)) bad("EINVAL", "unsupported pipe flags");
         const [rd, wr] = this.s.pipe();
         if (fl & O_CLOEXEC) { requireValue(this.s.p.fds.get(rd) ?? null, "src/vm/rv64.ts:1416").clo = true; requireValue(this.s.p.fds.get(wr) ?? null, "src/vm/rv64.ts:1416").clo = true; }
         this.m.set32(at, rd); this.m.set32(at + 4n, wr); return 0n;
       }
-      case 61: return BigInt(this.getdents(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1419")), ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1419")), this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1419"), "directory buffer length", MAX_IO)));
-      case 62: return BigInt(this.s.seek(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1420")), hostNumber(requireValue(a[11] ?? null, "src/vm/rv64.ts:1420"), "seek offset"), this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1420"), "seek whence", 2)));
+      case 61: return BigInt(this.getdents(this.fd(arg0), ux(arg1), this.nat(arg2, "directory buffer length", MAX_IO)));
+      case 62: return BigInt(this.s.seek(this.fd(arg0), hostNumber(arg1, "seek offset"), this.nat(arg2, "seek whence", 2)));
       case 63: {
-        const fd = this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1422")), at = ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1422")), z = this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1422"), "read length", MAX_IO);
+        const fd = this.fd(arg0), at = ux(arg1), z = this.nat(arg2, "read length", MAX_IO);
         const result = await this.events.read(fd, at, z);
         if (result !== null) return result;
         this.mem(at, z, true);
@@ -855,64 +865,64 @@ export class Rv64 {
         return BigInt(b.length);
       }
       case 64: {
-        const fd = this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1431")), at = ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1431")), z = this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1431"), "write length", MAX_IO);
+        const fd = this.fd(arg0), at = ux(arg1), z = this.nat(arg2, "write length", MAX_IO);
         const result = await this.events.write(fd, at, z);
         if (result !== null) return result;
         this.mem(at, z);
         return BigInt(await this.write(fd, this.m.read(at, z)));
       }
-      case 65: return BigInt(await this.readv(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1437")), ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1437")), this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1437"), "iovec count", 1024)));
-      case 66: return BigInt(await this.writev(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1438")), ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1438")), this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1438"), "iovec count", 1024)));
-      case 67: return BigInt(await this.pread(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1439")), ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1439")), this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1439"), "read length", MAX_IO), hostNumber(requireValue(a[13] ?? null, "src/vm/rv64.ts:1439"), "read offset")));
-      case 68: return BigInt(await this.pwrite(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1440")), ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1440")), this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1440"), "write length", MAX_IO), hostNumber(requireValue(a[13] ?? null, "src/vm/rv64.ts:1440"), "write offset")));
-      case 73: return BigInt(this.ppoll(ux(requireValue(a[10] ?? null, "src/vm/rv64.ts:1441")), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1441"), "poll descriptor count", 1024)));
-      case 78: { const b = enc(this.s.readlink(this.path(requireValue(a[10] ?? null, "src/vm/rv64.ts:1442"), this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1442"))))); return BigInt(this.copy(b, ux(requireValue(a[12] ?? null, "src/vm/rv64.ts:1442")), this.nat(requireValue(a[13] ?? null, "src/vm/rv64.ts:1442"), "readlink length", MAX_IO), true)); }
-      case 79: { const p = this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1443")), fl = this.nat(requireValue(a[13] ?? null, "src/vm/rv64.ts:1443"), "stat flags", 0xffff); return this.stat(this.path(requireValue(a[10] ?? null, "src/vm/rv64.ts:1443"), p), ux(requireValue(a[12] ?? null, "src/vm/rv64.ts:1443")), !(fl & 0x100)); }
-      case 80: return this.fstat(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1444")), ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1444")));
+      case 65: return BigInt(await this.readv(this.fd(arg0), ux(arg1), this.nat(arg2, "iovec count", 1024)));
+      case 66: return BigInt(await this.writev(this.fd(arg0), ux(arg1), this.nat(arg2, "iovec count", 1024)));
+      case 67: return BigInt(await this.pread(this.fd(arg0), ux(arg1), this.nat(arg2, "read length", MAX_IO), hostNumber(arg3, "read offset")));
+      case 68: return BigInt(await this.pwrite(this.fd(arg0), ux(arg1), this.nat(arg2, "write length", MAX_IO), hostNumber(arg3, "write offset")));
+      case 73: return BigInt(this.ppoll(ux(arg0), this.nat(arg1, "poll descriptor count", 1024)));
+      case 78: { const b = enc(this.s.readlink(this.path(arg0, this.str(arg1)))); return BigInt(this.copy(b, ux(arg2), this.nat(arg3, "readlink length", MAX_IO), true)); }
+      case 79: { const p = this.str(arg1), fl = this.nat(arg3, "stat flags", 0xffff); return this.stat(this.path(arg0, p), ux(arg2), !(fl & 0x100)); }
+      case 80: return this.fstat(this.fd(arg0), ux(arg1));
       case 81: case 82: case 83: return 0n;
-      case 88: return this.utimens(requireValue(a[10] ?? null, "src/vm/rv64.ts:1446"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1446"), requireValue(a[12] ?? null, "src/vm/rv64.ts:1446"), requireValue(a[13] ?? null, "src/vm/rv64.ts:1446"));
+      case 88: return this.utimens(arg0, arg1, arg2, arg3);
       case 93:
         if (this.thistleThreads && this.thistleActiveHart !== 0) {
-          this.thistleThreadExit(this.thistleActiveHart, Number(ux(requireValue(a[10] ?? null, "src/vm/rv64.ts:1449")) & 255n));
+          this.thistleThreadExit(this.thistleActiveHart, Number(ux(arg0) & 255n));
           return 0n;
         }
-        return this.vf ? this.vfExit(requireValue(a[10] ?? null, "src/vm/rv64.ts:1452")) : (this.exit(requireValue(a[10] ?? null, "src/vm/rv64.ts:1452")), 0n);
-      case 94: return this.vf ? this.vfExit(requireValue(a[10] ?? null, "src/vm/rv64.ts:1453")) : (this.exit(requireValue(a[10] ?? null, "src/vm/rv64.ts:1453")), 0n);
+        return this.vf ? this.vfExit(arg0) : (this.exit(arg0), 0n);
+      case 94: return this.vf ? this.vfExit(arg0) : (this.exit(arg0), 0n);
       case 96: return this.thistleThreads
-        ? this.thistleSetClearTid(requireValue(a[10] ?? null, "src/vm/rv64.ts:1455")) : BigInt(this.s.pid);
+        ? this.thistleSetClearTid(arg0) : BigInt(this.s.pid);
       case 98: return this.thistleThreads
-        ? this.thistleFutex(requireValue(a[10] ?? null, "src/vm/rv64.ts:1457"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1457"), requireValue(a[12] ?? null, "src/vm/rv64.ts:1457"), requireValue(a[13] ?? null, "src/vm/rv64.ts:1457"))
-        : this.futex(requireValue(a[10] ?? null, "src/vm/rv64.ts:1458"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1458"), requireValue(a[12] ?? null, "src/vm/rv64.ts:1458"), requireValue(a[13] ?? null, "src/vm/rv64.ts:1458"));
+        ? this.thistleFutex(arg0, arg1, arg2, arg3)
+        : this.futex(arg0, arg1, arg2, arg3);
       case 99: return 0n;
-      case 101: await this.sleepTs(ux(requireValue(a[10] ?? null, "src/vm/rv64.ts:1460"))); return 0n;
-      case 113: return this.clock(hostNumber(requireValue(a[10] ?? null, "src/vm/rv64.ts:1461"), "clock id"), ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1461")));
-      case 114: return this.clockRes(hostNumber(requireValue(a[10] ?? null, "src/vm/rv64.ts:1462"), "clock id"), ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1462")));
-      case 115: return this.clockSleep(requireValue(a[10] ?? null, "src/vm/rv64.ts:1463"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1463"), requireValue(a[12] ?? null, "src/vm/rv64.ts:1463"));
-      case 122: return this.setAffinity(requireValue(a[10] ?? null, "src/vm/rv64.ts:1464"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1464"), requireValue(a[12] ?? null, "src/vm/rv64.ts:1464"));
-      case 123: return this.getAffinity(requireValue(a[10] ?? null, "src/vm/rv64.ts:1465"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1465"), requireValue(a[12] ?? null, "src/vm/rv64.ts:1465"));
+      case 101: await this.sleepTs(ux(arg0)); return 0n;
+      case 113: return this.clock(hostNumber(arg0, "clock id"), ux(arg1));
+      case 114: return this.clockRes(hostNumber(arg0, "clock id"), ux(arg1));
+      case 115: return this.clockSleep(arg0, arg1, arg2);
+      case 122: return this.setAffinity(arg0, arg1, arg2);
+      case 123: return this.getAffinity(arg0, arg1, arg2);
       case 124: await this.s.yield(); return 0n;
-      case 129: case 130: case 131: return BigInt(this.s.kill(hostNumber(n === 129 ? requireValue(a[10] ?? null, "src/vm/rv64.ts:1467") : requireValue(a[11] ?? null, "src/vm/rv64.ts:1467"), "pid"), this.nat(n === 129 ? requireValue(a[11] ?? null, "src/vm/rv64.ts:1467") : requireValue(a[12] ?? null, "src/vm/rv64.ts:1467"), "signal", 64) as 0 | 1 | 2 | 9 | 13 | 15));
+      case 129: case 130: case 131: return BigInt(this.s.kill(hostNumber(n === 129 ? arg0 : arg1, "pid"), this.nat(n === 129 ? arg1 : arg2, "signal", 64) as 0 | 1 | 2 | 9 | 13 | 15));
       case 132: case 134: case 135: return 0n;
-      case 160: return this.uname(ux(requireValue(a[10] ?? null, "src/vm/rv64.ts:1469")));
-      case 153: return this.times(ux(requireValue(a[10] ?? null, "src/vm/rv64.ts:1470")));
-      case 163: return this.limit(0n, requireValue(a[10] ?? null, "src/vm/rv64.ts:1471"), 0n, requireValue(a[11] ?? null, "src/vm/rv64.ts:1471"));
-      case 164: return this.limit(0n, requireValue(a[10] ?? null, "src/vm/rv64.ts:1472"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1472"), 0n);
-      case 165: return this.usage(requireValue(a[10] ?? null, "src/vm/rv64.ts:1473"), ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1473")));
-      case 166: { const old = this.s.umask; this.s.umask = this.nat(requireValue(a[10] ?? null, "src/vm/rv64.ts:1474"), "umask", 0o777); return BigInt(old); }
-      case 168: return this.getcpu(requireValue(a[10] ?? null, "src/vm/rv64.ts:1475"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1475"));
-      case 169: return this.timeval(ux(requireValue(a[10] ?? null, "src/vm/rv64.ts:1476")));
-      case 143: this.s.setRegid(this.idOrKeep(requireValue(a[10] ?? null, "src/vm/rv64.ts:1477")), this.idOrKeep(requireValue(a[11] ?? null, "src/vm/rv64.ts:1477"))); return 0n;
-      case 144: this.s.setGid(this.owner(requireValue(a[10] ?? null, "src/vm/rv64.ts:1478"), "gid")); return 0n;
-      case 145: this.s.setReuid(this.idOrKeep(requireValue(a[10] ?? null, "src/vm/rv64.ts:1479")), this.idOrKeep(requireValue(a[11] ?? null, "src/vm/rv64.ts:1479"))); return 0n;
-      case 146: this.s.setUid(this.owner(requireValue(a[10] ?? null, "src/vm/rv64.ts:1480"), "uid")); return 0n;
-      case 147: this.s.setResuid(this.idOrKeep(requireValue(a[10] ?? null, "src/vm/rv64.ts:1481")), this.idOrKeep(requireValue(a[11] ?? null, "src/vm/rv64.ts:1481")), this.idOrKeep(requireValue(a[12] ?? null, "src/vm/rv64.ts:1481"))); return 0n;
-      case 148: return this.getres(this.addrPtr(requireValue(a[10] ?? null, "src/vm/rv64.ts:1482")), this.addrPtr(requireValue(a[11] ?? null, "src/vm/rv64.ts:1482")), this.addrPtr(requireValue(a[12] ?? null, "src/vm/rv64.ts:1482")), false);
-      case 149: this.s.setResgid(this.idOrKeep(requireValue(a[10] ?? null, "src/vm/rv64.ts:1483")), this.idOrKeep(requireValue(a[11] ?? null, "src/vm/rv64.ts:1483")), this.idOrKeep(requireValue(a[12] ?? null, "src/vm/rv64.ts:1483"))); return 0n;
-      case 150: return this.getres(this.addrPtr(requireValue(a[10] ?? null, "src/vm/rv64.ts:1484")), this.addrPtr(requireValue(a[11] ?? null, "src/vm/rv64.ts:1484")), this.addrPtr(requireValue(a[12] ?? null, "src/vm/rv64.ts:1484")), true);
-      case 151: return BigInt(this.s.setFsuid(this.owner(requireValue(a[10] ?? null, "src/vm/rv64.ts:1485"), "uid")));
-      case 152: return BigInt(this.s.setFsgid(this.owner(requireValue(a[10] ?? null, "src/vm/rv64.ts:1486"), "gid")));
-      case 158: return BigInt(this.getgroups(requireValue(a[10] ?? null, "src/vm/rv64.ts:1487"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1487")));
-      case 159: this.setgroups(requireValue(a[10] ?? null, "src/vm/rv64.ts:1488"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1488")); return 0n;
+      case 160: return this.uname(ux(arg0));
+      case 153: return this.times(ux(arg0));
+      case 163: return this.limit(0n, arg0, 0n, arg1);
+      case 164: return this.limit(0n, arg0, arg1, 0n);
+      case 165: return this.usage(arg0, ux(arg1));
+      case 166: { const old = this.s.umask; this.s.umask = this.nat(arg0, "umask", 0o777); return BigInt(old); }
+      case 168: return this.getcpu(arg0, arg1);
+      case 169: return this.timeval(ux(arg0));
+      case 143: this.s.setRegid(this.idOrKeep(arg0), this.idOrKeep(arg1)); return 0n;
+      case 144: this.s.setGid(this.owner(arg0, "gid")); return 0n;
+      case 145: this.s.setReuid(this.idOrKeep(arg0), this.idOrKeep(arg1)); return 0n;
+      case 146: this.s.setUid(this.owner(arg0, "uid")); return 0n;
+      case 147: this.s.setResuid(this.idOrKeep(arg0), this.idOrKeep(arg1), this.idOrKeep(arg2)); return 0n;
+      case 148: return this.getres(this.addrPtr(arg0), this.addrPtr(arg1), this.addrPtr(arg2), false);
+      case 149: this.s.setResgid(this.idOrKeep(arg0), this.idOrKeep(arg1), this.idOrKeep(arg2)); return 0n;
+      case 150: return this.getres(this.addrPtr(arg0), this.addrPtr(arg1), this.addrPtr(arg2), true);
+      case 151: return BigInt(this.s.setFsuid(this.owner(arg0, "uid")));
+      case 152: return BigInt(this.s.setFsgid(this.owner(arg0, "gid")));
+      case 158: return BigInt(this.getgroups(arg0, arg1));
+      case 159: this.setgroups(arg0, arg1); return 0n;
       case 172: return BigInt(this.s.pid);
       case 173: return BigInt(this.s.ppid);
       case 174: return BigInt(this.s.uid);
@@ -920,30 +930,30 @@ export class Rv64 {
       case 176: return BigInt(this.s.gid);
       case 177: return BigInt(this.s.egid);
       case 178: return BigInt(withValue(this.thistleThreads, value => value.tids.get(this.thistleActiveHart) ?? null) ?? this.s.pid);
-      case 179: return this.sysinfo(ux(requireValue(a[10] ?? null, "src/vm/rv64.ts:1496")));
+      case 179: return this.sysinfo(ux(arg0));
       case 198: return BigInt(this.socket(
-        this.nat(requireValue(a[10] ?? null, "src/vm/rv64.ts:1498"), "socket domain", 0x7fffffff),
-        this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1499"), "socket type", 0xffffffff),
-        this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1500"), "socket protocol", 0x7fffffff),
+        this.nat(arg0, "socket domain", 0x7fffffff),
+        this.nat(arg1, "socket type", 0xffffffff),
+        this.nat(arg2, "socket protocol", 0x7fffffff),
       ));
       case 203: return this.connect(
-        this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1503")),
-        ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1504")),
-        this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1505"), "socket address length", 4096),
+        this.fd(arg0),
+        ux(arg1),
+        this.nat(arg2, "socket address length", 4096),
       );
-      case 215: this.unmap(ux(requireValue(a[10] ?? null, "src/vm/rv64.ts:1508")), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1508"), "mapping length", Number.MAX_SAFE_INTEGER)); return 0n;
-      case 216: return this.remap(requireValue(a[10] ?? null, "mremap address"), requireValue(a[11] ?? null, "mremap old length"), requireValue(a[12] ?? null, "mremap new length"));
+      case 215: this.unmap(ux(arg0), this.nat(arg1, "mapping length", Number.MAX_SAFE_INTEGER)); return 0n;
+      case 216: return this.remap(arg0, arg1, arg2);
       case 220: return this.thistleThreads
-        ? this.thistleCloneThread(requireValue(a[10] ?? null, "src/vm/rv64.ts:1511"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1511"), requireValue(a[12] ?? null, "src/vm/rv64.ts:1511"), requireValue(a[13] ?? null, "src/vm/rv64.ts:1511"), requireValue(a[14] ?? null, "src/vm/rv64.ts:1511"))
-        : this.clone(requireValue(a[10] ?? null, "src/vm/rv64.ts:1512"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1512"), requireValue(a[13] ?? null, "src/vm/rv64.ts:1512"));
-      case 221: return this.execve(this.str(requireValue(a[10] ?? null, "src/vm/rv64.ts:1513")), ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1513")), ux(requireValue(a[12] ?? null, "src/vm/rv64.ts:1513")));
-      case 222: return this.mmap(requireValue(a[10] ?? null, "src/vm/rv64.ts:1514"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1514"), requireValue(a[12] ?? null, "src/vm/rv64.ts:1514"), requireValue(a[13] ?? null, "src/vm/rv64.ts:1514"), requireValue(a[14] ?? null, "src/vm/rv64.ts:1514"), requireValue(a[15] ?? null, "src/vm/rv64.ts:1514"));
-      case 227: this.flushShared(ux(requireValue(a[10] ?? null, "src/vm/rv64.ts:1515")), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1515"), "sync length", Number.MAX_SAFE_INTEGER)); return 0n;
+        ? this.thistleCloneThread(arg0, arg1, arg2, arg3, arg4)
+        : this.clone(arg0, arg1, arg3);
+      case 221: return this.execve(this.str(arg0), ux(arg1), ux(arg2));
+      case 222: return this.mmap(arg0, arg1, arg2, arg3, arg4, arg5);
+      case 227: this.flushShared(ux(arg0), this.nat(arg1, "sync length", Number.MAX_SAFE_INTEGER)); return 0n;
       case 226: return 0n;
       case 233: return 0n;
-      case 261: return this.limit(requireValue(a[10] ?? null, "src/vm/rv64.ts:1518"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1518"), requireValue(a[12] ?? null, "src/vm/rv64.ts:1518"), requireValue(a[13] ?? null, "src/vm/rv64.ts:1518"));
-      case 278: return BigInt(this.random(ux(requireValue(a[10] ?? null, "src/vm/rv64.ts:1519")), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1519"), "random length", MAX_IO)));
-      case 260: return this.wait4(requireValue(a[10] ?? null, "src/vm/rv64.ts:1520"), ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1520")), requireValue(a[12] ?? null, "src/vm/rv64.ts:1520"), ux(requireValue(a[13] ?? null, "src/vm/rv64.ts:1520")));
+      case 261: return this.limit(arg0, arg1, arg2, arg3);
+      case 278: return BigInt(this.random(ux(arg0), this.nat(arg1, "random length", MAX_IO)));
+      case 260: return this.wait4(arg0, ux(arg1), arg2, ux(arg3));
       default: if (!this.miss.has(n)) { this.miss.add(n); this.s.k.log(`rv64: unsupported syscall ${n}`); } return -38n;
     }
   }

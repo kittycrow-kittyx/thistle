@@ -1,3 +1,6 @@
+import { directMemory } from "../native/memory.js";
+import type { HostBacking } from "./backing.js";
+import type { CharacterDevice } from "./devices.js";
 import { errnoNumbers } from "../core/errno.js";
 import { bad } from "../core/err.js";
 import { C_VFS_LOCK, THISTLE_THX_BUSY } from "../native/abi.js";
@@ -40,3 +43,17 @@ export const checkNative = (status: number): void => {
   }
   bad("EIO", "unknown canonical status " + status);
 };
+
+/** External transports live with their memory carrier; canonical state stays in its bytes. */
+export interface HostMemory extends ThistleMemory {
+  readonly transports: {
+    backing: HostBacking | null;
+    readonly devices: Map<number, { readonly identity: bigint; readonly device: CharacterDevice }>;
+  };
+}
+
+/** Allocate one canonical carrier and its external transports. */
+export const hostMemory = (bytes: number, shared = false): HostMemory => ({
+  ...directMemory(bytes, shared),
+  transports: { backing: null, devices: new Map<number, { readonly identity: bigint; readonly device: CharacterDevice }>() },
+});

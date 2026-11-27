@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { directMemory, storeU32 } from "../native/memory.js";
+import { storeU32 } from "../native/memory.js";
 import { withImage } from "../host/native-access.js";
-import type { ThistleMemory } from "../native/memory.js";
+import { hostMemory } from "../host/native-access.js";
+import type { HostMemory } from "../host/native-access.js";
 import { thistleHartInit, thistleImageRelease, thistleImageReserve, thistleKernelInitWithVfs, thistleProcessInit, thistleImageBegin, thistleImageSegment, thistleImageFinish, thistleStackPrepare } from "../native/kernel.js";
 import { thistleLoadVfs } from "../native/vfs.js";
 
@@ -14,8 +15,8 @@ export const rootVfsImage = (): Uint8Array => {
   return bytes;
 };
 
-export const mountedKernel = (harts = 1): ThistleMemory => {
-  const memory = directMemory(32 * 1024 * 1024);
+export const mountedKernel = (harts = 1): HostMemory => {
+  const memory = hostMemory(32 * 1024 * 1024);
   assert.equal(thistleKernelInitWithVfs(memory, harts, false, 16, 32, 4096), 0);
   const bytes = rootVfsImage(), image = thistleImageReserve(memory, bytes.length);
   memory.bytes.set(bytes, image);

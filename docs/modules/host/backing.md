@@ -49,3 +49,5 @@ A mount has one registered host byte carrier registry per root incarnation. `for
 `writeMappedSpans` merges dirty byte spans into the current resident payload, clips each at EOF and publishes the result once. It leaves clean bytes unchanged.
 
 `refreshMapping` copies a stale shared view and acknowledges its current inode revision under the canonical locks. `mappedRanges(process, true)` enumerates shared views only.
+
+External transports are owned by the [host memory carrier](memory.md). The native kernel continues to own permissions and object lifetimes.
