@@ -426,6 +426,13 @@ export const thistleKernelInitWithVfs = (
   if (physical < pageTables || physical > total || total - physical < THISTLE_GUEST_PAGE_SIZE) return THISTLE_FAULT_MEMORY;
   // Initialise all metadata before publishing the magic and table offsets to other harts.
   fill(memory, THISTLE_CONTROL_BASE, physical, 0);
+  // An unused hart has no process. Zero is a valid process slot, so clearing
+  // memory alone would make every uninitialised hart appear bound to PID 1.
+  let unboundHart: U32 = 0;
+  while (unboundHart < maxHarts) {
+    storeU32(memory, hartAt(unboundHart) + H_PROCESS_SLOT, INVALID_PROCESS);
+    unboundHart += 1;
+  }
   storeU32(memory, THISTLE_CONTROL_BASE + C_MAGIC, THISTLE_MAGIC);
   storeU32(memory, THISTLE_CONTROL_BASE + C_ABI, THISTLE_ABI_VERSION);
   storeU32(memory, THISTLE_CONTROL_BASE + C_FLAGS, threaded ? THISTLE_FLAG_THREADED : 0);
@@ -1462,6 +1469,8 @@ const mappingsCover = (memory: ThistleMemory, proc: Ptr, address: U64, end: U64)
 };
 
 const protectMappings = (memory: ThistleMemory, proc: Ptr, address: U64, length: U64, protection: U64): I64 => {
+  // Preflight the entire range, file rights and split capacity before changing
+  // any mapping. A rejected mprotect must leave all existing mappings intact.
   const top = atomicLoadU64(memory, proc + P_VIRTUAL_TOP);
   if (length === 0n || protection > 7n || (address & (MAP_PAGE - 1n)) !== 0n ||
       address >= top || length > top - address) return -22n;

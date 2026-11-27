@@ -129,6 +129,8 @@ export const thistleProcessReadGroups = (memory: ThistleMemory, hart: U32, outpu
 
 const attachBoundLocked = (memory: ThistleMemory, hart: U32, slot: U32): I32 => {
   const proc = processAt(memory, slot), at = hartAt(hart);
+  // Recheck the lease with every process hart locked, immediately before binding.
+  if (loadU32(memory, proc + P_VFORK_CHILD) !== 0 || loadU32(memory, proc + P_VFORK_PARENT) !== 0) return -16;
   const state = loadU32(memory, proc + P_STATE);
   if (state !== THISTLE_PROCESS_RUNNABLE && state !== THISTLE_PROCESS_WAITING && state !== THISTLE_PROCESS_RUNNING) return -3;
   if (loadU32(memory, at + H_PROCESS_SLOT) !== INVALID_POINTER) return -16;
@@ -143,8 +145,6 @@ const attachLocked = (memory: ThistleMemory, hart: U32, pid: U32): I32 => {
   if (loadU32(memory, hartAt(hart) + H_PROCESS_SLOT) !== INVALID_POINTER) return -16;
   const slot = processSlotByPid(memory, pid);
   if (slot === INVALID_POINTER) return -3;
-  const proc = processAt(memory, slot);
-  if (loadU32(memory, proc + P_VFORK_CHILD) !== 0 || loadU32(memory, proc + P_VFORK_PARENT) !== 0) return -16;
   if (!lockProcessHarts(memory, slot)) return -11;
   const result = attachBoundLocked(memory, hart, slot);
   unlockProcessHarts(memory, slot, loadU32(memory, C_MAX_HARTS), hart);
