@@ -44,17 +44,8 @@ export type Wfn = (b: Uint8Array) => number;
 export const credUid = (cred: Cred): number => cred.uid;
 export const credGid = (cred: Cred): number => cred.gid;
 
-export interface St {
-  ino: number;
-  kind: Kind;
-  mode: number;
-  uid: number;
-  gid: number;
-  nlink: number;
+export interface St extends Pick<VNode, "ino" | "kind" | "mode" | "uid" | "gid" | "nlink" | "at" | "mt" | "ct"> {
   size: number;
-  at: number;
-  mt: number;
-  ct: number;
 }
 
 export interface Hit { node: VNode; path: string }

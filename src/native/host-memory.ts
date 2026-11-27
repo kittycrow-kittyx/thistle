@@ -1,4 +1,3 @@
-import { requireValue } from "../core/err.js";
 import { bad } from "../core/err.js";
 import type { RvMemory } from "../vm/mem64.js";
 import { P_PAGE_COUNT, P_PAGE_TABLE, P_PAGE_CAPACITY, P_PID, THISTLE_GUEST_PAGE_SIZE, THISTLE_PAGE_ENTRY_SIZE, PAGE_DIRTY_FRAME } from "../native/abi.js";
@@ -146,31 +145,16 @@ break; }
     }
   }
 
-  u8(at: bigint): number { return requireValue(this.read(at, 1)[0] ?? null, "src/thistle/mem64.ts:73"); }
-  i8(at: bigint): bigint { return BigInt.asIntN(8, BigInt(this.u8(at))); }
-  u16(at: bigint): number { return this.number(at, 2); }
-  i16(at: bigint): bigint { return BigInt.asIntN(16, BigInt(this.u16(at))); }
-  u32(at: bigint): number { return this.number(at, 4) >>> 0; }
-  i32(at: bigint): bigint { return BigInt.asIntN(32, BigInt(this.u32(at))); }
-
-  u64(at: bigint): bigint {
-    const bytes = this.read(at, 8);
-    let value = 0n;
-    for (let index = 7; index >= 0; index--) value = value << 8n | BigInt(requireValue(bytes[index] ?? null, "src/thistle/mem64.ts:83"));
-    return value;
-  }
-
-  i64(at: bigint): bigint { return BigInt.asIntN(64, this.u64(at)); }
-
-  f32(at: bigint): number {
-    const bytes = this.read(at, 4);
-    return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getFloat32(0, true);
-  }
-
-  f64(at: bigint): number {
-    const bytes = this.read(at, 8);
-    return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getFloat64(0, true);
-  }
+  u8(at: bigint): number { return this.scalarView(at, 1).getUint8(0); }
+  i8(at: bigint): bigint { return BigInt(this.scalarView(at, 1).getInt8(0)); }
+  u16(at: bigint): number { return this.scalarView(at, 2).getUint16(0, true); }
+  i16(at: bigint): bigint { return BigInt(this.scalarView(at, 2).getInt16(0, true)); }
+  u32(at: bigint): number { return this.scalarView(at, 4).getUint32(0, true); }
+  i32(at: bigint): bigint { return BigInt(this.scalarView(at, 4).getInt32(0, true)); }
+  u64(at: bigint): bigint { return this.scalarView(at, 8).getBigUint64(0, true); }
+  i64(at: bigint): bigint { return this.scalarView(at, 8).getBigInt64(0, true); }
+  f32(at: bigint): number { return this.scalarView(at, 4).getFloat32(0, true); }
+  f64(at: bigint): number { return this.scalarView(at, 8).getFloat64(0, true); }
 
   set8(at: bigint, n: bigint | number): void { this.write(at, Uint8Array.of(Number(BigInt.asUintN(8, BigInt(n))))); }
   set16(at: bigint, n: bigint | number): void { this.setNumber(at, BigInt(n), 2); }
@@ -189,11 +173,9 @@ break; }
     this.write(at, bytes);
   }
 
-  private number(at: bigint, size: number): number {
+  private scalarView(at: bigint, size: number): DataView {
     const bytes = this.read(at, size);
-    let value = 0;
-    for (let index = size - 1; index >= 0; index--) value = value * 256 + requireValue(bytes[index] ?? null, "src/thistle/mem64.ts:119");
-    return value;
+    return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   }
 
   private setNumber(at: bigint, n: bigint, size: number): void {

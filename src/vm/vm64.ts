@@ -1,11 +1,11 @@
 import { VmFiles } from "./files.js";
-import { bad, KErr, requireValue } from "../core/err.js";
+import { bad, KErr } from "../core/err.js";
 import type { Sig } from "../core/proc.js";
 import type { Sys } from "../core/sys.js";
 import { enc } from "../io/stream.js";
 import { Exe } from "../../thistle-asm/fmt.js";
 import { BY64_OP, I64_SZ, Op64 } from "../../thistle-asm/isa64.js";
-import { Sc, legacyErrnoNumbers as eno } from "./vm.js";
+import { Sc, registerLittleEndian, legacyErrnoNumbers as eno } from "./vm.js";
 import { Mem64 } from "./mem64.js";
 
 
@@ -23,7 +23,11 @@ const registerOps = new Set<Op64>([Op64.Xchg, Op64.Sex8, Op64.Sex16, Op64.Sex32,
 
 export class Vm64 {
   readonly r = new BigInt64Array(32);
+  private readonly regView = new DataView(this.r.buffer);
+  private reg(index: number): bigint { return this.regView.getBigInt64(index * 8, registerLittleEndian); }
   readonly f = new Float64Array(16);
+  private readonly floatView = new DataView(this.f.buffer);
+  private float(index: number): number { return this.floatView.getFloat64(index * 8, registerLittleEndian); }
   private memory: Mem64 | null = null;
   private get m(): Mem64 { return this.memory ?? bad("ENOEXEC", "no guest memory"); }
   private pc = 0n;
@@ -73,7 +77,7 @@ export class Vm64 {
     // Validate the opcode and both register banks before advancing the PC. Branch displacements are relative to the advanced instruction pointer.
     this.exec(this.pc, I64_SZ);
     const raw = this.m.read(this.pc, I64_SZ), v = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
-    const op = requireValue(raw[0] ?? null, "raw[0]") as Op64, d = requireValue(raw[1] ?? null, "raw[1]"), a = requireValue(raw[2] ?? null, "raw[2]"), b = requireValue(raw[3] ?? null, "raw[3]"), im = v.getBigInt64(8, true);
+    const op = v.getUint8(0) as Op64, d = v.getUint8(1), a = v.getUint8(2), b = v.getUint8(3), im = v.getBigInt64(8, true);
     const ins = BY64_OP.get(op) ?? null;
     if (!ins) return bad("ENOEXEC", `bad thistle64 opcode ${op} at 0x${this.pc.toString(16)}`);
     if (d > 31 || a > 31 || b > 31) bad("ENOEXEC", `bad thistle64 register at 0x${this.pc.toString(16)}`);
@@ -83,18 +87,18 @@ export class Vm64 {
     if (op === Op64.Sys) return this.sys(this.nat(im, "syscall", 65535));
     if (arithmeticOps.has(op)) return this.arithmeticStep(op, d, a, b, im);
     if (controlOps.has(op)) return this.controlStep(op, d, im);
-    if (memoryOps.has(op)) return this.memoryStep(op, d, requireValue(this.r[a] ?? null, "this.r[a]"), im);
+    if (memoryOps.has(op)) return this.memoryStep(op, d, this.reg(a), im);
     if (registerOps.has(op)) return this.registerStep(op, d, a);
     this.floatingStep(op, d, a, b, v);
   }
 
   private arithmeticStep(op: Op64, d: number, a: number, b: number, im: bigint): void {
     // Register writes are narrowed to 64 bits by set; unsigned arithmetic explicitly interprets both operands.
-    const x = requireValue(this.r[a] ?? null, "this.r[a]"), y = requireValue(this.r[b] ?? null, "this.r[b]");
+    const x = this.reg(a), y = this.reg(b);
     const sh = (n: bigint): bigint => u64(n) & 63n;
     switch (op) {
       case Op64.Nop: break;
-      case Op64.Halt: this.exit(requireValue(this.r[0] ?? null, "this.r[0]")); break;
+      case Op64.Halt: this.exit(this.reg(0)); break;
       case Op64.Mov: this.set(d, x); break;
       case Op64.Li: this.set(d, im); break;
       case Op64.Add: this.set(d, x + y); break;
@@ -132,7 +136,7 @@ export class Vm64 {
     // The PC already points to the next instruction; call stores that address for a subsequent return.
     switch (op) {
       case Op64.Jmp: this.jump(im); break;
-      case Op64.JmpR: this.pc = u64(requireValue(this.r[d] ?? null, "this.r[d]")); break;
+      case Op64.JmpR: this.pc = u64(this.reg(d)); break;
       case Op64.Je: if (this.z) this.jump(im); break;
       case Op64.Jne: if (!this.z) this.jump(im); break;
       case Op64.Jl: if (this.n !== this.o) this.jump(im); break;
@@ -144,21 +148,21 @@ export class Vm64 {
       case Op64.Ja: if (this.c && !this.z) this.jump(im); break;
       case Op64.Jae: if (this.c) this.jump(im); break;
       case Op64.Call: this.push(this.pc); this.jump(im); break;
-      case Op64.CallR: this.push(this.pc); this.pc = u64(requireValue(this.r[d] ?? null, "this.r[d]")); break;
-      case Op64.Ret: { const q = this.pop(); if (!q) this.exit(requireValue(this.r[0] ?? null, "this.r[0]")); else this.pc = u64(q); break; }
-      case Op64.Push: this.push(requireValue(this.r[d] ?? null, "this.r[d]")); break;
+      case Op64.CallR: this.push(this.pc); this.pc = u64(this.reg(d)); break;
+      case Op64.Ret: { const q = this.pop(); if (!q) this.exit(this.reg(0)); else this.pc = u64(q); break; }
+      case Op64.Push: this.push(this.reg(d)); break;
       case Op64.Pop: this.set(d, this.pop()); break;
-      case Op64.Enter: { const z = this.nat(im, "frame size", this.s.k.lim.stack); this.push(requireValue(this.r[29] ?? null, "this.r[29]")); this.r[29] = requireValue(this.r[30] ?? null, "this.r[30]"); this.r[30] = s64(requireValue(this.r[30] ?? null, "this.r[30]") - BigInt(z)); this.mem(u64(requireValue(this.r[30] ?? null, "this.r[30]")), z, true); break; }
-      case Op64.Leave: this.r[30] = requireValue(this.r[29] ?? null, "this.r[29]"); this.r[29] = this.pop(); break;
+      case Op64.Enter: { const z = this.nat(im, "frame size", this.s.k.lim.stack); this.push(this.reg(29)); this.r[29] = this.reg(30); this.r[30] = s64(this.reg(30) - BigInt(z)); this.mem(u64(this.reg(30)), z, true); break; }
+      case Op64.Leave: this.r[30] = this.reg(29); this.r[29] = this.pop(); break;
       default: bad("ENOEXEC", "unknown control instruction");
     }
   }
 
   private registerStep(op: Op64, d: number, a: number): void {
     // Flag materialisation reads the saved comparison flags without modifying them.
-    const x = requireValue(this.r[a] ?? null, "this.r[a]");
+    const x = this.reg(a);
     switch (op) {
-      case Op64.Xchg: { const q = requireValue(this.r[d] ?? null, "this.r[d]"); this.r[d] = x; this.r[a] = q; break; }
+      case Op64.Xchg: { const q = this.reg(d); this.r[d] = x; this.r[a] = q; break; }
       case Op64.Sex8: this.set(d, BigInt.asIntN(8, x)); break;
       case Op64.Sex16: this.set(d, BigInt.asIntN(16, x)); break;
       case Op64.Sex32: this.set(d, BigInt.asIntN(32, x)); break;
@@ -189,43 +193,43 @@ export class Vm64 {
       case Op64.Ld32U: { const q = u64(x + im); this.mem(q, 4); this.set(d, BigInt(this.m.u32(q))); break; }
       case Op64.Ld32S: { const q = u64(x + im); this.mem(q, 4); this.set(d, this.m.i32(q)); break; }
       case Op64.Ld64: { const q = u64(x + im); this.mem(q, 8); this.set(d, this.m.i64(q)); break; }
-      case Op64.St8: this.wr(u64(x + im), 1); this.m.set8(u64(x + im), requireValue(this.r[d] ?? null, "this.r[d]")); break;
-      case Op64.St16: this.wr(u64(x + im), 2); this.m.set16(u64(x + im), requireValue(this.r[d] ?? null, "this.r[d]")); break;
-      case Op64.St32: this.wr(u64(x + im), 4); this.m.set32(u64(x + im), requireValue(this.r[d] ?? null, "this.r[d]")); break;
-      case Op64.St64: this.wr(u64(x + im), 8); this.m.set64(u64(x + im), requireValue(this.r[d] ?? null, "this.r[d]")); break;
+      case Op64.St8: this.wr(u64(x + im), 1); this.m.set8(u64(x + im), this.reg(d)); break;
+      case Op64.St16: this.wr(u64(x + im), 2); this.m.set16(u64(x + im), this.reg(d)); break;
+      case Op64.St32: this.wr(u64(x + im), 4); this.m.set32(u64(x + im), this.reg(d)); break;
+      case Op64.St64: this.wr(u64(x + im), 8); this.m.set64(u64(x + im), this.reg(d)); break;
       default: bad("ENOEXEC", "unknown memory instruction");
     }
   }
 
   private floatingStep(op: Op64, d: number, a: number, b: number, v: DataView): void {
     // Floating loads and stores use integer address registers; comparisons materialise integer flags and register results.
-    const x = requireValue(this.r[a] ?? null, "this.r[a]");
+    const x = this.reg(a);
     const im = v.getBigInt64(8, true);
     switch (op) {
-      case Op64.FMov: this.f[d] = requireValue(this.f[a] ?? null, "this.f[a]"); break;
+      case Op64.FMov: this.f[d] = this.float(a); break;
       case Op64.FLi: this.f[d] = v.getFloat64(8, true); break;
-      case Op64.FAdd: this.f[d] = requireValue(this.f[a] ?? null, "this.f[a]") + requireValue(this.f[b] ?? null, "this.f[b]"); break;
-      case Op64.FSub: this.f[d] = requireValue(this.f[a] ?? null, "this.f[a]") - requireValue(this.f[b] ?? null, "this.f[b]"); break;
-      case Op64.FMul: this.f[d] = requireValue(this.f[a] ?? null, "this.f[a]") * requireValue(this.f[b] ?? null, "this.f[b]"); break;
-      case Op64.FDiv: this.f[d] = requireValue(this.f[a] ?? null, "this.f[a]") / requireValue(this.f[b] ?? null, "this.f[b]"); break;
-      case Op64.FNeg: this.f[d] = -requireValue(this.f[a] ?? null, "this.f[a]"); break;
-      case Op64.FAbs: this.f[d] = Math.abs(requireValue(this.f[a] ?? null, "this.f[a]")); break;
-      case Op64.FSqrt: this.f[d] = Math.sqrt(requireValue(this.f[a] ?? null, "this.f[a]")); break;
-      case Op64.FCmp: this.fcmp(requireValue(this.f[a] ?? null, "this.f[a]"), requireValue(this.f[b] ?? null, "this.f[b]")); break;
-      case Op64.FSetE: this.set(d, this.frel(requireValue(this.f[a] ?? null, "this.f[a]"), requireValue(this.f[b] ?? null, "this.f[b]"), "eq") ? 1n : 0n); break;
-      case Op64.FSetNe: this.set(d, this.frel(requireValue(this.f[a] ?? null, "this.f[a]"), requireValue(this.f[b] ?? null, "this.f[b]"), "ne") ? 1n : 0n); break;
-      case Op64.FSetL: this.set(d, this.frel(requireValue(this.f[a] ?? null, "this.f[a]"), requireValue(this.f[b] ?? null, "this.f[b]"), "lt") ? 1n : 0n); break;
-      case Op64.FSetLe: this.set(d, this.frel(requireValue(this.f[a] ?? null, "this.f[a]"), requireValue(this.f[b] ?? null, "this.f[b]"), "le") ? 1n : 0n); break;
-      case Op64.FSetG: this.set(d, this.frel(requireValue(this.f[a] ?? null, "this.f[a]"), requireValue(this.f[b] ?? null, "this.f[b]"), "gt") ? 1n : 0n); break;
-      case Op64.FSetGe: this.set(d, this.frel(requireValue(this.f[a] ?? null, "this.f[a]"), requireValue(this.f[b] ?? null, "this.f[b]"), "ge") ? 1n : 0n); break;
+      case Op64.FAdd: this.f[d] = this.float(a) + this.float(b); break;
+      case Op64.FSub: this.f[d] = this.float(a) - this.float(b); break;
+      case Op64.FMul: this.f[d] = this.float(a) * this.float(b); break;
+      case Op64.FDiv: this.f[d] = this.float(a) / this.float(b); break;
+      case Op64.FNeg: this.f[d] = -this.float(a); break;
+      case Op64.FAbs: this.f[d] = Math.abs(this.float(a)); break;
+      case Op64.FSqrt: this.f[d] = Math.sqrt(this.float(a)); break;
+      case Op64.FCmp: this.fcmp(this.float(a), this.float(b)); break;
+      case Op64.FSetE: this.set(d, this.frel(this.float(a), this.float(b), "eq") ? 1n : 0n); break;
+      case Op64.FSetNe: this.set(d, this.frel(this.float(a), this.float(b), "ne") ? 1n : 0n); break;
+      case Op64.FSetL: this.set(d, this.frel(this.float(a), this.float(b), "lt") ? 1n : 0n); break;
+      case Op64.FSetLe: this.set(d, this.frel(this.float(a), this.float(b), "le") ? 1n : 0n); break;
+      case Op64.FSetG: this.set(d, this.frel(this.float(a), this.float(b), "gt") ? 1n : 0n); break;
+      case Op64.FSetGe: this.set(d, this.frel(this.float(a), this.float(b), "ge") ? 1n : 0n); break;
       case Op64.IToF: this.f[d] = Number(x); break;
       case Op64.UToF: this.f[d] = Number(u64(x)); break;
-      case Op64.FToI: this.set(d, this.ftoi(requireValue(this.f[a] ?? null, "this.f[a]"), false)); break;
-      case Op64.FToU: this.set(d, this.ftoi(requireValue(this.f[a] ?? null, "this.f[a]"), true)); break;
+      case Op64.FToI: this.set(d, this.ftoi(this.float(a), false)); break;
+      case Op64.FToU: this.set(d, this.ftoi(this.float(a), true)); break;
       case Op64.FLd32: { const q = u64(x + im); this.mem(q, 4); this.f[d] = this.m.f32(q); break; }
       case Op64.FLd64: { const q = u64(x + im); this.mem(q, 8); this.f[d] = this.m.f64(q); break; }
-      case Op64.FSt32: { const q = u64(x + im); this.mem(q, 4, true); this.m.setF32(q, requireValue(this.f[d] ?? null, "this.f[d]")); break; }
-      case Op64.FSt64: { const q = u64(x + im); this.mem(q, 8, true); this.m.setF64(q, requireValue(this.f[d] ?? null, "this.f[d]")); break; }
+      case Op64.FSt32: { const q = u64(x + im); this.mem(q, 4, true); this.m.setF32(q, this.float(d)); break; }
+      case Op64.FSt64: { const q = u64(x + im); this.mem(q, 8, true); this.m.setF64(q, this.float(d)); break; }
       default: bad("ENOEXEC", "unknown floating instruction");
     }
   }
@@ -237,39 +241,39 @@ export class Vm64 {
 
   private async call(n: number): Promise<bigint> {
     // The syscall boundary translates guest integer arguments into checked host values and returns ABI error numbers.
-    const a = this.r;
+    const arg0 = this.reg(0), arg1 = this.reg(1), arg2 = this.reg(2);
     switch (n) {
-      case Sc.Exit: this.exit(requireValue(a[0] ?? null, "a[0]")); return 0n;
-      case Sc.Read: { const at = u64(requireValue(a[1] ?? null, "a[1]")), z = this.nat(requireValue(a[2] ?? null, "a[2]"), "read length", MAX_IO); this.mem(at, z, true); const b = await this.files.read(this.fd(requireValue(a[0] ?? null, "a[0]")), z); this.m.write(at, b); return BigInt(b.length); }
-      case Sc.Write: { const at = u64(requireValue(a[1] ?? null, "a[1]")), z = this.nat(requireValue(a[2] ?? null, "a[2]"), "write length", MAX_IO); this.mem(at, z); const b = this.m.read(at, z), fd = this.fd(requireValue(a[0] ?? null, "a[0]")); return BigInt(fd === 1 ? await this.s.out(b) : fd === 2 ? await this.s.err(b) : this.s.fdw(fd, b)); }
-      case Sc.Open: return BigInt(this.files.open(this.str(requireValue(a[0] ?? null, "a[0]")), this.nat(requireValue(a[1] ?? null, "a[1]"), "open flags", 0xffffffff), this.nat(requireValue(a[2] ?? null, "a[2]"), "open mode", 0xffff)));
-      case Sc.Close: this.s.close(this.fd(requireValue(a[0] ?? null, "a[0]"))); return 0n;
-      case Sc.Seek: { const w = this.nat(requireValue(a[2] ?? null, "a[2]"), "seek whence", 2); return BigInt(this.s.seek(this.fd(requireValue(a[0] ?? null, "a[0]")), this.num(requireValue(a[1] ?? null, "a[1]"), "seek offset"), w)); }
-      case Sc.Unlink: this.s.rm(this.str(requireValue(a[0] ?? null, "a[0]"))); return 0n;
-      case Sc.Mkdir: this.s.mkdir(this.str(requireValue(a[0] ?? null, "a[0]")), this.nat(requireValue(a[1] ?? null, "a[1]"), "mode", 0xffff)); return 0n;
+      case Sc.Exit: this.exit(arg0); return 0n;
+      case Sc.Read: { const at = u64(arg1), z = this.nat(arg2, "read length", MAX_IO); this.mem(at, z, true); const b = await this.files.read(this.fd(arg0), z); this.m.write(at, b); return BigInt(b.length); }
+      case Sc.Write: { const at = u64(arg1), z = this.nat(arg2, "write length", MAX_IO); this.mem(at, z); const b = this.m.read(at, z), fd = this.fd(arg0); return BigInt(fd === 1 ? await this.s.out(b) : fd === 2 ? await this.s.err(b) : this.s.fdw(fd, b)); }
+      case Sc.Open: return BigInt(this.files.open(this.str(arg0), this.nat(arg1, "open flags", 0xffffffff), this.nat(arg2, "open mode", 0xffff)));
+      case Sc.Close: this.s.close(this.fd(arg0)); return 0n;
+      case Sc.Seek: { const w = this.nat(arg2, "seek whence", 2); return BigInt(this.s.seek(this.fd(arg0), this.num(arg1, "seek offset"), w)); }
+      case Sc.Unlink: this.s.rm(this.str(arg0)); return 0n;
+      case Sc.Mkdir: this.s.mkdir(this.str(arg0), this.nat(arg1, "mode", 0xffff)); return 0n;
       case Sc.GetPid: return BigInt(this.s.pid);
       case Sc.GetPPid: return BigInt(this.s.ppid);
-      case Sc.Brk: return this.doBrk(u64(requireValue(a[0] ?? null, "a[0]")));
+      case Sc.Brk: return this.doBrk(u64(arg0));
       case Sc.Clock: return BigInt(Date.now());
       case Sc.Yield: await this.s.yield(); return 0n;
-      case Sc.Stat: return this.stat(this.str(requireValue(a[0] ?? null, "a[0]")), u64(requireValue(a[1] ?? null, "a[1]")));
-      case Sc.GetCwd: return BigInt(this.copy(enc(this.s.cwd + "\0"), u64(requireValue(a[0] ?? null, "a[0]")), this.nat(requireValue(a[1] ?? null, "a[1]"), "getcwd length", MAX_IO)));
-      case Sc.Chdir: this.s.cd(this.str(requireValue(a[0] ?? null, "a[0]"))); return 0n;
-      case Sc.Rmdir: this.s.rm(this.str(requireValue(a[0] ?? null, "a[0]")), true); return 0n;
-      case Sc.Rename: this.s.mv(this.str(requireValue(a[0] ?? null, "a[0]")), this.str(requireValue(a[1] ?? null, "a[1]"))); return 0n;
-      case Sc.Chmod: this.s.chmod(this.str(requireValue(a[0] ?? null, "a[0]")), this.nat(requireValue(a[1] ?? null, "a[1]"), "mode", 0xffff)); return 0n;
-      case Sc.Random: return BigInt(this.random(u64(requireValue(a[0] ?? null, "a[0]")), this.nat(requireValue(a[1] ?? null, "a[1]"), "random length", MAX_IO)));
-      case Sc.Spawn: { const p = this.str(requireValue(a[0] ?? null, "a[0]")), av = this.vec(u64(requireValue(a[1] ?? null, "a[1]")), this.nat(requireValue(a[2] ?? null, "a[2]"), "argument count", 65536)); return BigInt(this.s.start(p, av).pid); }
-      case Sc.Wait: return BigInt(await this.s.wait(this.fd(requireValue(a[0] ?? null, "a[0]"))));
-      case Sc.Kill: { const q = this.num(requireValue(a[1] ?? null, "a[1]"), "signal"); if (![1, 2, 9, 13, 15].includes(q)) bad("EINVAL", `signal ${q}`); return BigInt(this.s.kill(this.num(requireValue(a[0] ?? null, "a[0]"), "pid"), q as Sig)); }
-      case Sc.Sleep: await this.s.sleep(this.nat(requireValue(a[0] ?? null, "a[0]"), "sleep duration", Number.MAX_SAFE_INTEGER)); return 0n;
+      case Sc.Stat: return this.stat(this.str(arg0), u64(arg1));
+      case Sc.GetCwd: return BigInt(this.copy(enc(this.s.cwd + "\0"), u64(arg0), this.nat(arg1, "getcwd length", MAX_IO)));
+      case Sc.Chdir: this.s.cd(this.str(arg0)); return 0n;
+      case Sc.Rmdir: this.s.rm(this.str(arg0), true); return 0n;
+      case Sc.Rename: this.s.mv(this.str(arg0), this.str(arg1)); return 0n;
+      case Sc.Chmod: this.s.chmod(this.str(arg0), this.nat(arg1, "mode", 0xffff)); return 0n;
+      case Sc.Random: return BigInt(this.random(u64(arg0), this.nat(arg1, "random length", MAX_IO)));
+      case Sc.Spawn: { const p = this.str(arg0), av = this.vec(u64(arg1), this.nat(arg2, "argument count", 65536)); return BigInt(this.s.start(p, av).pid); }
+      case Sc.Wait: return BigInt(await this.s.wait(this.fd(arg0)));
+      case Sc.Kill: { const q = this.num(arg1, "signal"); if (![1, 2, 9, 13, 15].includes(q)) bad("EINVAL", `signal ${q}`); return BigInt(this.s.kill(this.num(arg0, "pid"), q as Sig)); }
+      case Sc.Sleep: await this.s.sleep(this.nat(arg0, "sleep duration", Number.MAX_SAFE_INTEGER)); return 0n;
       case Sc.GetUid: return BigInt(this.s.uid);
       case Sc.GetGid: return BigInt(this.s.gid);
-      case Sc.Dup: return BigInt(this.s.dup(this.fd(requireValue(a[0] ?? null, "a[0]")), requireValue(a[1] ?? null, "a[1]") < 0n ? null : this.fd(requireValue(a[1] ?? null, "a[1]"))));
-      case Sc.Link: this.s.link(this.str(requireValue(a[0] ?? null, "a[0]")), this.str(requireValue(a[1] ?? null, "a[1]"))); return 0n;
-      case Sc.Symlink: this.s.symlink(this.str(requireValue(a[0] ?? null, "a[0]")), this.str(requireValue(a[1] ?? null, "a[1]"))); return 0n;
-      case Sc.Readlink: return BigInt(this.copy(enc(this.s.readlink(this.str(requireValue(a[0] ?? null, "a[0]")))), u64(requireValue(a[1] ?? null, "a[1]")), this.nat(requireValue(a[2] ?? null, "a[2]"), "readlink length", MAX_IO)));
-      case Sc.Truncate: { const p = this.str(requireValue(a[0] ?? null, "a[0]")), z = this.nat(requireValue(a[1] ?? null, "a[1]"), "file length", this.s.k.fs.cap); const b = this.s.readb(p), q = new Uint8Array(z); q.set(b.subarray(0, z)); this.s.writeb(p, q); return 0n; }
+      case Sc.Dup: return BigInt(this.s.dup(this.fd(arg0), arg1 < 0n ? null : this.fd(arg1)));
+      case Sc.Link: this.s.link(this.str(arg0), this.str(arg1)); return 0n;
+      case Sc.Symlink: this.s.symlink(this.str(arg0), this.str(arg1)); return 0n;
+      case Sc.Readlink: return BigInt(this.copy(enc(this.s.readlink(this.str(arg0))), u64(arg1), this.nat(arg2, "readlink length", MAX_IO)));
+      case Sc.Truncate: { const p = this.str(arg0), z = this.nat(arg1, "file length", this.s.k.fs.cap); const b = this.s.readb(p), q = new Uint8Array(z); q.set(b.subarray(0, z)); this.s.writeb(p, q); return 0n; }
       default: return bad("ENOSYS", `thistle64 syscall ${n}`);
     }
   }
@@ -319,7 +323,7 @@ export class Vm64 {
       this.m.write(sp, b); return sp;
     });
     const ep = put(env), ap = put(argv); sp &= -8n;
-    const vec = (a: bigint[]): bigint => { sp -= BigInt((a.length + 1) * 8); for (let i = 0; i < a.length; i++) this.m.set64(sp + BigInt(i * 8), requireValue(a[i] ?? null, "a[i]")); this.m.set64(sp + BigInt(a.length * 8), 0n); return sp; };
+    const vec = (a: bigint[]): bigint => { sp -= BigInt((a.length + 1) * 8); a.forEach((value, i) => this.m.set64(sp + BigInt(i * 8), value)); this.m.set64(sp + BigInt(a.length * 8), 0n); return sp; };
     const ev = vec(ep), av = vec(ap); sp = (sp - 8n) & -16n; this.m.set64(sp, 0n);
     if (sp < this.stackAt || sp < this.brk + 1024n * 1024n) bad("ENOMEM", "arguments leave no thistle64 stack");
     this.r[0] = BigInt(argv.length); this.r[1] = s64(av); this.r[2] = BigInt(env.length); this.r[3] = s64(ev); this.r[29] = 0n; this.r[30] = s64(sp); this.r[31] = 0n;
@@ -341,11 +345,11 @@ export class Vm64 {
   private set(d: number, n: bigint): void { this.r[d] = s64(n); }
 
   private push(n: bigint): void {
-    const sp = u64(requireValue(this.r[30] ?? null, "this.r[30]") - 8n); this.mem(sp, 8, true); this.m.set64(sp, n); this.r[30] = s64(sp);
+    const sp = u64(this.reg(30) - 8n); this.mem(sp, 8, true); this.m.set64(sp, n); this.r[30] = s64(sp);
   }
 
   private pop(): bigint {
-    const sp = u64(requireValue(this.r[30] ?? null, "this.r[30]")); this.mem(sp, 8); const n = this.m.i64(sp); this.r[30] = s64(sp + 8n); return n;
+    const sp = u64(this.reg(30)); this.mem(sp, 8); const n = this.m.i64(sp); this.r[30] = s64(sp + 8n); return n;
   }
 
   private exec(at: bigint, n: number): void {

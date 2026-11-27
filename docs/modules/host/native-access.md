@@ -2,6 +2,8 @@
 
 | Export | Contract |
 | --- | --- |
+| `HostMemory` | Native memory with per-instance backing and character-device transports. |
+| `hostMemory(bytes, shared)` | Allocate a carrier using `directMemory`; `shared` defaults to false. |
 | `withVfsLock` | Take the canonical VFS lock for a synchronous callback and release it on return or exception. Contention returns EAGAIN. |
 | `withImage` | Reserve a canonical input lease for a synchronous callback. Retry contended release on the host event loop. |
 
