@@ -142,6 +142,9 @@ export class FdTable {
     return native === null ? null : this.view(native);
   }
 
+  /** Return a live canonical descriptor, failing closed for an invalid slot. */
+  require(number: number): Fd { return this.get(number) ?? bad("EBADF", String(number)); }
+
   has(number: number): boolean { return HostDescriptor.find(this.process, number) !== null; }
 
   /** Cleanup may release host endpoints after the process record has been reaped. */
@@ -158,11 +161,12 @@ export class FdTable {
   inherit(number: number, source: Fd, cloexec = source.clo): void {
     const previous = this.get(number);
     source.hold();
+    let installed = false;
     try {
       this.capabilities.set(number, source.copyTo(this.process, number, cloexec));
-    } catch (error) {
-      source.release();
-      throw error instanceof Error ? error : new Error("descriptor inheritance failed");
+      installed = true;
+    } finally {
+      if (!installed) source.release();
     }
     if (previous !== null) previous.release();
   }

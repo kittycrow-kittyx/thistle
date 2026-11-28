@@ -27,6 +27,16 @@ export function requireValue<T>(value: T | null, expression: string): T {
   return value;
 }
 
+/** Read an optional array slot with an explicit missing-value result. */
+export function indexedValue<T>(values: ArrayLike<T>, index: number): T | null {
+  return values[index] ?? null;
+}
+
+/** Read an optional map entry with an explicit missing-value result. */
+export function mappedValue<K, V>(values: ReadonlyMap<K, V>, key: K): V | null {
+  return values.get(key) ?? null;
+}
+
 /** Apply an operation only when its input is present. */
 export function withValue<T, R>(value: T | null, use: (value: T) => R): R | null {
   if (value === null) return null;
