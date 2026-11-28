@@ -1,3 +1,3 @@
 # cap
 
-`Lim` holds filesystem, guest memory, stack and instruction-fuel ceilings. `Lim.host()` derives defaults from the host's reported RAM and accepts the `THISTLE_FS_MB`, `THISTLE_MEM_MB`, `THISTLE_STACK_MB` and `THISTLE_FUEL` environment variables. Invalid limits are rejected; zero fuel disables the instruction limit.
+`Lim` is the kernel resource-limit value: filesystem, guest memory, stack and instruction-fuel ceilings. No browser or Node discovery is performed here. Hosts explicitly supply the limits at kernel construction.

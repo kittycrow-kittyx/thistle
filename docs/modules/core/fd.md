@@ -1,0 +1,17 @@
+# fd
+
+`FdFlags` describes access, append and close-on-exec bits. An uninstalled `Fd` is a detached request with optional stream endpoints and a legacy file path. `FdTable.set` binds the request to a canonical host descriptor; `get` retrieves its attached capability. `pos`, `rd`, `wr`, `add` and `clo` consult the native slot once installed. `FdTable.next` finds an available slot; `delete` and `clear` close native records. Stream holds and releases remain host capability operations.
+
+`FdTable.require` rejects an absent native descriptor with EBADF. Inheritance releases newly held stream endpoints if installing the destination fails and preserves the original error.
+
+`keys`, `values` and `entries` return snapshots of occupied native slots, including inode descriptors allocated directly by native syscalls. `attachment` and `attachments` expose host endpoints for cleanup after reaping. The attachment map does not determine slot membership.
+
+Inode-bound `Fd` views expose native `readFile`, `writeFile` and `seekFile` operations.
+
+`materialiseFile` prepares deferred bytes through the descriptor's registered host transport. RV64 read/write callbacks await this method before using the synchronous descriptor operations.
+
+`Fd.copyTo` and `FdTable.inherit` retain the canonical slot's inode when duplicating or inheriting a live descriptor. Detached stream requests still bind as host capabilities. The destination owns its stream holds.
+
+`inodeView` and `directoryEntries` expose the native inode and directory data of a live descriptor without resolving its original path.
+
+`resizeFile(size)` materialises any retained prefix as needed and resizes through the open file descriptor without moving its cursor.

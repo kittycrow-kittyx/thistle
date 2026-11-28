@@ -19,6 +19,7 @@ Offsets in the global control block, including locks and backing-store layout.
 - `C_MEMORY_LOCK`
 - `C_PAGE_TABLE_BASE`
 - `C_PAGE_CAPACITY`
+- `C_PHYSICAL_FREE`
 - `C_PHYSICAL_NEXT`
 - `C_PHYSICAL_END`
 - `C_PROCESS_TABLE_BASE`
@@ -129,6 +130,7 @@ Offsets in a process record; credentials, page/mapping tables and descriptors.
 - `P_EGID`
 - `P_SGID`
 - `P_FSGID`
+- `P_GROUP_DATA`
 - `P_GROUP_COUNT`
 - `P_GROUPS`
 - `P_PAGE_TABLE`
@@ -170,6 +172,7 @@ Offsets within one descriptor record.
 - `FD_KIND`
 - `FD_FLAGS`
 - `FD_INODE`
+- `FD_IDENTITY`
 - `FD_OFFSET`
 - `FD_CURSOR`
 
@@ -236,6 +239,7 @@ ABI identities, fixed region sizes, status/error values, flags and capacities us
 - `THISTLE_WORKER_STRIDE`
 - `THISTLE_FLAG_THREADED`
 - `THISTLE_FLAG_HOST_STDIN`
+- `THISTLE_FLAG_HOST_TRANSPORT`
 - `THISTLE_GROUP_CAPACITY`
 - `THISTLE_PROCESS_STRIDE`
 - `THISTLE_DESCRIPTOR_STRIDE`
@@ -331,3 +335,60 @@ ABI identities, fixed region sizes, status/error values, flags and capacities us
 - `THISTLE_START_MEMORY`
 
 `THISTLE_MAP_BACKING_HOST_FILE` marks mappings whose bytes are backed by the hosted live VFS. These mappings delegate munmap so shared writes are flushed before frames are released.
+
+`C_PHYSICAL_FREE` points to the list of recycled guest frames in unused control-block space. Each free frame stores the next pointer in its first word. Allocation zeroes the frame before publishing a guest page.
+
+| ABI 11 layout | Value |
+| --- | --- |
+| `P_GROUP_DATA` extension head | Offset 344 |
+| Process stride | 352 bytes |
+| Inline supplementary IDs | 32 |
+| Previous memory ABI | 10; rejected by ABI 11 validation |
+
+| Additional ABI 11 field | Layout |
+| --- | --- |
+| `C_VFS_QUOTA` | Control offset 3368, u64 resident-byte limit |
+| `V_RESIDENT` | Inode offset 64, u64 host-resident bytes |
+| `V_VERSION` | Inode offset 72, u64 payload revision |
+| `THISTLE_VFS_HOST_BACKING` | Inode flag 1; `V_DATA` is an opaque host carrier handle |
+| `V_IDENTITY` | Inode offset 80, u64 incarnation token |
+| `THISTLE_VFS_INODE_STRIDE` | 88 bytes; VFS image format remains unchanged |
+
+`P_LEADER_HART` occupies process offset 348 in the untagged ABI 11 layout.
+
+| Canonical process phase | Value |
+| --- | --- |
+| `THISTLE_PROCESS_RUNNABLE` | 1, ready |
+| `THISTLE_PROCESS_WAITING` | 2, waiting |
+| `THISTLE_PROCESS_ZOMBIE` | 3, exited |
+| `THISTLE_PROCESS_RUNNING` | 4, host callback running |
+| `THISTLE_PROCESS_STOPPED` | 5, stopped phase |
+
+Hart status and events determine CPU readiness within a process. Updating a
+host callback phase does not park sibling guest harts.
+
+| Signal field in the existing ABI 11 process stride | Layout |
+| --- | --- |
+| `P_SIGNAL_PENDING` | Offset 328, one deferred supported signal |
+| `P_SIGNAL_LAST` | Offset 332, most recently delivered signal |
+| `P_SIGNAL_MASK` | Offset 336, unsigned 64-bit blocked mask |
+
+Candidate ABI 11 uses an 88-byte inode stride. `V_IDENTITY` at byte 80 identifies one incarnation of an inode slot independently of its mutable payload version. The on-disk image retains 56-byte inode records.
+
+`THISTLE_VFS_BUSY` is mount status 6. It reports retained file descriptors or a process working directory below the current root.
+
+Default VFS: 8192 inode slots, 16384 directory-entry slots. Reference mikuOS root: 4668 inodes, maximum ID 4679. `thistleKernelInitWithVfs` accepts explicit capacities.
+
+Each process has 256 descriptor slots of 32 bytes. The identity at offset 12 changes on allocation and survives close until the slot is reused. Exhausted identities are not recycled within a process lifetime.
+
+`THISTLE_FLAG_HOST_TRANSPORT` advertises host byte/stream transport for a mounted filesystem. It does not select a separate kernel or change inode authority.
+
+`M_INODE` retains the mapped inode independently of the original descriptor. `M_FILE_RIGHTS` records the open read/write rights. Both occupy reserved words; the map stride is unchanged.
+
+`PAGE_DIRTY_FRAME` is the auxiliary bitmap-frame pointer in a sparse guest page entry. Zero means no bitmap has been allocated.
+
+`P_SHARED_FILE_MAPS` records shared mapping presence and write authority. It is refreshed by mapping mutation and cleared on image reset.
+
+`M_VIEW_VERSION` retains the last materialised inode payload revision in each mapping. Mapping records now occupy 56 bytes in the unreleased candidate ABI. `H_SHARED_WRITE` marks a batch containing mapped writes. `P_SHARED_FILE_MAPS` uses bit 0 for shared views, bit 1 for retained shared write rights and bit 2 for multiple shared views.
+
+`P_VFORK_CHILD` and `P_VFORK_PARENT` hold reciprocal process IDs during a vfork address-space lease. Zero means no lease.

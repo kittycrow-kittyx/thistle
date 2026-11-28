@@ -1,9 +1,13 @@
+import { changeDirectory, currentDirectory, inheritDirectory } from "../host/cwd.js";
 import type { In, Out } from "../io/stream.js";
-import { credGid, credUid } from "../fs/vfs.js";
+import { Fd, FdTable } from "./fd.js";
+export { Fd, FdTable } from "./fd.js";
+export type { FdFlags } from "./fd.js";
+import type { HostProcess, HostProcessState, HostSignal } from "../host/process.js";
 import type { ProcCred } from "../fs/vfs.js";
 
-export type PState = "ready" | "run" | "sleep" | "stop" | "zombie";
-export type Sig = 0 | 1 | 2 | 9 | 13 | 15;
+export type PState = HostProcessState;
+export type Sig = HostSignal;
 
 export interface Io {
   sin: In;
@@ -26,79 +30,57 @@ export class ExecReplace extends Error {
   }
 }
 
-export interface FdFlags { rd: boolean; wr: boolean; add: boolean; clo: boolean }
-
-export class Fd {
-  pos = 0;
-
-  constructor(
-    public input: In | null = null,
-    public output: Out | null = null,
-    public path: string | null = null,
-    flags: FdFlags = { rd: false, wr: false, add: false, clo: false },
-  ) { this.rd = flags.rd; this.wr = flags.wr; this.add = flags.add; this.clo = flags.clo; }
-
-  rd: boolean;
-  wr: boolean;
-  add: boolean;
-  clo: boolean;
-
-  hold(): void {
-    if (this.input !== null) this.input.holdR();
-    if (this.output !== null) this.output.hold();
-  }
-
-  release(): void {
-    if (this.input !== null) this.input.releaseR();
-    if (this.output !== null) this.output.close();
-  }
-}
-
 export interface ProcInit {
-  pid: number;
-  ppid: number;
   pgid: number;
   cmd: string;
   argv: string[];
   cwd: string;
   env: Map<string, string>;
-  cred: ProcCred;
   io: Io;
 }
 
 export class Proc {
-  state: PState = "ready";
-  code: number | null = null;
-  sig: Sig | null = null;
+  // Completion retains a terminal receipt after reaping; live state belongs to native memory.
+  private finishedCode: number | null = null;
+  private finishedSignal: Sig | null = null;
+  get completed(): boolean { return this.finishedCode !== null; }
+  get state(): PState { return this.finishedCode === null ? this.native.phase.state : "zombie"; }
+  set state(value: PState) { this.native.setState(value); }
+  get code(): number | null { return this.finishedCode ?? this.native.phase.code; }
+  get sig(): Sig | null { return this.completed ? this.finishedSignal : this.native.lastSignal; }
   readonly born = Date.now();
   readonly ac = new AbortController();
-  readonly fds = new Map<number, Fd>();
-  readonly kids = new Set<number>();
-  mask = 0o022;
+  readonly fds: FdTable;
+  get kids(): ReadonlySet<number> { return this.native.children; }
   allHeld = false;
-  fsuid: number;
-  fsgid: number;
-  signalMask = 0n;
-  private pending: Sig | null = null;
+  get signalMask(): bigint { return this.native.signalMask; }
+  set signalMask(value: bigint) { this.setSignalMask(2, value); }
   readonly done: Promise<number>;
   private fin: ((n: number) => void) | null = null;
 
-  readonly pid: number;
-  readonly ppid: number;
-  pgid: number;
+  get pid(): number { return this.native.pid; }
+  get ppid(): number { return this.native.parentPid; }
+  get pgid(): number { return this.native.groupId; }
+  set pgid(value: number) { this.native.groupId = value; }
   cmd: string;
   argv: string[];
-  cwd: string;
+  get cwd(): string { return currentDirectory(this.native); }
+  set cwd(path: string) { changeDirectory(this.native, path); }
+  inheritCwd(parent: Proc): void { inheritDirectory(parent.native, this.native); }
   env: Map<string, string>;
-  cred: ProcCred;
+  get cred(): ProcCred { return this.native.identity().credentials; }
+  get fsuid(): number { return this.native.id("fsuid"); }
+  get fsgid(): number { return this.native.id("fsgid"); }
+  get mask(): number { return this.native.id("umask"); }
+  set mask(value: number) { this.native.setUmask(value); }
 
-  constructor(init: ProcInit) {
-    const { pid, ppid, pgid, cmd, argv, cwd, env, cred, io } = init;
-    this.pid = pid; this.ppid = ppid; this.pgid = pgid;
-    this.cmd = cmd; this.argv = argv; this.cwd = cwd;
-    this.env = env; this.cred = cred;
-    this.fsuid = credUid(cred);
-    this.fsgid = credGid(cred);
+  constructor(init: ProcInit, readonly native: HostProcess) {
+    const { pgid, cmd, argv, cwd, env, io } = init;
+    this.fds = new FdTable(native);
+    this.pgid = pgid;
+    this.cmd = cmd; this.argv = argv;
+    if (cwd !== "/") this.cwd = cwd;
+    this.env = env;
     this.fds.set(0, new Fd(io.sin, null, "/dev/stdin", { rd: true, wr: false, add: false, clo: false }));
     this.fds.set(1, new Fd(null, io.sout, "/dev/stdout", { rd: false, wr: true, add: false, clo: false }));
     this.fds.set(2, new Fd(null, io.serr, "/dev/stderr", { rd: false, wr: true, add: false, clo: false }));
@@ -116,39 +98,29 @@ export class Proc {
   }
 
   end(n: number): void {
-    if (this.code !== null) return;
-    this.code = n & 0xff;
-    this.state = "zombie";
+    if (this.finishedCode !== null) return;
+    this.native.finish(n & 0xff);
+    this.finishedSignal = this.native.lastSignal;
+    this.finishedCode = n & 0xff;
     const finish = this.fin;
     if (finish === null) throw new Error("missing process completion resolver");
-    finish(this.code);
+    finish(this.finishedCode);
   }
 
   signal(s: Sig): boolean {
-    if (s === 0) return true;
-    if (this.code !== null) return false;
-    const bit = 1n << BigInt(s - 1);
-    if (s !== 9 && (this.signalMask & bit)) { this.pending = s; return false; }
-    this.sig = s;
-    this.ac.abort(new Error(`signal ${s}`));
-    return true;
+    if (this.completed) return s === 0;
+    const deliver = this.native.queueSignal(s);
+    if (deliver && s !== 0) this.deliverSignal(s);
+    return deliver;
   }
 
   setSignalMask(how: 0 | 1 | 2, mask: bigint): bigint {
-    const old = this.signalMask, kill = 1n << 8n;
-    switch (how) {
-      case 0: this.signalMask |= mask; break;
-      case 1: this.signalMask &= ~mask; break;
-      default: this.signalMask = mask;
-    }
-    this.signalMask &= ~kill;
-    const p = this.pending;
-    if (p !== null && !(this.signalMask & (1n << BigInt(p - 1)))) {
-      this.pending = null;
-      this.signal(p);
-    }
-    return old;
+    const change = this.native.changeSignalMask(how, mask);
+    if (change.signal !== null) this.deliverSignal(change.signal);
+    return change.previous;
   }
+
+  private deliverSignal(signal: Sig): void { this.ac.abort(new Error(`signal ${signal}`)); }
 
   ms(): number { return Date.now() - this.born; }
 }

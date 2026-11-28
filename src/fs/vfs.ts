@@ -1,5 +1,17 @@
-import { bad, KErr, requireValue } from "../core/err.js";
+import { bad, KErr } from "../core/err.js";
 import { dec, enc } from "../io/stream.js";
+import { HostInode } from "../host/inode.js";
+import { HostDescriptor } from "../host/descriptor.js";
+import type { HostProcess } from "../host/process.js";
+import { RootVolume } from "../host/root.js";
+import { Chr, Dir, Reg, Sym, nodeView, statView } from "./nodes.js";
+import type { VNode } from "./nodes.js";
+import { norm, wild, wrx, splitParent, absolutePath } from "./paths.js";
+import type { TreeEnt } from "./tree.js";
+
+export { Chr, Dir, Reg, Sym, VNode, fmtMode, nodeView, statView, fileKind } from "./nodes.js";
+export { norm } from "./paths.js";
+export type { RegSource } from "../host/bytes.js";
 
 export interface Cred {
   uid: number;
@@ -29,465 +41,189 @@ export type Kind = "file" | "dir" | "link" | "char";
 export type Rfn = (n: number) => Uint8Array;
 export type Wfn = (b: Uint8Array) => number;
 
-/** A regular-file payload supplied lazily by a static browser root. */
-export interface RegSource {
-  readonly size: number;
-  readonly sum: string;
-  readonly head: Uint8Array | null;
-  load(): Promise<Uint8Array>;
+export const credUid = (cred: Cred): number => cred.uid;
+export const credGid = (cred: Cred): number => cred.gid;
+
+export interface St extends Pick<VNode, "ino" | "kind" | "mode" | "uid" | "gid" | "nlink" | "at" | "mt" | "ct"> {
+  size: number;
 }
 
-let next = 1;
-
-export abstract class VNode {
-  readonly ino = next++;
-  abstract readonly kind: Kind;
-  nlink = 1;
-  at = Date.now();
-  mt = this.at;
-  ct = this.at;
-
-  protected constructor(
-    public mode: number,
-    public uid = 0,
-    public gid = 0,
-  ) {}
-
-  touch(data = false): void {
-    const t = Date.now();
-    this.ct = t;
-    if (data) this.mt = t;
-  }
-}
-
-export interface RegOptions { mode: number; uid: number; gid: number; source: RegSource | null; copy: boolean }
-
-export class Reg extends VNode {
-  readonly kind = "file" as const;
-  data: Uint8Array;
-  sum: string | null;
-  source: RegSource | null;
-  private loading: Promise<Uint8Array> | null = null;
-
-  constructor(
-    data: Uint8Array | string = "",
-    options: RegOptions = { mode: 0o644, uid: 0, gid: 0, source: null, copy: true },
-  ) {
-    const { mode, uid, gid, source, copy } = options;
-    super(mode, uid, gid);
-    const bytes = typeof data === "string" ? enc(data) : data;
-    this.data = copy ? bytes.slice() : bytes;
-    this.source = source;
-    this.sum = source === null ? null : source.sum;
-  }
-
-  get size(): number { return this.source && !this.data.length ? this.source.size : this.data.length; }
-  get residentSize(): number { return this.data.length; }
-  get lazy(): boolean { return !!this.source && !this.data.length && this.source.size > 0; }
-
-  head(n: number): Uint8Array {
-    if (this.data.length || !this.source) return this.data.slice(0, n);
-    const head = this.source.head ?? null;
-    return head === null ? new Uint8Array() : head.slice(0, n);
-  }
-
-  async materialise(): Promise<Uint8Array> {
-    const source = this.source;
-    if (source === null || this.data.length || source.size === 0) return this.data;
-    if (this.loading !== null) return this.loading;
-    this.loading = source.load().then(bytes => {
-      if (this.source !== source) throw new Error("lazy regular-file source changed during load");
-      if (bytes.length !== source.size) throw new Error("lazy regular-file size mismatch");
-      this.data = bytes;
-      return this.data;
-    }).finally(() => { if (this.source === source) this.loading = null; });
-    return this.loading;
-  }
-
-  replace(bytes: Uint8Array): void {
-    this.data = bytes;
-    this.source = null;
-    this.loading = null;
-    this.sum = null;
-  }
-}
-
-export class Dir extends VNode {
-  readonly kind = "dir" as const;
-  readonly ent = new Map<string, VNode>();
-
-  constructor(mode = 0o755, uid = 0, gid = 0) { super(mode, uid, gid); }
-}
-
-export class Sym extends VNode {
-  readonly kind = "link" as const;
-
-  constructor(public to: string, uid = 0, gid = 0) { super(0o777, uid, gid); }
-}
-
+export interface Hit { node: VNode; path: string }
 export interface CharOptions { mode: number; repeat: boolean }
 
-export class Chr extends VNode {
-  readonly kind = "char" as const;
+interface Parent { readonly directory: HostInode; readonly name: string }
 
-  constructor(
-    public readonly rfn: Rfn,
-    public readonly wfn: Wfn,
-    uid: number,
-    gid: number,
-    options: CharOptions = { mode: 0o666, repeat: false },
-  ) { super(options.mode, uid, gid); this.repeat = options.repeat; }
+const OPEN_WRITE = 1, OPEN_CREATE = 0x40, OPEN_EXCLUSIVE = 0x80;
 
-  readonly repeat: boolean;
-}
-
-export interface St {
-  ino: number;
-  kind: Kind;
-  mode: number;
-  uid: number;
-  gid: number;
-  nlink: number;
-  size: number;
-  at: number;
-  mt: number;
-  ct: number;
-}
-
-export interface Hit {
-  node: VNode;
-  path: string;
-}
-
-const seg = (p: string): string[] => p.split("/").filter(x => x && x !== ".");
-const wild = (p: string): boolean => /[*?]|\[[^\]]+\]/.test(p);
-export const credUid = (c: Cred): number => c.uid;
-export const credGid = (c: Cred): number => c.gid;
-
-const wrx = (p: string): RegExp => {
-  let s = "^";
-  for (let i = 0; i < p.length; i++) {
-    const c = requireValue(p[i] ?? null, "p[i]");
-    if (c === "*") { s += "[^/]*"; continue; }
-    if (c === "?") { s += "[^/]"; continue; }
-    const z = c === "[" ? p.indexOf("]", i + 1) : -1;
-    if (z >= 0) {
-      const x = p.slice(i + 1, z);
-      s += "[" + (x.startsWith("!") ? "^" + x.slice(1) : x) + "]";
-      i = z;
-      continue;
-    }
-    s += c === "[" || /[.+^${}()|\\]/.test(c) ? "\\" + c : c;
-  }
-  return new RegExp(s + "$");
-};
-
-export const norm = (p: string, cwd = "/"): string => {
-  const src = p.startsWith("/") ? seg(p) : [...seg(cwd), ...seg(p)];
-  const out: string[] = [];
-  for (const x of src) {
-    if (x === "..") { out.pop(); continue; }
-    if (x !== ".") out.push(x);
-  }
-  return `/${out.join("/")}`;
-};
-
-export const fmtMode = (n: VNode): string => {
-  const k = n.kind === "dir" ? "d" : n.kind === "link" ? "l" : n.kind === "char" ? "c" : "-";
-  const m = n.mode;
-  const exec = (x: number, special: number, lo: string, hi: string): string => m & special ? m & x ? lo : hi : m & x ? "x" : "-";
-  return k +
-    (m & 0o400 ? "r" : "-") + (m & 0o200 ? "w" : "-") + exec(0o100, 0o4000, "s", "S") +
-    (m & 0o040 ? "r" : "-") + (m & 0o020 ? "w" : "-") + exec(0o010, 0o2000, "s", "S") +
-    (m & 0o004 ? "r" : "-") + (m & 0o002 ? "w" : "-") + exec(0o001, 0o1000, "t", "T");
-};
-
-function discardCreated(made: { dir: Dir; name: string } | null): void {
-  if (made !== null) made.dir.ent.delete(made.name);
-}
-
+/** A host syscall facade over the one mounted native filesystem. */
 export class Vfs {
-  readonly root = new Dir();
-  readonly cap: number;
+  private readonly volume: RootVolume;
 
-  constructor(cap = 16 * 1024 * 1024) { this.cap = cap; }
-
-  private ok(n: VNode, c: Cred, bit: number): boolean {
-    const uid = credUid(c), gid = credGid(c);
-    if (uid === 0) return true;
-    const sh = uid === n.uid ? 6 : gid === n.gid || c.groups.includes(n.gid) ? 3 : 0;
-    return !!((n.mode >> sh) & bit);
+  constructor(readonly authority: HostProcess, readonly cap: number) {
+    this.volume = new RootVolume(authority, cap);
   }
 
-  need(n: VNode, c: Cred, bit: number, p: string): void {
-    if (!this.ok(n, c, bit)) bad("EACCES", p);
+  get root(): Dir {
+    const root = this.at("/", this.authority).node;
+    return root instanceof Dir ? root : bad("EIO", "root is not a directory");
   }
 
-  at(p: string, cwd: string, c: Cred, follow = true): Hit {
-    const abs = norm(p, cwd);
-    return this.walk(abs, c, follow, 0);
+  private view(inode: HostInode, process: HostProcess): VNode {
+    return nodeView(inode, process, this.volume.backing);
   }
 
-  private walk(abs: string, c: Cred, follow: boolean, hops: number): Hit {
-    if (hops > 32) bad("ELOOP", abs);
-    if (abs === "/") return { node: this.root, path: "/" };
-    let n: VNode = this.root;
-    const done: string[] = [];
-    const a = seg(abs);
-    for (let i = 0; i < a.length; i++) {
-      const d = n instanceof Dir ? n : bad("ENOTDIR", `/${done.join("/")}`);
-      this.need(d, c, 1, `/${done.join("/")}` || "/");
-      const x = requireValue(a[i] ?? null, "a[i]");
-      const z = d.ent.get(x) ?? bad("ENOENT", abs);
-      const last = i === a.length - 1;
-      if (z instanceof Sym && (follow || !last)) {
-        const base = `/${done.join("/")}`;
-        const tail = a.slice(i + 1).join("/");
-        const dst = norm(z.to, base || "/") + (tail ? `/${tail}` : "");
-        return this.walk(norm(dst), c, follow, hops + 1);
-      }
-      n = z;
-      done.push(x);
+  at(path: string, process: HostProcess, follow = true): Hit {
+    this.volume.checkProcess(process);
+    const inode = HostInode.resolve(process, path, follow);
+    return { node: this.view(inode, process), path: absolutePath(path, this.volume.cwd(process)) };
+  }
+
+  need(node: VNode, process: HostProcess, bits: number): void { node.view.need(process, bits); }
+
+  private parent(path: string, process: HostProcess): Parent {
+    this.volume.checkProcess(process);
+    const { parent, name } = splitParent(path);
+    return { directory: HostInode.resolve(process, parent), name };
+  }
+
+  /** The trusted executable loader checks execute permission before accessing bytes. */
+  executable(path: string, process: HostProcess): Reg {
+    const node = this.at(path, process).node;
+    if (!(node instanceof Reg)) return bad("ENOEXEC", path);
+    node.view.need(process, 1);
+    return new Reg(node.view, this.authority, this.volume.backing);
+  }
+
+  readb(path: string, process: HostProcess): Uint8Array {
+    const node = this.at(path, process).node;
+    if (node instanceof Reg) return node.data;
+    if (!(node instanceof Chr)) return bad(node instanceof Dir ? "EISDIR" : "EINVAL", path);
+    const descriptor = HostDescriptor.open(process, node.view, 1);
+    try { return descriptor.readFile(65536); }
+    finally { descriptor.close(); }
+  }
+
+  read(path: string, process: HostProcess): string { return dec(this.readb(path, process)); }
+
+  /** Replace/append through a canonical open, including write-only files. */
+  writeb(path: string, bytes: Uint8Array, process: HostProcess, add = false, mode = 0o666): void {
+    let existing: VNode | null = null;
+    try { existing = this.at(path, process).node; }
+    catch (error) {
+      if (!(error instanceof KErr) || error.code !== "ENOENT") throw error instanceof Error ? error : new Error("filesystem resolution failed");
     }
-    n.at = Date.now();
-    return { node: n, path: abs };
-  }
-
-  private par(p: string, cwd: string, c: Cred): { dir: Dir; name: string; path: string } {
-    const abs = norm(p, cwd);
-    if (abs === "/") bad("EBUSY", "/");
-    const a = seg(abs);
-    const name = requireValue(a.pop() ?? null, "a.pop()");
-    if (name.length > 255) bad("ENAMETOOLONG", name);
-    const pp = `/${a.join("/")}`;
-    const h = this.at(pp, "/", c);
-    const d = h.node instanceof Dir ? h.node : bad("ENOTDIR", pp);
-    this.need(d, c, 3, pp);
-    return { dir: d, name, path: abs };
-  }
-
-  readb(p: string, cwd: string, c: Cred): Uint8Array {
-    const h = this.at(p, cwd, c);
-    this.need(h.node, c, 4, h.path);
-    if (h.node instanceof Reg && h.node.lazy) bad("EAGAIN", `${h.path}: file content is loading`);
-    if (h.node instanceof Reg) return h.node.data.slice();
-    if (h.node instanceof Chr) return h.node.rfn(65536);
-    if (h.node instanceof Dir) bad("EISDIR", h.path);
-    return bad("EINVAL", h.path);
-  }
-
-  read(p: string, cwd: string, c: Cred): string { return dec(this.readb(p, cwd, c)); }
-
-  /** Create only on ENOENT; permission failures must not turn into file creation. */
-  writeb(p: string, b: Uint8Array, cwd: string, c: Cred, add = false, mode = 0o666): void {
-    let n: VNode;
-    let path: string;
-    let made: { dir: Dir; name: string } | null = null;
+    if (existing === null) { this.createFile(path, bytes, process, mode, false); return; }
+    if (existing instanceof Dir) bad("EISDIR", path);
+    const descriptor = HostDescriptor.open(process, existing.view, add ? 6 : 2);
     try {
-      const h = this.at(p, cwd, c);
-      n = h.node;
-      path = h.path;
-    } catch (e) {
-      if (!(e instanceof KErr)) throw e instanceof Error ? e : new Error("non-Error filesystem exception");
-      if (e.code !== "ENOENT") throw e;
-      const q = this.par(p, cwd, c);
-      n = new Reg("", { mode, uid: credUid(c), gid: credGid(c), source: null, copy: true });
-      q.dir.ent.set(q.name, n);
-      made = { dir: q.dir, name: q.name };
-      q.dir.touch(true);
-      path = q.path;
-    }
-    this.need(n, c, 2, path);
-    if (n instanceof Reg) { this.writeRegular(n, b, path, add, made); return; }
-    if (n instanceof Chr) {
-      n.wfn(b);
-      n.touch(true);
-      return;
-    }
-    if (n instanceof Dir) bad("EISDIR", path);
-    bad("EINVAL", path);
+      if (add || existing instanceof Chr) descriptor.writeWhole(bytes);
+      else descriptor.replaceFile(bytes);
+    } finally { descriptor.close(); }
   }
 
-  private writeRegular(n: Reg, b: Uint8Array, path: string, add: boolean, made: { dir: Dir; name: string } | null): void {
-    if (add && n.lazy) bad("EAGAIN", `${path}: file content is loading`);
-    const old = n.data;
-    const oldSource = n.source;
-    const oldSum = n.sum;
-    if (add) {
-      const x = new Uint8Array(n.data.length + b.length);
-      x.set(n.data);
-      x.set(b, n.data.length);
-      n.replace(x);
-    } else n.replace(b.slice());
-    if (this.used() > this.cap) {
-      n.data = old;
-      n.source = oldSource;
-      n.sum = oldSum;
-      discardCreated(made);
-      bad("ENOSPC", path);
-    }
-    if (!made) n.mode &= ~0o6000;
-    n.touch(true);
+  write(path: string, data: string, process: HostProcess, add = false, mode = 0o666): void {
+    this.writeb(path, enc(data), process, add, mode);
   }
 
-  write(p: string, s: string, cwd: string, c: Cred, add = false, mode = 0o666): void {
-    this.writeb(p, enc(s), cwd, c, add, mode);
+  private createFile(path: string, data: Uint8Array, process: HostProcess, mode: number, exclusive: boolean): Reg {
+    this.volume.checkProcess(process);
+    const flags = OPEN_WRITE | OPEN_CREATE | (exclusive ? OPEN_EXCLUSIVE : 0);
+    const descriptor = HostDescriptor.openPath(process, path, flags, mode);
+    const inode = descriptor.inodeView() ?? bad("EIO", "file creation has no inode");
+    try {
+      const originalMode = inode.metadata().mode;
+      descriptor.replaceFile(data);
+      if ((originalMode & 0o6000) !== 0) inode.chmod(process, originalMode);
+    } catch (error) {
+      if (exclusive) this.rm(path, process);
+      throw error instanceof Error ? error : new Error("file creation failed");
+    } finally { descriptor.close(); }
+    return new Reg(inode, process, this.volume.backing);
   }
 
-  mkfile(p: string, data: Uint8Array | string, cwd: string, c: Cred, mode = 0o644): Reg {
-    const q = this.par(p, cwd, c);
-    if (q.dir.ent.has(q.name)) bad("EEXIST", q.path);
-    const n = new Reg(data, { mode, uid: credUid(c), gid: credGid(c), source: null, copy: true });
-    q.dir.ent.set(q.name, n);
-    if (this.used() > this.cap) { q.dir.ent.delete(q.name); bad("ENOSPC", q.path); }
-    q.dir.touch(true);
-    return n;
+  mkfile(path: string, data: Uint8Array | string, process: HostProcess, mode = 0o644): Reg {
+    return this.createFile(path, typeof data === "string" ? enc(data) : data, process, mode, true);
   }
 
-  mkdir(p: string, cwd: string, c: Cred, mode = 0o755): Dir {
-    const q = this.par(p, cwd, c);
-    if (q.dir.ent.has(q.name)) bad("EEXIST", q.path);
-    const n = new Dir(mode, credUid(c), credGid(c));
-    q.dir.ent.set(q.name, n);
-    q.dir.touch(true);
-    return n;
+  mkdir(path: string, process: HostProcess, mode = 0o755): Dir {
+    const { directory, name } = this.parent(path, process);
+    return new Dir(directory.create(process, name, 2, mode), process, this.volume.backing);
   }
 
-  char(p: string, r: Rfn, w: Wfn, cwd: string, c: Cred, options: CharOptions = { mode: 0o666, repeat: false }): Chr {
-    const q = this.par(p, cwd, c);
-    if (q.dir.ent.has(q.name)) bad("EEXIST", q.path);
-    const n = new Chr(r, w, credUid(c), credGid(c), options);
-    q.dir.ent.set(q.name, n);
-    return n;
+  char(path: string, read: Rfn, write: Wfn, process: HostProcess, options: CharOptions = { mode: 0o666, repeat: false }): Chr {
+    if (process !== this.authority) bad("EPERM", "device creation requires the trusted root authority");
+    const { directory, name } = this.parent(path, process);
+    const inode = directory.create(process, name, 4, options.mode);
+    this.volume.device(inode, { read, write, repeat: options.repeat });
+    return new Chr(inode, process, this.volume.backing);
   }
 
-  list(p: string, cwd: string, c: Cred): Array<[string, VNode]> {
-    const h = this.at(p, cwd, c);
-    const d = h.node instanceof Dir ? h.node : bad("ENOTDIR", h.path);
-    this.need(d, c, 5, h.path);
-    return [...d.ent].sort(([a], [b]) => a.localeCompare(b));
+  list(path: string, process: HostProcess): Array<[string, VNode]> {
+    const node = this.at(path, process).node;
+    if (!(node instanceof Dir)) return bad("ENOTDIR", path);
+    node.view.need(process, 5);
+    return [...node.ent].sort(([left], [right]) => left.localeCompare(right));
   }
 
-  rm(p: string, cwd: string, c: Cred, dir = false): void {
-    const q = this.par(p, cwd, c);
-    const n = q.dir.ent.get(q.name) ?? bad("ENOENT", q.path);
-    if (n instanceof Dir && !dir) bad("EISDIR", q.path);
-    if (n instanceof Dir && n.ent.size) bad("ENOTEMPTY", q.path);
-    if (!(n instanceof Dir) && dir) bad("ENOTDIR", q.path);
-    q.dir.ent.delete(q.name);
-    n.nlink--;
-    q.dir.touch(true);
+  rm(path: string, process: HostProcess, dir = false): void {
+    const { directory, name } = this.parent(path, process);
+    directory.unlink(process, name, dir);
+    this.volume.backing.collect();
   }
 
-  rename(a: string, b: string, cwd: string, c: Cred): void {
-    const x = this.par(a, cwd, c);
-    const n = x.dir.ent.get(x.name) ?? bad("ENOENT", x.path);
-    const y = this.par(b, cwd, c);
-    if (x.path === y.path) return;
-    const old = y.dir.ent.get(y.name) ?? null;
-    if (old instanceof Dir && !(n instanceof Dir)) bad("EISDIR", y.path);
-    if (n instanceof Dir && old !== null && !(old instanceof Dir)) bad("ENOTDIR", y.path);
-    if (old instanceof Dir && old.ent.size) bad("ENOTEMPTY", y.path);
-    y.dir.ent.set(y.name, n);
-    x.dir.ent.delete(x.name);
-    if (old) old.nlink--;
-    x.dir.touch(true);
-    y.dir.touch(true);
+  rename(from: string, to: string, process: HostProcess): void {
+    const source = this.parent(from, process), destination = this.parent(to, process);
+    source.directory.rename(process, source.name, destination.directory, destination.name);
+    this.volume.backing.collect();
   }
 
-  link(a: string, b: string, cwd: string, c: Cred): void {
-    const n = this.at(a, cwd, c).node;
-    if (n instanceof Dir) bad("EPERM", a);
-    const q = this.par(b, cwd, c);
-    if (q.dir.ent.has(q.name)) bad("EEXIST", q.path);
-    q.dir.ent.set(q.name, n);
-    n.nlink++;
-    n.touch();
+  link(from: string, to: string, process: HostProcess): void {
+    const { directory, name } = this.parent(to, process), inode = HostInode.resolve(process, from);
+    directory.link(process, name, inode);
   }
 
-  symlink(to: string, p: string, cwd: string, c: Cred): void {
-    const q = this.par(p, cwd, c);
-    if (q.dir.ent.has(q.name)) bad("EEXIST", q.path);
-    q.dir.ent.set(q.name, new Sym(to, credUid(c), credGid(c)));
-    q.dir.touch(true);
+  symlink(target: string, path: string, process: HostProcess): void {
+    const { directory, name } = this.parent(path, process);
+    directory.symlink(process, name, target);
   }
 
-  readlink(p: string, cwd: string, c: Cred): string {
-    const h = this.at(p, cwd, c, false);
-    const n = h.node instanceof Sym ? h.node : bad("EINVAL", h.path);
-    return n.to;
+  readlink(path: string, process: HostProcess): string {
+    const node = this.at(path, process, false).node;
+    return node instanceof Sym ? node.to : bad("EINVAL", path);
   }
 
-  chmod(p: string, mode: number, cwd: string, c: Cred): void {
-    const h = this.at(p, cwd, c, false);
-    const uid = credUid(c);
-    if (uid !== 0 && uid !== h.node.uid) bad("EPERM", h.path);
-    h.node.mode = mode & 0o7777;
-    h.node.touch();
+  chmod(path: string, mode: number, process: HostProcess): void { this.at(path, process, false).node.view.chmod(process, mode); }
+  chown(path: string, uid: number, gid: number, process: HostProcess): void { this.at(path, process, false).node.view.chown(process, uid, gid); }
+  utime(path: string, at: number, mt: number, process: HostProcess, follow = true): void {
+    this.at(path, process, follow).node.view.utime(process, BigInt(at), BigInt(mt));
   }
 
-  chown(p: string, uid: number, gid: number, cwd: string, c: Cred): void {
-    if (credUid(c) !== 0) bad("EPERM", p);
-    const n = this.at(p, cwd, c, false).node;
-    n.uid = uid;
-    n.gid = gid;
-    n.mode &= ~0o6000;
-    n.touch();
-  }
+  stat(path: string, process: HostProcess, follow = true): St { return statView(this.at(path, process, follow).node.view); }
 
-  utime(p: string, at: number, mt: number, cwd: string, c: Cred, follow = true): void {
-    const h = this.at(p, cwd, c, follow);
-    const uid = credUid(c);
-    if (uid !== 0 && uid !== h.node.uid) bad("EPERM", h.path);
-    h.node.at = at;
-    h.node.mt = mt;
-    h.node.ct = Date.now();
-  }
-
-  stat(p: string, cwd: string, c: Cred, follow = true): St {
-    const n = this.at(p, cwd, c, follow).node;
-    const size = n instanceof Reg ? n.size : n instanceof Dir ? n.ent.size : n instanceof Sym ? enc(n.to).length : 0;
-    return { ino: n.ino, kind: n.kind, mode: n.mode, uid: n.uid, gid: n.gid, nlink: n.nlink, size, at: n.at, mt: n.mt, ct: n.ct };
-  }
-
-  paths(p: string, cwd: string, c: Cred): string[] {
-    const h = this.at(p, cwd, c);
-    const out: string[] = [h.path];
-    const go = (n: VNode, base: string): void => {
-      if (!(n instanceof Dir)) return;
-      this.need(n, c, 5, base);
-      for (const [k, v] of n.ent) {
-        const q = base === "/" ? `/${k}` : `${base}/${k}`;
-        out.push(q);
-        if (v instanceof Dir) go(v, q);
-      }
+  paths(path: string, process: HostProcess): string[] {
+    const hit = this.at(path, process), out: string[] = [];
+    const visit = (node: VNode, base: string): void => {
+      out.push(base);
+      if (!(node instanceof Dir)) return;
+      node.view.need(process, 5);
+      for (const [name, child] of node.ent) visit(child, base === "/" ? "/" + name : base + "/" + name);
     };
-    go(h.node, h.path);
+    visit(hit.node, hit.path);
     return out;
   }
 
-  glob(pat: string, cwd: string, c: Cred): string[] {
-    if (!wild(pat)) return [pat];
-    const abs = norm(pat, cwd);
-    const root = abs.slice(0, Math.max(1, abs.search(/[*?]|\[[^\]]+\]/)));
-    const base = root.slice(0, root.lastIndexOf("/")) || "/";
-    const rx = wrx(abs);
-    try {
-      return this.paths(base, "/", c).filter(x => rx.test(x)).map(x => pat.startsWith("/") ? x : x.startsWith(cwd + "/") ? x.slice(cwd.length + 1) : x);
-    } catch { return []; }
+  glob(pattern: string, process: HostProcess): string[] {
+    if (!wild(pattern)) return [pattern];
+    const cwd = this.volume.cwd(process), absolute = norm(pattern, cwd);
+    const root = absolute.slice(0, Math.max(1, absolute.search(/[*?]|\[[^\]]+\]/)));
+    const base = root.slice(0, root.lastIndexOf("/")) || "/", rx = wrx(absolute);
+    const prefix = cwd === "/" ? "/" : cwd + "/";
+    try { return this.paths(base, process).filter(path => rx.test(path)).map(path => pattern.startsWith("/") || !path.startsWith(prefix) ? path : path.slice(prefix.length)); }
+    catch (error) { if (error instanceof KErr) return []; throw error instanceof Error ? error : new Error("glob failed"); }
   }
 
-  used(): number {
-    const seen = new Set<number>();
-    let n = 0;
-    const go = (v: VNode): void => {
-      if (seen.has(v.ino)) return;
-      seen.add(v.ino);
-      n += 128;
-      if (v instanceof Reg) n += v.residentSize;
-      if (v instanceof Dir) for (const x of v.ent.values()) go(x);
-    };
-    go(this.root);
-    return n;
-  }
+  used(): number { return this.volume.used(); }
+  inodeCount(): number { return this.volume.inodeCount(); }
+  dump(): TreeEnt[] { return this.volume.dump(); }
+  restore(entries: readonly TreeEnt[]): void { this.volume.restore(entries); }
 }

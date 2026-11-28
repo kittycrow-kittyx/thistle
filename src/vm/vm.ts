@@ -1,6 +1,7 @@
 import { VmFiles } from "./files.js";
-import { bad, KErr, requireValue } from "../core/err.js";
-import type { Errno } from "../core/err.js";
+import { bad, KErr } from "../core/err.js";
+import { wasiErrnoNumbers as eno } from "../core/errno.js";
+export { wasiErrnoNumbers as legacyErrnoNumbers } from "../core/errno.js";
 import type { Sig } from "../core/proc.js";
 import type { Sys } from "../core/sys.js";
 import { enc } from "../io/stream.js";
@@ -8,23 +9,22 @@ import { Exe } from "../../thistle-asm/fmt.js";
 import { BY_OP, I_SZ, Op } from "../../thistle-asm/isa.js";
 import { align } from "../../thistle-asm/syn.js";
 
+/** Byte order of the typed arrays exposing the compatibility register banks. */
+export const registerLittleEndian = new DataView(Uint16Array.of(1).buffer).getUint8(0) === 1;
+
 export enum Sc {
   Exit, Read, Write, Open, Close, Seek, Unlink, Mkdir, GetPid, GetPPid,
   Brk, Clock, Yield, Stat, GetCwd, Chdir, Rmdir, Rename, Chmod, Random,
   Spawn, Wait, Kill, Sleep, GetUid, GetGid, Dup, Link, Symlink, Readlink, Truncate,
 }
 
-const eno: Record<Errno, number> = {
-  EACCES: 2, EAGAIN: 6, EBADF: 8, EBUSY: 10, ECHILD: 12, EEXIST: 20,
-  EFAULT: 21, EFBIG: 22, EINTR: 27, EINVAL: 28, EIO: 29, EISDIR: 31, ELOOP: 32, EMFILE: 33,
-  ENAMETOOLONG: 37, ENFILE: 41, ENOENT: 44, ENOEXEC: 45, ENOMEM: 48,
-  ENETUNREACH: 46, ENOSPC: 51, ENOSYS: 52, ENOTDIR: 54, ENOTEMPTY: 55, ENOTSUP: 58,
-  EPERM: 63, EPIPE: 64, EPROTO: 65, ERANGE: 68, EROFS: 69, ESRCH: 71, ETIMEDOUT: 73,
-};
+
 
 
 export class Vm {
   readonly r = new Int32Array(16);
+  private readonly regView = new DataView(this.r.buffer);
+  private reg(index: number): number { return this.regView.getInt32(index * 4, registerLittleEndian); }
   private m: Uint8Array<ArrayBuffer> = new Uint8Array();
   private v = new DataView(this.m.buffer);
   private pc = 0;
@@ -70,15 +70,15 @@ export class Vm {
   private async step(): Promise<void> {
     // Preserve the guest ABI: validate operands and translate system call errors to numeric results.
     this.exec(this.pc, I_SZ);
-    const op = requireValue(this.m[this.pc] ?? null, "this.m[this.pc]") as Op;
+    const op = this.v.getUint8(this.pc) as Op;
     if (!BY_OP.has(op)) bad("ENOEXEC", `bad thistle32 opcode ${op} at 0x${this.pc.toString(16)}`);
-    const d = requireValue(this.m[this.pc + 1] ?? null, "this.m[this.pc + 1]"), a = requireValue(this.m[this.pc + 2] ?? null, "this.m[this.pc + 2]"), b = requireValue(this.m[this.pc + 3] ?? null, "this.m[this.pc + 3]"), im = this.v.getInt32(this.pc + 4, true);
+    const d = this.v.getUint8(this.pc + 1), a = this.v.getUint8(this.pc + 2), b = this.v.getUint8(this.pc + 3), im = this.v.getInt32(this.pc + 4, true);
     if (d > 15 || a > 15 || b > 15) bad("ENOEXEC", `bad register at 0x${this.pc.toString(16)}`);
     this.pc = this.pc + I_SZ >>> 0;
-    const x = requireValue(this.r[a] ?? null, "this.r[a]"), y = requireValue(this.r[b] ?? null, "this.r[b]");
+    const x = this.reg(a), y = this.reg(b);
     switch (op) {
       case Op.Nop: break;
-      case Op.Halt: this.exit(requireValue(this.r[0] ?? null, "this.r[0]")); break;
+      case Op.Halt: this.exit(this.reg(0)); break;
       case Op.Mov: this.r[d] = x; break;
       case Op.Li: this.r[d] = im; break;
       case Op.Add: this.r[d] = x + y | 0; break;
@@ -120,22 +120,22 @@ export class Vm {
       case Op.Ja: if (this.c && !this.z) this.jump(im); break;
       case Op.Jae: if (this.c) this.jump(im); break;
       case Op.Call: this.push(this.pc); this.jump(im); break;
-      case Op.CallR: this.push(this.pc); this.pc = requireValue(this.r[d] ?? null, "this.r[d]") >>> 0; break;
-      case Op.Ret: { const q = this.pop(); if (!q) this.exit(requireValue(this.r[0] ?? null, "this.r[0]")); else this.pc = q >>> 0; break; }
-      case Op.Push: this.push(requireValue(this.r[d] ?? null, "this.r[d]")); break;
+      case Op.CallR: this.push(this.pc); this.pc = this.reg(d) >>> 0; break;
+      case Op.Ret: { const q = this.pop(); if (!q) this.exit(this.reg(0)); else this.pc = q >>> 0; break; }
+      case Op.Push: this.push(this.reg(d)); break;
       case Op.Pop: this.r[d] = this.pop(); break;
-      case Op.Enter: this.push(requireValue(this.r[13] ?? null, "this.r[13]")); this.r[13] = requireValue(this.r[14] ?? null, "this.r[14]"); this.r[14] = requireValue(this.r[14] ?? null, "this.r[14]") - im | 0; this.mem(requireValue(this.r[14] ?? null, "this.r[14]") >>> 0, im, true); break;
-      case Op.Leave: this.r[14] = requireValue(this.r[13] ?? null, "this.r[13]"); this.r[13] = this.pop(); break;
+      case Op.Enter: this.push(this.reg(13)); this.r[13] = this.reg(14); this.r[14] = this.reg(14) - im | 0; this.mem(this.reg(14) >>> 0, im, true); break;
+      case Op.Leave: this.r[14] = this.reg(13); this.r[13] = this.pop(); break;
       case Op.Ld8U: this.r[d] = this.u8(x + im >>> 0); break;
       case Op.Ld8S: this.r[d] = this.u8(x + im >>> 0) << 24 >> 24; break;
       case Op.Ld16U: this.r[d] = this.u16(x + im >>> 0); break;
       case Op.Ld16S: this.r[d] = this.u16(x + im >>> 0) << 16 >> 16; break;
       case Op.Ld32: this.r[d] = this.u32(x + im >>> 0); break;
-      case Op.St8: this.set8(x + im >>> 0, requireValue(this.r[d] ?? null, "this.r[d]")); break;
-      case Op.St16: this.set16(x + im >>> 0, requireValue(this.r[d] ?? null, "this.r[d]")); break;
-      case Op.St32: this.set32(x + im >>> 0, requireValue(this.r[d] ?? null, "this.r[d]")); break;
+      case Op.St8: this.set8(x + im >>> 0, this.reg(d)); break;
+      case Op.St16: this.set16(x + im >>> 0, this.reg(d)); break;
+      case Op.St32: this.set32(x + im >>> 0, this.reg(d)); break;
       case Op.Sys: await this.sys(im); break;
-      case Op.Xchg: { const q = requireValue(this.r[d] ?? null, "this.r[d]"); this.r[d] = x; this.r[a] = q; break; }
+      case Op.Xchg: { const q = this.reg(d); this.r[d] = x; this.r[a] = q; break; }
       case Op.Sex8: this.r[d] = x << 24 >> 24; break;
       case Op.Sex16: this.r[d] = x << 16 >> 16; break;
       case Op.SetE: this.r[d] = Number(this.z); break;
@@ -158,39 +158,39 @@ export class Vm {
 
   private async call(n: number): Promise<number> {
     // Preserve the guest ABI: validate operands and translate system call errors to numeric results.
-    const a = this.r;
+    const arg0 = this.reg(0), arg1 = this.reg(1), arg2 = this.reg(2);
     switch (n) {
-      case Sc.Exit: this.exit(requireValue(a[0] ?? null, "a[0]")); return 0;
-      case Sc.Read: { const at = requireValue(a[1] ?? null, "a[1]") >>> 0, n = requireValue(a[2] ?? null, "a[2]") >>> 0; this.mem(at, n, true); const b = await this.files.read(requireValue(a[0] ?? null, "a[0]"), n); this.slice(at, b.length, true).set(b); return b.length; }
-      case Sc.Write: { const b = this.slice(requireValue(a[1] ?? null, "a[1]") >>> 0, requireValue(a[2] ?? null, "a[2]") >>> 0); return (a[0] ?? -1) === 1 ? this.s.out(b) : (a[0] ?? -1) === 2 ? this.s.err(b) : this.s.fdw(requireValue(a[0] ?? null, "a[0]"), b); }
-      case Sc.Open: return this.files.open(this.str(requireValue(a[0] ?? null, "a[0]")), requireValue(a[1] ?? null, "a[1]") >>> 0, requireValue(a[2] ?? null, "a[2]") >>> 0);
-      case Sc.Close: this.s.close(requireValue(a[0] ?? null, "a[0]")); return 0;
-      case Sc.Seek: if (![0, 1, 2].includes(requireValue(a[2] ?? null, "a[2]"))) bad("EINVAL", `seek whence ${a[2] ?? -1}`); return this.s.seek(requireValue(a[0] ?? null, "a[0]"), requireValue(a[1] ?? null, "a[1]"), requireValue(a[2] ?? null, "a[2]"));
-      case Sc.Unlink: this.s.rm(this.str(requireValue(a[0] ?? null, "a[0]"))); return 0;
-      case Sc.Mkdir: this.s.mkdir(this.str(requireValue(a[0] ?? null, "a[0]")), requireValue(a[1] ?? null, "a[1]")); return 0;
+      case Sc.Exit: this.exit(arg0); return 0;
+      case Sc.Read: { const at = arg1 >>> 0, n = arg2 >>> 0; this.mem(at, n, true); const b = await this.files.read(arg0, n); this.slice(at, b.length, true).set(b); return b.length; }
+      case Sc.Write: { const b = this.slice(arg1 >>> 0, arg2 >>> 0); return arg0 === 1 ? this.s.out(b) : arg0 === 2 ? this.s.err(b) : this.s.fdw(arg0, b); }
+      case Sc.Open: return this.files.open(this.str(arg0), arg1 >>> 0, arg2 >>> 0);
+      case Sc.Close: this.s.close(arg0); return 0;
+      case Sc.Seek: if (![0, 1, 2].includes(arg2)) bad("EINVAL", `seek whence ${arg2}`); return this.s.seek(arg0, arg1, arg2);
+      case Sc.Unlink: this.s.rm(this.str(arg0)); return 0;
+      case Sc.Mkdir: this.s.mkdir(this.str(arg0), arg1); return 0;
       case Sc.GetPid: return this.s.pid;
       case Sc.GetPPid: return this.s.ppid;
-      case Sc.Brk: return this.doBrk(requireValue(a[0] ?? null, "a[0]") >>> 0);
+      case Sc.Brk: return this.doBrk(arg0 >>> 0);
       case Sc.Clock: return Date.now() | 0;
       case Sc.Yield: await this.s.yield(); return 0;
-      case Sc.Stat: return this.stat(this.str(requireValue(a[0] ?? null, "a[0]")), requireValue(a[1] ?? null, "a[1]") >>> 0);
-      case Sc.GetCwd: return this.copy(enc(this.s.cwd + "\0"), requireValue(a[0] ?? null, "a[0]") >>> 0, requireValue(a[1] ?? null, "a[1]") >>> 0);
-      case Sc.Chdir: this.s.cd(this.str(requireValue(a[0] ?? null, "a[0]"))); return 0;
-      case Sc.Rmdir: this.s.rm(this.str(requireValue(a[0] ?? null, "a[0]")), true); return 0;
-      case Sc.Rename: this.s.mv(this.str(requireValue(a[0] ?? null, "a[0]")), this.str(requireValue(a[1] ?? null, "a[1]"))); return 0;
-      case Sc.Chmod: this.s.chmod(this.str(requireValue(a[0] ?? null, "a[0]")), requireValue(a[1] ?? null, "a[1]")); return 0;
-      case Sc.Random: return this.random(requireValue(a[0] ?? null, "a[0]") >>> 0, requireValue(a[1] ?? null, "a[1]") >>> 0);
-      case Sc.Spawn: { const p = this.str(requireValue(a[0] ?? null, "a[0]")), av = this.vec(requireValue(a[1] ?? null, "a[1]") >>> 0, requireValue(a[2] ?? null, "a[2]") >>> 0); return this.s.start(p, av).pid; }
-      case Sc.Wait: return this.s.wait(requireValue(a[0] ?? null, "a[0]"));
-      case Sc.Kill: { const q = requireValue(a[1] ?? null, "a[1]"); if (![1, 2, 9, 13, 15].includes(q)) bad("EINVAL", `signal ${q}`); return this.s.kill(requireValue(a[0] ?? null, "a[0]"), q as Sig); }
-      case Sc.Sleep: await this.s.sleep(requireValue(a[0] ?? null, "a[0]") >>> 0); return 0;
+      case Sc.Stat: return this.stat(this.str(arg0), arg1 >>> 0);
+      case Sc.GetCwd: return this.copy(enc(this.s.cwd + "\0"), arg0 >>> 0, arg1 >>> 0);
+      case Sc.Chdir: this.s.cd(this.str(arg0)); return 0;
+      case Sc.Rmdir: this.s.rm(this.str(arg0), true); return 0;
+      case Sc.Rename: this.s.mv(this.str(arg0), this.str(arg1)); return 0;
+      case Sc.Chmod: this.s.chmod(this.str(arg0), arg1); return 0;
+      case Sc.Random: return this.random(arg0 >>> 0, arg1 >>> 0);
+      case Sc.Spawn: { const p = this.str(arg0), av = this.vec(arg1 >>> 0, arg2 >>> 0); return this.s.start(p, av).pid; }
+      case Sc.Wait: return this.s.wait(arg0);
+      case Sc.Kill: { const q = arg1; if (![1, 2, 9, 13, 15].includes(q)) bad("EINVAL", `signal ${q}`); return this.s.kill(arg0, q as Sig); }
+      case Sc.Sleep: await this.s.sleep(arg0 >>> 0); return 0;
       case Sc.GetUid: return this.s.uid;
       case Sc.GetGid: return this.s.gid;
-      case Sc.Dup: return this.s.dup(requireValue(a[0] ?? null, "a[0]"), requireValue(a[1] ?? null, "a[1]") < 0 ? null : requireValue(a[1] ?? null, "a[1]"));
-      case Sc.Link: this.s.link(this.str(requireValue(a[0] ?? null, "a[0]")), this.str(requireValue(a[1] ?? null, "a[1]"))); return 0;
-      case Sc.Symlink: this.s.symlink(this.str(requireValue(a[0] ?? null, "a[0]")), this.str(requireValue(a[1] ?? null, "a[1]"))); return 0;
-      case Sc.Readlink: return this.copy(enc(this.s.readlink(this.str(requireValue(a[0] ?? null, "a[0]")))), requireValue(a[1] ?? null, "a[1]") >>> 0, requireValue(a[2] ?? null, "a[2]") >>> 0);
-      case Sc.Truncate: { const p = this.str(requireValue(a[0] ?? null, "a[0]")), z = requireValue(a[1] ?? null, "a[1]") >>> 0; if (z > this.s.k.fs.cap) bad("EFBIG", p); const b = this.s.readb(p), q = new Uint8Array(z); q.set(b.subarray(0, z)); this.s.writeb(p, q); return 0; }
+      case Sc.Dup: return this.s.dup(arg0, arg1 < 0 ? null : arg1);
+      case Sc.Link: this.s.link(this.str(arg0), this.str(arg1)); return 0;
+      case Sc.Symlink: this.s.symlink(this.str(arg0), this.str(arg1)); return 0;
+      case Sc.Readlink: return this.copy(enc(this.s.readlink(this.str(arg0))), arg1 >>> 0, arg2 >>> 0);
+      case Sc.Truncate: { const p = this.str(arg0), z = arg1 >>> 0; if (z > this.s.k.fs.cap) bad("EFBIG", p); const b = this.s.readb(p), q = new Uint8Array(z); q.set(b.subarray(0, z)); this.s.writeb(p, q); return 0; }
       default: return bad("ENOSYS", `native syscall ${n}`);
     }
   }
@@ -205,7 +205,7 @@ export class Vm {
 
   private doBrk(n: number): number {
     if (!n) return this.brk;
-    if (n < this.floor || n + 65536 >= (requireValue(this.r[14] ?? null, "this.r[14]") >>> 0)) bad("ENOMEM", "native heap collided with stack");
+    if (n < this.floor || n + 65536 >= (this.reg(14) >>> 0)) bad("ENOMEM", "native heap collided with stack");
     this.brk = n; return n;
   }
 
@@ -230,7 +230,7 @@ export class Vm {
     this.stackAt = Math.max(this.floor + 65536, this.m.length - Math.min(4 * 1024 * 1024, this.m.length >>> 2));
     const put = (a: string[]): number[] => a.map(x => { const b = enc(x + "\0"); sp -= b.length; if (sp < this.stackAt) bad("EFBIG", "native argument block exceeds the stack"); this.m.set(b, sp); return sp; });
     const ep = put(env), ap = put(argv); sp &= -4;
-    const vec = (a: number[]): number => { sp -= (a.length + 1) * 4; for (let i = 0; i < a.length; i++) this.v.setUint32(sp + i * 4, requireValue(a[i] ?? null, "a[i]"), true); this.v.setUint32(sp + a.length * 4, 0, true); return sp; };
+    const vec = (a: number[]): number => { sp -= (a.length + 1) * 4; a.forEach((value, i) => this.v.setUint32(sp + i * 4, value, true)); this.v.setUint32(sp + a.length * 4, 0, true); return sp; };
     const ev = vec(ep), av = vec(ap); sp -= 4; this.v.setUint32(sp, 0, true);
     if (sp < this.stackAt || sp < this.brk + 65536) bad("ENOMEM", "arguments leave no native stack");
     this.r[0] = argv.length; this.r[1] = av; this.r[2] = env.length; this.r[3] = ev; this.r[13] = 0; this.r[14] = sp; this.r[15] = 0;
@@ -243,8 +243,8 @@ export class Vm {
   private logic(n: number): void { this.z = n === 0; this.n = n < 0; this.c = false; this.o = false; }
   private jump(n: number): void { this.pc = this.pc + n >>> 0; }
   private exit(n: number): void { this.code = n; this.done = true; }
-  private push(n: number): void { const sp = (requireValue(this.r[14] ?? null, "this.r[14]") - 4) >>> 0; this.set32(sp, n); this.r[14] = sp; }
-  private pop(): number { const sp = requireValue(this.r[14] ?? null, "this.r[14]") >>> 0, n = this.u32(sp); this.r[14] = sp + 4 | 0; return n; }
+  private push(n: number): void { const sp = (this.reg(14) - 4) >>> 0; this.set32(sp, n); this.r[14] = sp; }
+  private pop(): number { const sp = this.reg(14) >>> 0, n = this.u32(sp); this.r[14] = sp + 4 | 0; return n; }
 
   private exec(at: number, n: number): void {
     const q = this.exe.sec.find(x => x.flg.includes("x") && at >= x.addr && at + n <= x.addr + x.size) ?? null;
@@ -261,7 +261,7 @@ export class Vm {
   }
 
   private slice(at: number, n: number, wr = false): Uint8Array { this.mem(at, n, wr); return this.m.subarray(at, at + n); }
-  private u8(at: number): number { this.mem(at, 1); return requireValue(this.m[at] ?? null, "this.m[at]"); }
+  private u8(at: number): number { this.mem(at, 1); return this.v.getUint8(at); }
   private u16(at: number): number { this.mem(at, 2); return this.v.getUint16(at, true); }
   private u32(at: number): number { this.mem(at, 4); return this.v.getInt32(at, true); }
   private set8(at: number, n: number): void { this.mem(at, 1, true); this.m[at] = n; }

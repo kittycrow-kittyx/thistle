@@ -1,6 +1,7 @@
 # Thistle documentation
 
 - [Kernel architecture](architecture.md)
+- [Single-kernel consolidation](consolidation.md)
 - [Native kernel](native-kernel.md)
 - [Filesystem](filesystem.md)
 - [Programme execution](execution.md)
@@ -44,6 +45,7 @@ bun run test
 - [core/kernel-memory](modules/core/kernel-memory.md)
 - [core/native-types](modules/core/native-types.md)
 - [core/proc](modules/core/proc.md)
+- [core/fd](modules/core/fd.md)
 - [core/release](modules/core/release.md)
 - [core/rv64-arithmetic](modules/core/rv64-arithmetic.md)
 - [core/rv64-branch](modules/core/rv64-branch.md)
@@ -56,15 +58,21 @@ bun run test
 - [core/sys](modules/core/sys.md)
 - [fs/tree](modules/fs/tree.md)
 - [fs/vfs](modules/fs/vfs.md)
+- [fs/nodes](modules/fs/nodes.md)
+- [fs/paths](modules/fs/paths.md)
 - [io/stream](modules/io/stream.md)
 - [io/tty](modules/io/tty.md)
 - [native/abi](modules/native/abi.md)
 - [native/kernel](modules/native/kernel.md)
 - [native/memory](modules/native/memory.md)
 - [native/start](modules/native/start.md)
+- [native/state](modules/native/state.md)
+- [native/process-state](modules/native/process-state.md)
 - [native/thx](modules/native/thx.md)
 - [native/types](modules/native/types.md)
 - [native/vfs](modules/native/vfs.md)
+- [native/vfs-edit](modules/native/vfs-edit.md)
+- [native/vfs-api](modules/native/vfs-api.md)
 - [native/word](modules/native/word.md)
 - [net/host-fetch](modules/net/host-fetch.md)
 - [net/net](modules/net/net.md)
@@ -80,7 +88,7 @@ bun run test
 - [wasm/host-wasi](modules/wasm/host-wasi.md)
 - [wasm/wasi](modules/wasm/wasi.md)
 - [vm/files](modules/vm/files.md)
-- [native/image-range](modules/native/image-range.md)
+- [native/arena](modules/native/arena.md)
 
 - [Guest execution](modules/core/guest.md)
 - [Host kernel options](modules/core/host-options.md)
@@ -94,3 +102,81 @@ bun run test
 - [native/host-exports](modules/native/host-exports.md)
 - [native/vfs-image](modules/native/vfs-image.md)
 - [test/host-rv64.test](modules/test/host-rv64.test.md)
+
+- [test/native-vfs-edit.test](modules/test/native-vfs-edit.test.md)
+
+- [test/native-process-reap.test](modules/test/native-process-reap.test.md)
+- [test/native-process-state.test](modules/test/native-process-state.test.md)
+
+- [native/credentials](modules/native/credentials.md)
+- [native/process-reap](modules/native/process-reap.md)
+- [test/vfs-fixture](modules/test/vfs-fixture.md)
+- [test/native-credentials.test](modules/test/native-credentials.test.md)
+
+- [Compiler validation](compiler-validation.md)
+
+- [native/vfs-backing](modules/native/vfs-backing.md)
+- [test/native-vfs-backing.test](modules/test/native-vfs-backing.test.md)
+
+- [host/backing](modules/host/backing.md)
+- [test/host-backing.test](modules/test/host-backing.test.md)
+
+- [host/native-access](modules/host/native-access.md)
+- [host/directory](modules/host/directory.md)
+
+- [test/host-native-access.test](modules/test/host-native-access.test.md)
+
+- [host/bytes](modules/host/bytes.md)
+- [test/host-bytes.test](modules/test/host-bytes.test.md)
+
+- [test/native-process-attach.test](modules/test/native-process-attach.test.md)
+
+- [core/errno](modules/core/errno.md)
+- [host/process](modules/host/process.md)
+- [host/cwd](modules/host/cwd.md)
+- [host/descriptor](modules/host/descriptor.md)
+- [host/devices](modules/host/devices.md)
+- [test/host-process.test](modules/test/host-process.test.md)
+
+- [test/native-image-lifetime.test](modules/test/native-image-lifetime.test.md)
+
+- [native/process-host](modules/native/process-host.md)
+- [native/vfork](modules/native/vfork.md)
+- [test/native-process-host.test](modules/test/native-process-host.test.md)
+
+- [host/context](modules/host/context.md)
+- [host/memory](modules/host/memory.md)
+- [host/limits](modules/host/limits.md)
+
+- [test/native-guest-access.test](modules/test/native-guest-access.test.md)
+
+- [test/native-host-map.test](modules/test/native-host-map.test.md)
+- [test/native-vfork.test](modules/test/native-vfork.test.md)
+
+- [test/host-lifecycle.test](modules/test/host-lifecycle.test.md)
+- [test/host-descriptor.test](modules/test/host-descriptor.test.md)
+- [test/host-file-descriptor.test](modules/test/host-file-descriptor.test.md)
+- [test/host-carrier-descriptor.test](modules/test/host-carrier-descriptor.test.md)
+- [test/host-path-open.test](modules/test/host-path-open.test.md)
+- [test/host-device.test](modules/test/host-device.test.md)
+- [test/host-root.test](modules/test/host-root.test.md)
+
+- [test/native-signals.test](modules/test/native-signals.test.md)
+
+- [io/read-queue](modules/io/read-queue.md)
+- [test/host-input.test](modules/test/host-input.test.md)
+
+- [host/inode](modules/host/inode.md)
+- [test/host-inode.test](modules/test/host-inode.test.md)
+- [test/host-linux-events.test](modules/test/host-linux-events.test.md)
+
+- [test/native-vfs-resolve.test](modules/test/native-vfs-resolve.test.md)
+
+- [test/host-restore.test](modules/test/host-restore.test.md)
+
+- [host/mount](modules/host/mount.md)
+- [host/root](modules/host/root.md)
+- [host/snapshot](modules/host/snapshot.md)
+- [test/host-mount.test](modules/test/host-mount.test.md)
+
+- [test/native-vfs-mount.test](modules/test/native-vfs-mount.test.md)

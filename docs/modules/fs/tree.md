@@ -1,5 +1,5 @@
-# tree
+# Root persistence
 
-Snapshot scope: regular files, directories and symbolic links (no character devices).
+`TreeEnt` records a static image path, inode identity, kind, metadata, optional bytes or lazy provider, and symlink target. `Tree` is the host persistence interface. `fileSum` calculates the payload checksum.
 
-`TreeEnt` describes a persisted filesystem entry and `Tree` the backing-store interface. `TreeFs.dump` exports entries while preserving inode identities for hard links; `TreeFs.load` rebuilds the mounted hierarchy and checks metadata and capacity. `fileSum` computes a length-qualified content checksum; `treeFs` is the exported helper instance.
+`TreeFs.dump` serialises a mounted canonical root and `TreeFs.load` restores it; `treeFs` provides the shared stateless adapter. Both accept `/` only. Root replacement returns `EBUSY` if an inode descriptor is open or a process cwd is outside `/`. Live overlay reconciliation must use incremental canonical operations instead of remounting beneath running processes.

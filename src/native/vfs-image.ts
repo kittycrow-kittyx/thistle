@@ -45,11 +45,17 @@ const kind = (entry: TreeEnt): number => {
   throw new Error(`unsupported Thistle VFS node kind at ${entry.p}`);
 };
 
-const payload = (entry: TreeEnt): Uint8Array => {
-  if (entry.k === "f") {
-    ensure((entry.data instanceof Uint8Array), () => { throw new Error(`missing Thistle VFS file data at ${entry.p}`); });
-    return entry.data;
-  }
+const filePayload = (entry: TreeEnt, hostFiles: boolean): Uint8Array => {
+  if (entry.data instanceof Uint8Array) return entry.data;
+  const source = entry.source;
+  ensure(hostFiles && source !== null && Number.isSafeInteger(source.size) && source.size >= 0 &&
+    typeof source.sum === "string" && typeof source.load === "function",
+  () => { throw new Error(`missing Thistle VFS file data at ${entry.p}`); });
+  return new Uint8Array();
+};
+
+const payload = (entry: TreeEnt, hostFiles: boolean): Uint8Array => {
+  if (entry.k === "f") return filePayload(entry, hostFiles);
   if (entry.k === "l") {
     ensure(!(typeof entry.to !== "string"), () => { throw new Error(`missing Thistle VFS link target at ${entry.p}`); });
     return encoder.encode(entry.to);
@@ -75,7 +81,7 @@ const fnv = (bytes: Uint8Array, from: number): number => {
 };
 
 /** Validate path ownership and hard-link identity before sizing the image. */
-const indexInodes = (entries: readonly TreeEnt[], paths: Map<string, TreeEnt>): InodeImage[] => {
+const indexInodes = (entries: VfsEntries, paths: Map<string, TreeEnt>, hostFiles: boolean): InodeImage[] => {
   // Every alias must agree on metadata and payload before a binary record is written.
   const links = new Map<number, number>();
   const inodes = new Map<number, InodeImage>();
@@ -90,10 +96,15 @@ const indexInodes = (entries: readonly TreeEnt[], paths: Map<string, TreeEnt>): 
     checkedTime(entry.at, `atime at ${entry.p}`);
     checkedTime(entry.mt, `mtime at ${entry.p}`);
     checkedTime(entry.ct, `ctime at ${entry.p}`);
-    const bytes = payload(entry);
+    const bytes = payload(entry, hostFiles);
+    const logicalSize = entry.data === null && entry.source !== null ? entry.source.size : bytes.length;
+    if (entry.k === "f" && entry.size !== null && entry.size !== logicalSize) throw new Error(`inconsistent Thistle VFS file size at ${entry.p}`);
     const previous = (inodes.get(entry.id) ?? null);
     if (previous) {
       const original = previous.entry;
+      const sameSource = original.source === entry.source || original.source !== null && entry.source !== null &&
+        original.source.sum !== "" && original.source.sum === entry.source.sum && original.source.size === entry.source.size;
+      ensure(!(hostFiles && entry.k === "f" && !sameSource), () => { throw new Error(`inconsistent Thistle VFS hard-link source at ${entry.p}`); });
       ensure(!(original.k !== entry.k || original.mode !== entry.mode || original.uid !== entry.uid || original.gid !== entry.gid ||
           original.at !== entry.at || original.mt !== entry.mt || original.ct !== entry.ct || !sameBytes(previous.payload, bytes)), () => { throw new Error(`inconsistent Thistle VFS hard-link metadata at ${entry.p}`); });
     } else {
@@ -112,30 +123,31 @@ const indexInodes = (entries: readonly TreeEnt[], paths: Map<string, TreeEnt>): 
 };
 
 /** Encode only inode records, leaving the caller at the dentry table. */
-const writeInodes = (output: Uint8Array, inodes: readonly InodeImage[]): number => {
+const writeInodes = (output: Uint8Array, inodes: readonly InodeImage[], hostFiles: boolean): number => {
   const view = new DataView(output.buffer);
   let at = HEADER_SIZE;
   for (const inode of inodes) {
     const entry = inode.entry;
+    const stored = hostFiles && entry.k === "f" ? new Uint8Array() : inode.payload;
     view.setUint32(at, entry.id, true);
     view.setUint32(at + 4, kind(entry), true);
     view.setUint32(at + 8, entry.mode, true);
     view.setUint32(at + 12, entry.uid, true);
     view.setUint32(at + 16, entry.gid, true);
     view.setUint32(at + 20, inode.nlink, true);
-    view.setUint32(at + 24, inode.payload.length, true);
+    view.setUint32(at + 24, stored.length, true);
     view.setBigUint64(at + 32, BigInt(entry.at), true);
     view.setBigUint64(at + 40, BigInt(entry.mt), true);
     view.setBigUint64(at + 48, BigInt(entry.ct), true);
-    output.set(inode.payload, at + INODE_RECORD_SIZE);
-    at += align4(INODE_RECORD_SIZE + inode.payload.length);
+    output.set(stored, at + INODE_RECORD_SIZE);
+    at += align4(INODE_RECORD_SIZE + stored.length);
   }
   return at;
 };
 
 interface DentryImage { entry: TreeEnt; parent: TreeEnt; name: Uint8Array; }
 
-const indexDentries = (entries: readonly TreeEnt[], paths: Map<string, TreeEnt>): DentryImage[] => {
+const indexDentries = (entries: VfsEntries, paths: Map<string, TreeEnt>): DentryImage[] => {
   return entries.filter(entry => entry.p !== "/").map(entry => {
     const parent = (paths.get(parentPath(entry.p)) ?? null);
     if (!parent || parent.k !== "d") throw new Error(`missing Thistle VFS parent directory for ${entry.p}`);
@@ -161,12 +173,20 @@ const writeDentries = (output: Uint8Array, dentries: readonly DentryImage[], off
   return at;
 };
 
-/** Deterministic, allocation-bounded root image consumed by the generated Thistle kernel. */
-export const serializeThistleVfs = (source: readonly TreeEnt[]): Uint8Array => {
+/** Static tree entries accepted by the canonical image serializer. */
+export type VfsEntries = readonly TreeEnt[];
+
+export interface HostVfsImage {
+  readonly image: Uint8Array;
+  readonly files: VfsEntries;
+  readonly residentBytes: bigint;
+}
+
+const planImage = (source: VfsEntries, hostFiles: boolean): HostVfsImage => {
   // Validate the complete topology before sizing or writing any native image records.
   const entries = [...source].sort((left, right) => left.p < right.p ? -1 : left.p > right.p ? 1 : 0);
   const paths = new Map<string, TreeEnt>();
-  const inodeImages = indexInodes(entries, paths);
+  const inodeImages = indexInodes(entries, paths, hostFiles);
 
   const root = (paths.get("/") ?? null);
   if (!root || root.k !== "d") throw new Error("Thistle VFS image requires one directory root");
@@ -175,9 +195,12 @@ export const serializeThistleVfs = (source: readonly TreeEnt[]): Uint8Array => {
 
   let imageSize = HEADER_SIZE;
   let dataSize = 0;
+  let residentBytes = BigInt(inodeImages.length) * 128n;
   for (const inode of inodeImages) {
-    imageSize += align4(INODE_RECORD_SIZE + inode.payload.length);
-    dataSize += align4(inode.payload.length);
+    const storedLength = hostFiles && inode.entry.k === "f" ? 0 : inode.payload.length;
+    imageSize += align4(INODE_RECORD_SIZE + storedLength);
+    dataSize += align4(storedLength);
+    if (inode.entry.k === "f") residentBytes += BigInt(inode.payload.length);
   }
 
   const dentries = indexDentries(entries, paths);
@@ -195,9 +218,15 @@ export const serializeThistleVfs = (source: readonly TreeEnt[]): Uint8Array => {
   view.setUint32(12, dentries.length, true);
   view.setUint32(16, root.id, true);
   view.setUint32(20, output.length, true);
-  let at = writeInodes(output, inodeImages);
+  let at = writeInodes(output, inodeImages, hostFiles);
   at = writeDentries(output, dentries, at);
   if (at !== output.length) throw new Error("Thistle VFS serializer size mismatch");
   view.setUint32(24, fnv(output, HEADER_SIZE), true);
-  return output;
+  return { image: output, files: inodeImages.filter(inode => inode.entry.k === "f").map(inode => inode.entry), residentBytes };
 };
+
+/** Produce the existing native image format with resident file data. */
+export const serializeThistleVfs = (source: VfsEntries): Uint8Array => planImage(source, false).image;
+
+/** Plan a host mount using the same topology and metadata validation as native images. */
+export const planHostThistleVfs = (source: VfsEntries): HostVfsImage => planImage(source, true);

@@ -5,3 +5,5 @@
 `Stream` supplies the default lifecycle contract for endpoints that do not need reference counting.
 
 `TerminalState` describes terminal attributes and dimensions. Pipes expose readiness (`readable`, `writable`, `onChange`) and reference-counted closure for hosted event polling.
+
+`In.rd` accepts a process abort signal. Pipe reads cancel one pending operation with `EINTR`, preserving the shared endpoint for other processes. Custom asynchronous input transports must honour this signal to prevent abandoned reads consuming later input.

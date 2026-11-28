@@ -1,0 +1,66 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { mountedKernel } from "./vfs-fixture.js";
+import { thistleHartInit, thistleProcessInit, thistleHartGetX, thistleHartSetX,
+  thistleHartStatus, thistleGuestPage, thistleImageBegin, thistleImageSegment,
+  thistleImageFinish, thistleImageReserve, thistleImageRelease } from "../native/kernel.js";
+import { thistleProcessAttach } from "../native/process-state.js";
+import { thistleProcessPark, thistleProcessPrepareImage, thistleProcessRunImage, thistleProcessFinish, thistleProcessSetHostState } from "../native/process-host.js";
+import { C_PROCESS_LOCK, H_LOCK, THISTLE_HART_WAITING, THISTLE_HART_EXITED,
+  THISTLE_HART_RUNNABLE, THISTLE_PROCESS_RUNNING, THISTLE_PROCESS_WAITING } from "../native/abi.js";
+import { hartAt } from "../native/state.js";
+import { storeU32, loadU32 } from "../native/memory.js";
+
+test("host image transition parks the process and resets only its own harts", () => {
+  const memory = mountedKernel(4);
+  assert.equal(thistleHartInit(memory, 1, 0x10000000n, 0n), 0);
+  assert.equal(thistleProcessInit(memory, 1, 2, 1, 0, 0, 0, 0, 0, 0), 0);
+  assert.equal(thistleHartInit(memory, 2, 0x10000000n, 0n), 0);
+  assert.equal(thistleProcessAttach(memory, 2, 2), 0);
+  assert.equal(thistleProcessSetHostState(memory, 1, 999, THISTLE_PROCESS_WAITING), -3);
+  assert.equal(thistleProcessSetHostState(memory, 1, 2, THISTLE_PROCESS_WAITING), 0);
+  assert.equal(thistleHartStatus(memory, 2), THISTLE_HART_RUNNABLE);
+  assert.equal(thistleProcessSetHostState(memory, 1, 2, THISTLE_PROCESS_RUNNING), 0);
+  assert.equal(thistleHartInit(memory, 3, 0x10000000n, 0n), 0);
+  assert.equal(thistleProcessInit(memory, 3, 3, 1, 0, 0, 0, 0, 0, 0), 0);
+  const peerPage = thistleGuestPage(memory, 3, 0x200000n, true);
+  memory.bytes[peerPage] = 77;
+  assert.equal(thistleHartSetX(memory, 1, 10, 123n), 0);
+  assert.notEqual(thistleHartInit(memory, 1, 0x10000000n, 0n), 0);
+  assert.notEqual(thistleProcessInit(memory, 1, 4, 1, 0, 0, 0, 0, 0, 0), 0);
+  assert.equal(thistleProcessPark(memory, 1), 0);
+  assert.equal(thistleHartStatus(memory, 1), THISTLE_HART_WAITING);
+  assert.equal(thistleHartStatus(memory, 2), THISTLE_HART_WAITING);
+  assert.equal(thistleProcessRunImage(memory, 1), -22);
+  storeU32(memory, hartAt(2) + H_LOCK, 1);
+  assert.equal(thistleProcessPrepareImage(memory, 1), -11);
+  assert.equal(thistleHartGetX(memory, 1, 10), 123n);
+  assert.equal(loadU32(memory, C_PROCESS_LOCK), 0);
+  assert.equal(loadU32(memory, hartAt(1) + H_LOCK), 0);
+  assert.equal(loadU32(memory, hartAt(2) + H_LOCK), 1);
+  storeU32(memory, hartAt(2) + H_LOCK, 0);
+  assert.equal(thistleProcessPrepareImage(memory, 2), -22);
+  assert.equal(thistleProcessPrepareImage(memory, 1), 0);
+  assert.equal(thistleHartGetX(memory, 1, 10), 0n);
+  assert.equal(thistleHartStatus(memory, 2), THISTLE_HART_EXITED);
+  assert.equal(thistleHartStatus(memory, 3), THISTLE_HART_RUNNABLE);
+  assert.equal(memory.bytes[peerPage], 77);
+  const source = thistleImageReserve(memory, 4);
+  storeU32(memory, source, 0x73);
+  assert.equal(thistleImageBegin(memory, 1, 0x10000000n, 0x200000n, 0n, 0, 0), 0);
+  assert.equal(thistleImageSegment(memory, 1, 1, 1, 0x200000n, 4n, 5, source, 4), 0);
+  assert.equal(thistleImageFinish(memory, 1, 4), 0);
+  assert.equal(thistleImageRelease(memory, source, 4), 0);
+  assert.equal(thistleHartStatus(memory, 1), THISTLE_HART_WAITING);
+  assert.equal(thistleProcessRunImage(memory, 1), 0);
+  assert.equal(thistleHartStatus(memory, 1), THISTLE_HART_RUNNABLE);
+  assert.equal(memory.bytes[peerPage], 77);
+  assert.equal(thistleProcessFinish(memory, 1, 999, 9), -3);
+  assert.equal(thistleHartStatus(memory, 1), THISTLE_HART_RUNNABLE);
+  assert.equal(thistleProcessFinish(memory, 1, 2, 9), 0);
+  assert.equal(thistleProcessSetHostState(memory, 1, 2, THISTLE_PROCESS_RUNNING), -22);
+  assert.equal(thistleHartStatus(memory, 1), THISTLE_HART_EXITED);
+  assert.equal(thistleHartStatus(memory, 2), THISTLE_HART_EXITED);
+  assert.equal(thistleHartGetX(memory, 1, 10), 9n);
+  assert.equal(thistleHartStatus(memory, 3), THISTLE_HART_RUNNABLE);
+});

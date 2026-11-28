@@ -1,3 +1,5 @@
-# sys
+# Syscall facade
 
-`Sys` is the process-facing syscall facade, binding a kernel instance to one process. Methods expose descriptor I/O, filesystem access, process creation, credentials and environment operations. `AppInfo` describes application registration information. Callers must use the process's credentials, not construct a privileged VFS access path.
+`Sys` binds a `Kern` and live `Proc`. Identity, process state, working directory and filesystem descriptors are native records. `cd`, `read`, `readb`, `materialise`, `write`, `writeb`, `mkfile`, `mkdir`, `list`, `rm`, `mv`, `link`, `symlink`, `readlink`, `chmod`, `chown`, `utime`, `stat`, `node`, `paths`, `glob` delegate to the canonical filesystem. `open`, `openDir`, `close`, `dup`, `fdr`, `fdw`, `seek` use native descriptor authority; `/dev/tty` and `pipe` retain explicit stream capabilities. `fdStat`, `fdList`, `fdPath`, `fdChdir`, `fdChmod`, `fdChown`, `fdUtime` access the opened inode. `env`, `setenv`, `unset`, `apps`, `logs`, `ps`, `net`, `reboot`, `sleep`, `yield`, `chk`, `start`, `exec`, `wait`, `reap`, `kill`, `which`, `uptime`, `inb`, `chunkb`, `chunk`, `input`, `out`, `err` expose process and host service operations. Credential operations (`setResuid`, `setResgid`, `setReuid`, `setRegid`, `setUid`, `setGid`, `setFsuid`, `setFsgid`, `setGroups`) marshal native identity changes. `AppInfo` is the installed application listing record.
+
+`truncate(path, size)` opens a writable file without creating it; `fdTruncate(fd, size)` resizes the open inode without resolving a path.

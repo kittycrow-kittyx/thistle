@@ -1,0 +1,66 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { mountedKernel } from "./vfs-fixture.js";
+import { loadU32, storeU32, storeU64 } from "../native/memory.js";
+import { C_VFS_DATA_NEXT, P_FSUID, THISTLE_VFS_KIND_FILE } from "../native/abi.js";
+import { thistleImageReserve, thistleImageRelease } from "../native/kernel.js";
+import { thistleProcessRecord } from "../native/process-state.js";
+import { thistleVfsCreate, thistleVfsUnlink, thistleVfsWrite } from "../native/vfs-edit.js";
+import { thistleVfsFileSize, thistleVfsReadData, thistleVfsResidentUsage, thistleVfsReadEntry } from "../native/vfs.js";
+import { thistleVfsBacking, thistleVfsBackingVersion, thistleVfsCommitBacking, thistleVfsSetQuota } from "../native/vfs-backing.js";
+
+test("host backing preserves sparse sizes and canonical quota without copying payloads", () => {
+  const memory = mountedKernel(), proc = thistleProcessRecord(memory, 0);
+  const input = thistleImageReserve(memory, 256);
+  memory.bytes[input + 128] = 102;
+  const inode = thistleVfsCreate(memory, proc, 1, input + 128, 1, THISTLE_VFS_KIND_FILE, 0o644, 1n);
+  const arena = loadU32(memory, C_VFS_DATA_NEXT);
+  assert.equal(thistleVfsSetQuota(memory, 400n), 0);
+  const commit = (handle: number, size: bigint, resident: bigint, write = 1, version = thistleVfsBackingVersion(memory, inode)): number => {
+    storeU32(memory, input, handle); storeU32(memory, input + 4, write);
+    storeU64(memory, input + 8, size); storeU64(memory, input + 16, resident);
+    return thistleVfsCommitBacking(memory, proc, inode, version, input, 2n);
+  };
+  assert.equal(commit(7, 5n * 1024n ** 3n, 0n), 0);
+  const version = thistleVfsBackingVersion(memory, inode);
+  assert.equal(thistleVfsFileSize(memory, inode), 5n * 1024n ** 3n);
+  assert.equal(thistleVfsResidentUsage(memory), 256n);
+  assert.equal(loadU32(memory, C_VFS_DATA_NEXT), arena);
+  assert.equal(thistleVfsReadData(memory, inode, 0n, input + 128, 1), -18);
+  assert.equal(thistleVfsWrite(memory, proc, inode, input + 128, 1, 0, true, 3n), -18);
+  assert.equal(commit(8, 5n * 1024n ** 3n, 100n, 0), 0);
+  assert.equal(thistleVfsResidentUsage(memory), 356n);
+  assert.equal(commit(9, 5n * 1024n ** 3n, 200n, 0), -28);
+  assert.equal(thistleVfsBacking(memory, inode), 8);
+  assert.equal(commit(9, 5n * 1024n ** 3n, 0n, 0, version), -11);
+  storeU32(memory, proc + P_FSUID, 1000);
+  assert.equal(commit(9, 1n, 1n), -13);
+  storeU32(memory, proc + P_FSUID, 0);
+  const stale = thistleVfsBackingVersion(memory, inode);
+  assert.equal(thistleVfsUnlink(memory, proc, 1, input + 128, 1, false, 4n), 0);
+  assert.equal(thistleVfsBacking(memory, inode), 0);
+  assert.equal(thistleVfsResidentUsage(memory), 128n);
+  assert.equal(thistleVfsCreate(memory, proc, 1, input + 128, 1, THISTLE_VFS_KIND_FILE, 0o644, 5n), inode);
+  assert.equal(commit(10, 1n, 1n, 1, stale), -11);
+});
+
+test("canonical directory cursors reflect unlink and inode reuse", () => {
+  const memory = mountedKernel(), proc = thistleProcessRecord(memory, 0);
+  const input = thistleImageReserve(memory, 512);
+  memory.bytes[input + 256] = 97;
+  const inode = thistleVfsCreate(memory, proc, 1, input + 256, 1, THISTLE_VFS_KIND_FILE, 0o644, 1n);
+  assert.ok(inode > 1);
+  assert.equal(thistleVfsReadEntry(memory, proc, 1, 0, input, 16), -34);
+  assert.equal(thistleVfsReadEntry(memory, proc, 1, 0, input, 256), 17);
+  assert.equal(loadU32(memory, input), inode);
+  assert.equal(loadU32(memory, input + 12), 1);
+  assert.equal(memory.view.getUint8(input + 16), 97);
+  assert.equal(thistleVfsReadEntry(memory, proc, 1, loadU32(memory, input + 8), input, 256), 0);
+  assert.equal(thistleVfsUnlink(memory, proc, 1, input + 256, 1, false, 2n), 0);
+  assert.equal(thistleVfsReadEntry(memory, proc, 1, 0, input, 256), 0);
+  memory.bytes[input + 256] = 98;
+  assert.equal(thistleVfsCreate(memory, proc, 1, input + 256, 1, THISTLE_VFS_KIND_FILE, 0o644, 3n), inode);
+  assert.equal(thistleVfsReadEntry(memory, proc, 1, 0, input, 256), 17);
+  assert.equal(memory.view.getUint8(input + 16), 98);
+  assert.equal(thistleImageRelease(memory, input, 512), 0);
+});

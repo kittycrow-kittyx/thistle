@@ -1,4 +1,4 @@
-import { bad, requireValue } from "../core/err.js";
+import { bad } from "../core/err.js";
 
 export const PG = 65536;
 
@@ -65,56 +65,57 @@ export class Mem64 implements RvMemory {
     }
   }
 
+  /** Direct page view for resident scalars; reads spanning pages retain sparse zero fill. */
+  private scalarView(at: bigint, width: number): DataView | null {
+    this.chk(at, width);
+    const address = Number(at), offset = address % PG;
+    if (offset + width > PG) {
+      const bytes = this.read(at, width);
+      return new DataView(bytes.buffer, bytes.byteOffset, width);
+    }
+    const page = this.page.get(Math.floor(address / PG)) ?? null;
+    return page === null ? null : new DataView(page.buffer, page.byteOffset + offset, width);
+  }
+
   u8(at: bigint): number {
-    this.chk(at, 1);
-    const n = Number(at), q = this.page.get(Math.floor(n / PG)) ?? null;
-    return q ? q[n % PG] ?? 0 : 0;
+    const view = this.scalarView(at, 1);
+    return view === null ? 0 : view.getUint8(0);
   }
-  i8(at: bigint): bigint { return BigInt.asIntN(8, BigInt(this.u8(at))); }
+  i8(at: bigint): bigint {
+    const view = this.scalarView(at, 1);
+    return view === null ? 0n : BigInt(view.getInt8(0));
+  }
   u16(at: bigint): number {
-    this.chk(at, 2);
-    const n = Number(at), off = n % PG;
-    if (off > PG - 2) { const b = this.read(at, 2); return requireValue(b[0] ?? null, "b[0]") | requireValue(b[1] ?? null, "b[1]") << 8; }
-    const q = this.page.get(Math.floor(n / PG)) ?? null;
-    return q ? requireValue(q[off] ?? null, "q[off]") | requireValue(q[off + 1] ?? null, "q[off + 1]") << 8 : 0;
+    const view = this.scalarView(at, 2);
+    return view === null ? 0 : view.getUint16(0, true);
   }
-  i16(at: bigint): bigint { return BigInt.asIntN(16, BigInt(this.u16(at))); }
+  i16(at: bigint): bigint {
+    const view = this.scalarView(at, 2);
+    return view === null ? 0n : BigInt(view.getInt16(0, true));
+  }
   u32(at: bigint): number {
-    this.chk(at, 4);
-    const n = Number(at), off = n % PG;
-    if (off > PG - 4) { const b = this.read(at, 4); return (requireValue(b[0] ?? null, "b[0]") | requireValue(b[1] ?? null, "b[1]") << 8 | requireValue(b[2] ?? null, "b[2]") << 16 | requireValue(b[3] ?? null, "b[3]") << 24) >>> 0; }
-    const q = this.page.get(Math.floor(n / PG)) ?? null;
-    return q ? (requireValue(q[off] ?? null, "q[off]") | requireValue(q[off + 1] ?? null, "q[off + 1]") << 8 | requireValue(q[off + 2] ?? null, "q[off + 2]") << 16 | requireValue(q[off + 3] ?? null, "q[off + 3]") << 24) >>> 0 : 0;
+    const view = this.scalarView(at, 4);
+    return view === null ? 0 : view.getUint32(0, true);
   }
-  i32(at: bigint): bigint { return BigInt.asIntN(32, BigInt(this.u32(at))); }
-
+  i32(at: bigint): bigint {
+    const view = this.scalarView(at, 4);
+    return view === null ? 0n : BigInt(view.getInt32(0, true));
+  }
   u64(at: bigint): bigint {
-    this.chk(at, 8);
-    const n0 = Number(at), off = n0 % PG;
-    if (off > PG - 8) { const b = this.read(at, 8); let n = 0n; for (let i = 7; i >= 0; i--) n = n << 8n | BigInt(requireValue(b[i] ?? null, "b[i]")); return n; }
-    const b = this.page.get(Math.floor(n0 / PG)) ?? null;
-    if (!b) return 0n;
-    let n = 0n;
-    for (let i = 7; i >= 0; i--) n = n << 8n | BigInt(requireValue(b[off + i] ?? null, "b[off + i]"));
-    return n;
+    const view = this.scalarView(at, 8);
+    return view === null ? 0n : view.getBigUint64(0, true);
   }
-
-  i64(at: bigint): bigint { return BigInt.asIntN(64, this.u64(at)); }
-
+  i64(at: bigint): bigint {
+    const view = this.scalarView(at, 8);
+    return view === null ? 0n : view.getBigInt64(0, true);
+  }
   f32(at: bigint): number {
-    this.chk(at, 4);
-    const n = Number(at), off = n % PG;
-    if (off > PG - 4) { const b = this.read(at, 4); return new DataView(b.buffer, b.byteOffset, b.byteLength).getFloat32(0, true); }
-    const b = this.page.get(Math.floor(n / PG)) ?? null;
-    return b ? new DataView(b.buffer, b.byteOffset + off, 4).getFloat32(0, true) : 0;
+    const view = this.scalarView(at, 4);
+    return view === null ? 0 : view.getFloat32(0, true);
   }
-
   f64(at: bigint): number {
-    this.chk(at, 8);
-    const n = Number(at), off = n % PG;
-    if (off > PG - 8) { const b = this.read(at, 8); return new DataView(b.buffer, b.byteOffset, b.byteLength).getFloat64(0, true); }
-    const b = this.page.get(Math.floor(n / PG)) ?? null;
-    return b ? new DataView(b.buffer, b.byteOffset + off, 8).getFloat64(0, true) : 0;
+    const view = this.scalarView(at, 8);
+    return view === null ? 0 : view.getFloat64(0, true);
   }
 
   set8(at: bigint, n: bigint | number): void {

@@ -1,6 +1,6 @@
 // This module composes kernel, toolchain or integration-test boundaries and intentionally imports their contracts.
 //@cg-expect-warning
-import { THISTLE_KERNEL_MEMORY_BYTES } from "../core/kernel-memory.js";
+import { errnoNumbers as eno } from "../core/errno.js";
 import { hostNumber, randomFill, readString } from "./mem64.js";
 import { ensure } from "../core/err.js";
 import type { TerminalState } from "../io/stream.js";
@@ -12,16 +12,20 @@ import type { Sys } from "../core/sys.js";
 import { enc } from "../io/stream.js";
 import type { Exe } from "../../thistle-asm/fmt.js";
 import { norm } from "../fs/vfs.js";
-import type { RvMemory } from "./mem64.js";
-import { Fd } from "../core/proc.js";
+import { Fd, ExecReplace } from "../core/proc.js";
+import { HostBacking, mappedRanges } from "../host/backing.js";
+import type { MappedRange } from "../host/backing.js";
 import { RvLinuxEvents } from "./linux-events.js";
 import type { StartIo } from "../core/kernel.js";
-import { directMemory, loadI32, loadU32 } from "../native/memory.js";
+import { loadI32, loadU32 } from "../native/memory.js";
 import type { ThistleMemory } from "../native/memory.js";
+import { thistleProcessPrepareImage, thistleProcessRunImage } from "../native/process-host.js";
+import { checkNative, withImage } from "../host/native-access.js";
 import { ThistleMem64 } from "../native/host-memory.js";
 import type { ThistleExports } from "../native/host-exports.js";
 import {
   thistleKernelValid,
+  thistleGuestAccess,
   thistleHartGetX,
   thistleHartSetX,
   thistleHartGetF,
@@ -44,7 +48,9 @@ import {
   thistleHostLength,
   thistleHostOperation,
   thistleKernelInit,
-  thistleMapHostFile,
+  thistleMapHostDescriptor,
+  thistleMapHostAnonymous,
+  thistleRemapHostFile,
   thistleUnmapHostFile,
   thistleImageRelease,
   thistleImageReserve,
@@ -92,7 +98,7 @@ import {
   thistleVfsUid,
 } from "../native/vfs.js";
 import {
-  C_PROCESS_TABLE_BASE,
+  C_MAX_HARTS,
   H_FAULT,
   H_LOCK,
   H_STATUS,
@@ -102,19 +108,10 @@ import {
   H_STACK_POINTER,
   H_INSTRUCTIONS,
   H_LAST_INSTRUCTION,
+  H_SHARED_WRITE,
   H_F,
   H_X,
   H_PROCESS_SLOT,
-  P_EGID,
-  P_EUID,
-  P_FSGID,
-  P_FSUID,
-  P_GROUP_COUNT,
-  P_GROUPS,
-  P_RGID,
-  P_RUID,
-  P_SGID,
-  P_SUID,
   THISTLE_BATCH_BUSY,
   THISTLE_BATCH_CONTENDED,
   THISTLE_BATCH_EXITED,
@@ -124,15 +121,13 @@ import {
   THISTLE_FAULT_BREAKPOINT,
   THISTLE_HART_BASE,
   THISTLE_HART_RUNNABLE,
+  THISTLE_HART_EMPTY,
   THISTLE_HART_WAITING,
   THISTLE_HART_EXITED,
   THISTLE_HART_FAULTED,
   THISTLE_EVENT_NONE,
   THISTLE_HART_STRIDE,
   THISTLE_HOST_WRITE,
-  THISTLE_CONTROL_BASE,
-  THISTLE_GROUP_CAPACITY,
-  THISTLE_PROCESS_STRIDE,
   THISTLE_STARTUP_MAGIC,
   THISTLE_START_OK,
   THISTLE_THX_OK,
@@ -177,7 +172,6 @@ interface Vf {
 }
 
 interface Seg { name: string; at: bigint; end: bigint; flg: string; }
-interface MapEnt { at: bigint; end: bigint; prot: number; shared: boolean; path: string | null; off: number | null; }
 
 interface ThistleCore {
   memory: ThistleMemory;
@@ -198,14 +192,6 @@ interface ThistleThreadRuntime {
   failure: Error | null;
 }
 
-const eno: Record<Errno, number> = {
-  EPERM: 1, ENOENT: 2, ESRCH: 3, EINTR: 4, EIO: 5, ECHILD: 10, EAGAIN: 11,
-  ENOMEM: 12, EACCES: 13, EFAULT: 14, EBUSY: 16, EEXIST: 17, ENOTDIR: 20, EISDIR: 21,
-  EINVAL: 22, ENFILE: 23, EMFILE: 24, EFBIG: 27, ENOSPC: 28, EPIPE: 32,
-  ERANGE: 34, ENAMETOOLONG: 36, ENOSYS: 38, ENOTEMPTY: 39, ELOOP: 40,
-  ENOEXEC: 8, EBADF: 9, EPROTO: 71, ENOTSUP: 95, ENETUNREACH: 101,
-  ETIMEDOUT: 110, EROFS: 30,
-};
 
 const sx = (n: bigint, z: number): bigint => BigInt.asIntN(z, n);
 const ux = (n: bigint): bigint => BigInt.asUintN(64, n);
@@ -215,19 +201,21 @@ const al = (n: bigint, z = PAGE): bigint => (n + z - 1n) & -z;
 export class Rv64 {
   private xState: BigInt64Array<ArrayBufferLike> = new BigInt64Array(32);
   private fState: BigUint64Array<ArrayBufferLike> = new BigUint64Array(32);
-  private memoryState: RvMemory | null = null;
+  private memoryState: ThistleMem64 | null = null;
   private nativeMemory: ThistleMemory | null = null;
-  private get m(): RvMemory { return requireValue(this.memoryState, "m before VM initialisation"); }
-  private set m(value: RvMemory) { this.memoryState = value; }
+  private executionActive = false;
+  private get m(): ThistleMem64 {
+    if (!this.executionActive) bad("EINTR", "expired guest image");
+    return requireValue(this.memoryState, "m before VM initialisation");
+  }
+  private set m(value: ThistleMem64) { this.memoryState = value; }
   private pc = 0n;
   private floor = 0n;
-  private brk = 0n;
   private stackAt = 0n;
-  private mapAt = 0n;
-  private readonly maps: MapEnt[] = [];
   private readonly miss = new Set<number>();
   private readonly localSockets = new Set<number>();
   private thistleThreads: ThistleThreadRuntime | null = null;
+  private interrupted: Promise<void> | null = null;
   private thistleActiveHart = 0;
   private readonly thistleFutexWaiters = new Map<bigint, Set<FutexWake>>();
   private readonly events: RvLinuxEvents;
@@ -251,8 +239,9 @@ export class Rv64 {
   }
 
   private async runThistleSource(exe: Exe, argv: string[], image: Uint8Array | null = null): Promise<number> {
-    const physicalBytes = THISTLE_KERNEL_MEMORY_BYTES;
-    const memory = directMemory(physicalBytes);
+    const memory = this.s.k.canonical.memory;
+    const physicalBytes = memory.bytes.length;
+    this.thistleActiveHart = this.s.p.native.hart;
     this.nativeMemory = memory;
     const exports: ThistleExports = {
       thistleKernelInit: (_memory, maxHarts, threaded) => thistleKernelInit(memory, maxHarts, threaded !== 0),
@@ -329,7 +318,32 @@ export class Rv64 {
       thistleResumeHost: (_memory, hart, result) => thistleResumeHost(memory, hart, result),
       thistleExitHart: (_memory, hart, code) => thistleExitHart(memory, hart, code),
     };
-    return this.runThistleCore(exe, argv, image, { memory, exports, label: "Thistle native source" }, physicalBytes);
+    this.executionActive = true;
+    const interrupt = this.bindInterrupt();
+    this.interrupted = interrupt.promise;
+    try {
+      this.s.chk();
+      return await this.runThistleCore(exe, argv, image, { memory, exports, label: "Thistle native source" }, physicalBytes);
+    } finally {
+      this.executionActive = false;
+      this.events.dispose();
+      interrupt.dispose();
+      this.interrupted = null;
+      for (const waiters of this.thistleFutexWaiters.values()) {
+        for (const wake of [...waiters]) wake(-4n);
+      }
+    }
+  }
+
+  private bindInterrupt(): { promise: Promise<void>; dispose: () => void } {
+    const signal = this.s.p.ac.signal;
+    const hook = { abort: (): void => { throw new Error("interrupt hook not initialised"); } };
+    const promise = new Promise<void>(resolve => {
+      hook.abort = () => { this.executionActive = false; resolve(); };
+      signal.addEventListener("abort", hook.abort, { once: true });
+    });
+    if (signal.aborted) hook.abort();
+    return { promise, dispose: () => signal.removeEventListener("abort", hook.abort) };
   }
 
   /** Thin-host packaging for strings and the random capability consumed by Thistle. */
@@ -360,134 +374,48 @@ export class Rv64 {
     if (exe.machine !== "thistle64" || exe.isa !== "rv64gc") bad("ENOEXEC", "RV64 VM received another instruction profile");
     const raw = image ?? bad("ENOEXEC", `${core.label} needs the original THX image`);
     const { memory, exports } = core;
-    const maxHarts = THISTLE_GUEST_THREADS;
-    if (exports.thistleKernelInit(0, maxHarts, 0) !== 0 || exports.thistleHartInit(0, 0, 0x0000ffffffffffffn, 0n) !== 0) {
-      bad("ENOMEM", `${core.label} memory initialisation failed`);
-    }
-    if (exports.thistleProcessInit(0, 0, this.s.pid, this.s.ppid, this.s.uid, this.s.euid, this.s.suid, this.s.gid, this.s.egid, this.s.sgid) !== 0) {
-      bad("EPROTO", `${core.label} process initialisation failed`);
-    }
-    for (let index = 0; index < this.s.groups.length; index++) {
-      if (exports.thistleProcessSetGroup(0, 0, index, requireValue(this.s.groups[index] ?? null, "src/vm/rv64.ts:474")) !== 0) {
-        bad("EPROTO", `${core.label} supplementary-group initialisation failed`);
-      }
-    }
+    checkNative(thistleProcessPrepareImage(memory, this.s.p.native.hart));
     // Hosted guests use the live canonical VFS through Sys. A read-only native
     // snapshot would hide writes and allocate a second, stale descriptor table.
-    const imageAt = exports.thistleImageReserve(0, raw.length) >>> 0;
-    if (imageAt === 0xffffffff || imageAt + raw.length > memory.bytes.length) bad("ENOMEM", `${core.label} image reservation failed`);
-    memory.bytes.set(raw, imageAt);
-    const loaded = exports.thistleLoadThx(0, 0, imageAt, raw.length);
-    const released = exports.thistleImageRelease(0, imageAt, raw.length);
-    if (released !== THISTLE_THX_OK) bad("EPROTO", `${core.label} image release failed (${released})`);
-    if (loaded !== THISTLE_THX_OK) bad("ENOEXEC", `${core.label} rejected THX image (${loaded})`);
-    const startup = this.startup(argv);
-    const startupAt = exports.thistleImageReserve(0, startup.length) >>> 0;
-    if (startupAt === 0xffffffff || startupAt + startup.length > memory.bytes.length) bad("ENOMEM", `${core.label} startup reservation failed`);
-    memory.bytes.set(startup, startupAt);
-    const stackLimit = this.s.k.lim.stack;
+    withImage(memory, raw.length, imageAt => {
+      memory.bytes.set(raw, imageAt);
+      const loaded = exports.thistleLoadThx(0, this.s.p.native.hart, imageAt, raw.length);
+      if (loaded !== THISTLE_THX_OK) bad("ENOEXEC", `${core.label} rejected THX image (${loaded})`);
+    });
+    const startup = this.startup(argv), stackLimit = this.s.k.lim.stack;
     if (!Number.isSafeInteger(stackLimit) || stackLimit < 0 || stackLimit > 0xffffffff) bad("EINVAL", "invalid RV64 stack limit");
-    const started = exports.thistleBuildInitialStack(0, 0, startupAt, startup.length, stackLimit);
-    const startupReleased = exports.thistleImageRelease(0, startupAt, startup.length);
-    if (startupReleased !== THISTLE_THX_OK) bad("EPROTO", `${core.label} startup release failed (${startupReleased})`);
-    if (started !== THISTLE_START_OK) bad("ENOEXEC", `${core.label} rejected startup block (${started})`);
-    this.xState = new BigInt64Array(memory.buffer, THISTLE_HART_BASE + H_X, 32);
-    this.fState = new BigUint64Array(memory.buffer, THISTLE_HART_BASE + H_F, 32);
-    this.m = new ThistleMem64(memory, 0, exports.thistleHartVirtualTop(0, 0), physicalBytes,
-      (hart, address, create) => exports.thistleGuestPage(0, hart, address, create ? 1 : 0));
+    withImage(memory, startup.length, startupAt => {
+      memory.bytes.set(startup, startupAt);
+      const started = exports.thistleBuildInitialStack(0, this.s.p.native.hart, startupAt, startup.length, stackLimit);
+      if (started !== THISTLE_START_OK) bad("ENOEXEC", `${core.label} rejected startup block (${started})`);
+    });
+    this.xState = new BigInt64Array(memory.buffer, THISTLE_HART_BASE + this.s.p.native.hart * THISTLE_HART_STRIDE + H_X, 32);
+    this.fState = new BigUint64Array(memory.buffer, THISTLE_HART_BASE + this.s.p.native.hart * THISTLE_HART_STRIDE + H_F, 32);
+    this.m = new ThistleMem64(memory, this.s.p.native.hart, exports.thistleHartVirtualTop(0, this.s.p.native.hart), physicalBytes,
+      (hart, address, create) => exports.thistleGuestPage(0, hart, address, create ? 1 : 0),
+      (address, length) => this.flushShared(address, length));
+    this.thistleDescribeImage(exe);
+    checkNative(thistleProcessRunImage(memory, this.s.p.native.hart));
+    this.floor = exports.thistleHartImageFloor(0, this.s.p.native.hart);
+    this.pc = exports.thistleHartPc(0, this.s.p.native.hart);
+    this.stackAt = exports.thistleHartStackBottom(0, this.s.p.native.hart);
+    return this.runThistleCooperative(core);
+  }
+
+  private thistleDescribeImage(exe: Exe): void {
     this.seg.length = 0;
-    const seen: Array<[bigint, bigint]> = [];
     for (const section of exe.sec) {
-      const at = BigInt(section.addr), end = at + BigInt(section.size);
-      if (section.addr < 0x10000 || section.addr % section.align || end > this.m.top || section.data.length > section.size) {
-        bad("ENOEXEC", `section ${section.name} has an invalid mapping`);
-      }
-      if (seen.some(([left, right]) => at < right && end > left)) bad("ENOEXEC", `section ${section.name} overlaps another section`);
-      seen.push([at, end]);
-      this.seg.push({ name: section.name, at, end, flg: section.flg });
+      this.seg.push({ name: section.name, at: BigInt(section.addr), end: BigInt(section.addr) + BigInt(section.size), flg: section.flg });
     }
-    this.floor = exports.thistleHartImageFloor(0, 0);
-    this.brk = al(this.floor);
-    this.mapAt = 0x4000000000n;
-    this.pc = exports.thistleHartPc(0, 0);
-    this.stackAt = exports.thistleHartStackBottom(0, 0);
-    if (maxHarts > 1) return this.runThistleCooperative(core);
-    let fuel = this.s.k.lim.fuel;
-    selectionExit1: while (!this.done) {
-      this.s.chk();
-      const before = exports.thistleHartMetric(0, 0, H_INSTRUCTIONS);
-      const result = exports.thistleRunRv64Batch(0, 0, 16384, BigInt(Date.now()) * 1000n, 0);
-      const after = exports.thistleHartMetric(0, 0, H_INSTRUCTIONS);
-      if (fuel) {
-        fuel -= Number(after - before);
-        ensure(!(fuel < 0), () => bad("ELOOP", "RV64 instruction limit reached"));
-      }
-      this.pc = exports.thistleHartPc(0, 0);
-      this.brk = exports.thistleHartBreak(0, 0);
-      switch (true) {
-case !!(result === THISTLE_BATCH_SYSCALL): {
-        // A guest syscall is an explicit Thistle-to-host service boundary, not a
-        // return to the direct TypeScript RV64 interpreter. Guest instructions
-        // continue exclusively in the selected generated Thistle execution core.
-        // Thistle owns credentials, brk and anonymous mmap state.
-        // Synchronise the host syscall adapter before servicing the request.
-        this.syncThistleCredentials(memory);
-        this.syncThistleMemoryState(exports);
-
-        await this.sys();
-        if (this.done) break selectionExit1;
-        ensure(!(exports.thistleHartSetPc(0, 0, ux(this.pc)) !== 0 || exports.thistleResumeSyscall(0, 0, requireValue(this.x[10] ?? null, "src/vm/rv64.ts:562")) !== 0), () => bad("EPROTO", `${core.label} syscall resume failed`));
-
-break; }
-case !!(result === THISTLE_BATCH_HOST): {
-        const operation = exports.thistleHostOperation(0, 0);
-        ensure(!(operation !== THISTLE_HOST_WRITE), () => bad("ENOSYS", `${core.label} requested unsupported host operation ${operation}`));
-        const descriptor = exports.thistleHostDescriptor(0, 0);
-        const address = exports.thistleHostAddress(0, 0);
-        const length = exports.thistleHostLength(0, 0);
-        let hostResult: bigint;
-        try {
-          hostResult = BigInt(await this.write(descriptor, this.m.read(address, length)));
-        } catch (caughtValue) { const error = caughtValue instanceof Error ? caughtValue : new Error(typeof caughtValue === "undefined" ? "undefined" : String(caughtValue));
-          if (!(error instanceof KErr)) throw error;
-          hostResult = -BigInt(eno[error.code] ?? 5);
-        }
-        ensure(!(exports.thistleResumeHost(0, 0, hostResult) !== 0), () => bad("EPROTO", `${core.label} host-operation resume failed`));
-
-break; }
-case !!(result === THISTLE_BATCH_EXITED): {
-        this.exit(BigInt(exports.thistleHartExitCode(0, 0)));
-        break selectionExit1;
-       }
-default: { switch (true) {
-case !!(result === THISTLE_BATCH_FAULT): {
-        const fault = loadI32(memory, THISTLE_HART_BASE + H_FAULT);
-        const instruction = loadU32(memory, THISTLE_HART_BASE + H_LAST_INSTRUCTION);
-        if (fault === THISTLE_FAULT_BREAKPOINT) bad("EINTR", `RV64 breakpoint at 0x${this.pc.toString(16)}`);
-        bad("ENOEXEC", `${core.label} fault ${fault} on instruction 0x${instruction.toString(16).padStart(8, "0")} at 0x${this.pc.toString(16)}`);
-
-break; }
-case !!(result === THISTLE_BATCH_BUSY || result === THISTLE_BATCH_CONTENDED): {
-        await this.s.yield();
-        continue;
-       }
-} }
-}
-      await this.s.yield();
-    }
-    return this.code & 0xff;
   }
 
   /** Schedule RV64 harts cooperatively with shared guest memory and individual registers. */
   private async runThistleCooperative(core: ThistleCore): Promise<number> {
-    const { memory, exports } = core;
-    const session: ThistleThreadRuntime = {"failure": null,
-      core,
-      active: new Set([0]),
+    const session: ThistleThreadRuntime = { failure: null,
+      core, active: new Set([this.s.p.native.hart]),
       pending: new Map<number, Promise<void>>(),
-      tids: new Map([[0, this.s.pid]]),
-      clearTid: new Map<number, bigint>(),
-      nextTid: this.s.pid + 100000,
+      tids: new Map([[this.s.p.native.hart, this.s.pid]]),
+      clearTid: new Map<number, bigint>(), nextTid: this.s.pid + 100000,
     };
     this.thistleThreads = session;
     let fuel = this.s.k.lim.fuel;
@@ -498,56 +426,19 @@ case !!(result === THISTLE_BATCH_BUSY || result === THISTLE_BATCH_CONTENDED): {
         let progressed = false;
         for (const hart of [...session.active]) {
           if (session.pending.has(hart)) continue;
-          const status = exports.thistleHartStatus(0, hart);
-          if (status === THISTLE_HART_EXITED) {
-            // Guest state updates stay inside the selected instruction or syscall path.
-            //@cg-expect-warning
-            if (hart === 0) this.exit(BigInt(exports.thistleHartExitCode(0, 0)));
-            else session.active.delete(hart);
-            continue;
-          }
-          if (status === THISTLE_HART_FAULTED) {
-            const base = THISTLE_HART_BASE + hart * THISTLE_HART_STRIDE;
-            const fault = loadI32(memory, base + H_FAULT);
-            const instruction = loadU32(memory, base + H_LAST_INSTRUCTION);
-            this.thistleReportFault(session, hart, fault, instruction);
-          }
-          if (status !== THISTLE_HART_RUNNABLE) continue;
-          const before = exports.thistleHartMetric(0, hart, H_INSTRUCTIONS);
-          const result = exports.thistleRunRv64Batch(0, hart, 16384, BigInt(Date.now()) * 1000n, 0);
-          const executed = exports.thistleHartMetric(0, hart, H_INSTRUCTIONS) - before;
+          const executed = this.thistleStepHart(session, hart);
+          if (executed === null) continue;
           progressed = true;
           if (fuel) {
             fuel -= Number(executed);
             ensure(!(fuel < 0), () => bad("ELOOP", "RV64 instruction limit reached"));
           }
-          switch (true) {
-case !!(result === THISTLE_BATCH_SYSCALL): { this.thistleScheduleSyscall(session, hart);
-break; }
-case !!(result === THISTLE_BATCH_HOST): { this.thistleScheduleHost(session, hart);
-break; }
-case !!(result === THISTLE_BATCH_EXITED): {
-            if (hart === 0) this.exit(BigInt(exports.thistleHartExitCode(0, 0)));
-            else this.thistleThreadExit(hart, exports.thistleHartExitCode(0, hart));
-
-break; }
-case !!(result === THISTLE_BATCH_FAULT): {
-            const base = THISTLE_HART_BASE + hart * THISTLE_HART_STRIDE;
-            const fault = loadI32(memory, base + H_FAULT);
-            const instruction = loadU32(memory, base + H_LAST_INSTRUCTION);
-            this.thistleReportFault(session, hart, fault, instruction);
-
-break; }
-}
         }
         if (this.done) break;
         if (session.failure) throw session.failure;
-        if (progressed) {
-          await this.s.yield();
-          continue;
-        }
+        if (progressed) { await this.s.yield(); continue; }
         if (session.pending.size) {
-          await Promise.race(session.pending.values());
+          await Promise.race([...session.pending.values(), requireValue(this.interrupted, "guest interruption")]);
           continue;
         }
         bad("EPROTO", "Thistle has no runnable harts or pending syscalls");
@@ -556,6 +447,37 @@ break; }
     } finally {
       this.thistleThreads = null;
     }
+  }
+
+  private thistleObserveExit(session: ThistleThreadRuntime, hart: number): void {
+    const code = session.core.exports.thistleHartExitCode(0, hart);
+    if (hart === this.s.p.native.hart) this.exit(BigInt(code));
+    else this.thistleThreadExit(hart, code);
+  }
+
+  private thistleFault(session: ThistleThreadRuntime, hart: number): never {
+    const { memory } = session.core, base = THISTLE_HART_BASE + hart * THISTLE_HART_STRIDE;
+    return this.thistleReportFault(session, hart, loadI32(memory, base + H_FAULT), loadU32(memory, base + H_LAST_INSTRUCTION));
+  }
+
+  private thistleStepHart(session: ThistleThreadRuntime, hart: number): bigint | null {
+    const { memory, exports } = session.core;
+    const status = exports.thistleHartStatus(0, hart);
+    if (status === THISTLE_HART_EXITED) { this.thistleObserveExit(session, hart); return null; }
+    if (status === THISTLE_HART_FAULTED) this.thistleFault(session, hart);
+    if (status !== THISTLE_HART_RUNNABLE) return null;
+    this.refreshSharedMappings();
+    const before = exports.thistleHartMetric(0, hart, H_INSTRUCTIONS);
+    const result = exports.thistleRunRv64Batch(0, hart, 16384, BigInt(Date.now()) * 1000n, 0);
+    const executed = exports.thistleHartMetric(0, hart, H_INSTRUCTIONS) - before;
+    if (loadU32(memory, THISTLE_HART_BASE + hart * THISTLE_HART_STRIDE + H_SHARED_WRITE) !== 0) this.flushAllShared();
+    switch (result) {
+      case THISTLE_BATCH_SYSCALL: this.thistleScheduleSyscall(session, hart); break;
+      case THISTLE_BATCH_HOST: this.thistleScheduleHost(session, hart); break;
+      case THISTLE_BATCH_EXITED: this.thistleObserveExit(session, hart); break;
+      case THISTLE_BATCH_FAULT: this.thistleFault(session, hart);
+    }
+    return executed;
   }
 
   /** Include the guest mapping and execution registers when a hart faults. */
@@ -622,13 +544,13 @@ break; }
     const guestRegisters = [10, 11, 12, 13, 14, 15, 16, 17].map(reg =>
       `x${reg}=0x${ux(thistleHartGetX(memory, hart, reg)).toString(16)}`
     ).join(",");
-    const hostMappings = this.maps
-      .filter(region => region.path !== null && (
+    const hostMappings = mappedRanges(this.s.p.native)
+      .filter(region => (
         a1 >= region.at && a1 < region.end ||
         ux(thistleHartGetX(memory, hart, 14)) >= region.at &&
         ux(thistleHartGetX(memory, hart, 14)) < region.end
       ))
-      .map(region => `[0x${region.at.toString(16)},0x${region.end.toString(16)}) prot=${region.prot} path=${region.path}`)
+      .map(region => `[0x${region.at.toString(16)},0x${region.end.toString(16)}) prot=${region.prot} inode=${region.inode}`)
       .join(";");
     const traceCount = traceView.getUint32(1000, true);
     const cellWrites: string[] = [];
@@ -671,13 +593,10 @@ break; }
     this.fState = new BigUint64Array(memory.buffer, base + H_F, 32);
     this.thistleActiveHart = hart;
     this.pc = exports.thistleHartPc(0, hart);
-    this.brk = exports.thistleHartBreak(0, hart);
-    this.syncThistleCredentials(memory);
-    this.syncThistleMemoryState(exports);
     const registers = this.xState;
     const pc = this.pc;
     const work = this.sys().then(() => {
-      if (exports.thistleHartStatus(0, hart) !== THISTLE_HART_WAITING) return;
+      if (!this.executionActive || exports.thistleHartStatus(0, hart) !== THISTLE_HART_WAITING) return;
       if (exports.thistleHartSetPc(0, hart, ux(pc)) !== 0 ||
           exports.thistleResumeSyscall(0, hart, requireValue(registers[10] ?? null, "src/vm/rv64.ts:784")) !== 0) {
         bad("EPROTO", `Thistle hart ${hart} syscall resume failed`);
@@ -687,25 +606,27 @@ break; }
   }
 
   private thistleScheduleHost(session: ThistleThreadRuntime, hart: number): void {
+    this.thistleTrack(session, hart, this.thistleWriteHost(session, hart));
+  }
+
+  private async thistleWriteHost(session: ThistleThreadRuntime, hart: number): Promise<void> {
     const { exports } = session.core;
-    const work = (async () => {
-      const operation = exports.thistleHostOperation(0, hart);
-      if (operation !== THISTLE_HOST_WRITE) bad("ENOSYS", `unsupported Thistle host operation ${operation}`);
-      const descriptor = exports.thistleHostDescriptor(0, hart);
-      const address = exports.thistleHostAddress(0, hart);
-      const length = exports.thistleHostLength(0, hart);
-      let value: bigint;
-      try {
-        value = BigInt(await this.write(descriptor, this.m.read(address, length)));
-      } catch (caughtValue) { const error = caughtValue instanceof Error ? caughtValue : new Error(typeof caughtValue === "undefined" ? "undefined" : String(caughtValue));
-        if (!(error instanceof KErr)) throw error;
-        value = -BigInt(eno[error.code] ?? 5);
-      }
-      if (exports.thistleResumeHost(0, hart, value) !== 0) {
-        bad("EPROTO", `Thistle hart ${hart} host resume failed`);
-      }
-    })();
-    this.thistleTrack(session, hart, work);
+    const operation = exports.thistleHostOperation(0, hart);
+    if (operation !== THISTLE_HOST_WRITE) bad("ENOSYS", `unsupported Thistle host operation ${operation}`);
+    const descriptor = exports.thistleHostDescriptor(0, hart);
+    const address = exports.thistleHostAddress(0, hart);
+    const length = exports.thistleHostLength(0, hart);
+    let value: bigint;
+    try {
+      value = BigInt(await this.write(descriptor, this.m.read(address, length)));
+    } catch (caughtValue) { const error = caughtValue instanceof Error ? caughtValue : new Error(typeof caughtValue === "undefined" ? "undefined" : String(caughtValue));
+      if (!(error instanceof KErr)) throw error;
+      value = -BigInt(eno[error.code] ?? 5);
+    }
+    if (!this.executionActive) return;
+    if (exports.thistleResumeHost(0, hart, value) !== 0) {
+      bad("EPROTO", `Thistle hart ${hart} host resume failed`);
+    }
   }
 
   private thistleCloneThread(flags: bigint, stack: bigint, parentTid: bigint, tls: bigint, childTid: bigint): bigint {
@@ -714,12 +635,16 @@ break; }
     const option = ux(flags);
     if ((option & 0x10000n) === 0n) return this.clone(flags, stack, tls);
     if ((option & 0x900n) !== 0x900n) return -22n;
+    if (session.active.size >= THISTLE_GUEST_THREADS) return -11n;
+    const { memory, exports } = session.core;
     let child = -1;
-    for (let hart = 1; hart < THISTLE_GUEST_THREADS; hart++) {
-      if (!session.active.has(hart)) { child = hart; break; }
+    const harts = loadU32(memory, C_MAX_HARTS);
+    for (let hart = 0; hart < harts; hart++) {
+      const empty = exports.thistleHartStatus(0, hart) === THISTLE_HART_EMPTY;
+      const reusable = session.tids.has(hart) && !session.active.has(hart) && !session.pending.has(hart);
+      if (empty || reusable) { child = hart; break; }
     }
     if (child < 0) return -11n;
-    const { memory, exports } = session.core;
     const parent = this.thistleActiveHart;
     const source = THISTLE_HART_BASE + parent * THISTLE_HART_STRIDE;
     const target = THISTLE_HART_BASE + child * THISTLE_HART_STRIDE;
@@ -814,129 +739,64 @@ break; }
     });
   }
 
-  private syncThistleCredentials(memory: ThistleMemory): void {
-    const slot = loadU32(memory, THISTLE_HART_BASE + H_PROCESS_SLOT);
-    if (slot === 0xffffffff) return;
-
-    const table = loadU32(
-      memory,
-      THISTLE_CONTROL_BASE + C_PROCESS_TABLE_BASE,
-    );
-    const proc = table + slot * THISTLE_PROCESS_STRIDE;
-
-    const ruid = loadU32(memory, proc + P_RUID);
-    const euid = loadU32(memory, proc + P_EUID);
-    const suid = loadU32(memory, proc + P_SUID);
-    const fsuid = loadU32(memory, proc + P_FSUID);
-
-    const rgid = loadU32(memory, proc + P_RGID);
-    const egid = loadU32(memory, proc + P_EGID);
-    const sgid = loadU32(memory, proc + P_SGID);
-    const fsgid = loadU32(memory, proc + P_FSGID);
-
-    const count = Math.min(
-      loadU32(memory, proc + P_GROUP_COUNT),
-      THISTLE_GROUP_CAPACITY,
-    );
-
-    const groups: number[] = [];
-
-    for (let index = 0; index < count; index++) {
-      groups.push(
-        loadU32(memory, proc + P_GROUPS + index * 4),
-      );
-    }
-
-    this.s.p.cred = {
-      uid: euid,
-      gid: egid,
-      ruid,
-      euid,
-      suid,
-      rgid,
-      egid,
-      sgid,
-      groups,
-    };
-
-    this.s.p.fsuid = fsuid;
-    this.s.p.fsgid = fsgid;
-  }
-
-  private syncThistleMemoryState(exports: ThistleExports): void {
-    this.brk = exports.thistleHartBreak(0, 0);
-
-    // Retain file-backed mappings maintained by the compatibility bridge.
-    const hostOwned = this.maps.filter(
-      mapping => mapping.path !== null,
-    );
-
-    this.maps.length = 0;
-    this.maps.push(...hostOwned);
-
-    const count = exports.thistleProcessMapCount(0, 0);
-
-    for (let index = 0; index < count; index++) {
-      const at = exports.thistleProcessMapAddress(0, 0, index);
-      const end = exports.thistleProcessMapEnd(0, 0, index);
-      const prot = exports.thistleProcessMapProtection(0, 0, index);
-
-      if (end > at && !hostOwned.some(mapping => mapping.at === at && mapping.end === end)) {
-        this.maps.push({"path": null, "off": null, at,
-          end,
-          prot,
-          shared: false,
-        });
-      }
-    }
-  }
-
   private async sys(): Promise<void> {
     // Capture the originating hart: another hart may run while this syscall awaits.
     const registers = this.x;
-    try { registers[10] = sx(await this.call(Number(ux(requireValue(registers[17] ?? null, "src/vm/rv64.ts:1322")))), 64); }
+    try {
+      const result = await this.call(Number(ux(requireValue(registers[17] ?? null, "src/vm/rv64.ts:1322"))));
+      if (this.executionActive) registers[10] = sx(result, 64);
+    }
     catch (caughtValue) { const e = caughtValue instanceof Error ? caughtValue : new Error(typeof caughtValue === "undefined" ? "undefined" : String(caughtValue));
       if (!(e instanceof KErr)) throw e;
-      registers[10] = sx(-BigInt(eno[e.code] ?? 5), 64);
+      if (this.executionActive) registers[10] = sx(-BigInt(eno[e.code] ?? 5), 64);
     }
   }
 
   private async call(n: number): Promise<bigint> {
-    const a = this.x;
+    // Capture the issuing hart's six Linux syscall operands before any asynchronous host operation.
+    const memory = this.nativeMemory;
+    if (memory === null) return bad("EPROTO", "syscall without canonical memory");
+    const hart = this.thistleActiveHart;
+    const arg0 = thistleHartGetX(memory, hart, 10);
+    const arg1 = thistleHartGetX(memory, hart, 11);
+    const arg2 = thistleHartGetX(memory, hart, 12);
+    const arg3 = thistleHartGetX(memory, hart, 13);
+    const arg4 = thistleHartGetX(memory, hart, 14);
+    const arg5 = thistleHartGetX(memory, hart, 15);
     switch (n) {
-      case 17: { const b = enc(this.s.cwd + "\0"); return BigInt(this.copy(b, ux(requireValue(a[10] ?? null, "src/vm/rv64.ts:1332")), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1332"), "getcwd length", MAX_IO))); }
+      case 17: { const b = enc(this.s.cwd + "\0"); return BigInt(this.copy(b, ux(arg0), this.nat(arg1, "getcwd length", MAX_IO))); }
       case 19: return BigInt(this.events.createEventfd(
-        this.nat(requireValue(a[10] ?? null, "src/vm/rv64.ts:1334"), "eventfd initial value", 0xffffffff),
-        this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1335"), "eventfd flags", 0xffffffff),
+        this.nat(arg0, "eventfd initial value", 0xffffffff),
+        this.nat(arg1, "eventfd flags", 0xffffffff),
       ));
       case 20: return BigInt(this.events.createEpoll(
-        this.nat(requireValue(a[10] ?? null, "src/vm/rv64.ts:1338"), "epoll flags", 0xffffffff),
+        this.nat(arg0, "epoll flags", 0xffffffff),
       ));
       case 21: return BigInt(this.events.ctl(
-        this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1341")), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1341"), "epoll operation", 3),
-        this.fd(requireValue(a[12] ?? null, "src/vm/rv64.ts:1342")), ux(requireValue(a[13] ?? null, "src/vm/rv64.ts:1342")),
+        this.fd(arg0), this.nat(arg1, "epoll operation", 3),
+        this.fd(arg2), ux(arg3),
       ));
       case 22: return BigInt(await this.events.wait(
-        this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1345")), ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1345")),
-        this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1346"), "epoll maximum events", 4096),
-        Number(BigInt.asIntN(32, requireValue(a[13] ?? null, "src/vm/rv64.ts:1347"))),
+        this.fd(arg0), ux(arg1),
+        this.nat(arg2, "epoll maximum events", 4096),
+        Number(BigInt.asIntN(32, arg3)),
       ));
       case 23: {
-        const original = this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1350"));
+        const original = this.fd(arg0);
         const duplicate = this.s.dup(original, null);
         this.events.duplicate(original, duplicate);
         return BigInt(duplicate);
       }
-      case 24: return BigInt(this.dup3(requireValue(a[10] ?? null, "src/vm/rv64.ts:1355"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1355"), requireValue(a[12] ?? null, "src/vm/rv64.ts:1355")));
-      case 25: return BigInt(this.fcntl(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1356")), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1356"), "fcntl command", 0x7fffffff), requireValue(a[12] ?? null, "src/vm/rv64.ts:1356")));
-      case 29: return this.ioctl(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1357")), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1357"), "ioctl request", 0xffffffff), ux(requireValue(a[12] ?? null, "src/vm/rv64.ts:1357")));
-      case 34: this.s.mkdir(this.path(requireValue(a[10] ?? null, "src/vm/rv64.ts:1358"), this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1358"))), this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1358"), "mode", 0xffff)); return 0n;
-      case 35: { const p = this.path(requireValue(a[10] ?? null, "src/vm/rv64.ts:1359"), this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1359"))); this.s.rm(p, !!(this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1359"), "unlink flags", 0xffff) & 0x200)); return 0n; }
-      case 36: this.s.symlink(this.str(requireValue(a[10] ?? null, "src/vm/rv64.ts:1360")), this.path(requireValue(a[11] ?? null, "src/vm/rv64.ts:1360"), this.str(requireValue(a[12] ?? null, "src/vm/rv64.ts:1360")))); return 0n;
-      case 37: this.s.link(this.path(requireValue(a[10] ?? null, "src/vm/rv64.ts:1361"), this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1361"))), this.path(requireValue(a[12] ?? null, "src/vm/rv64.ts:1361"), this.str(requireValue(a[13] ?? null, "src/vm/rv64.ts:1361")))); return 0n;
-      case 38: this.s.mv(this.path(requireValue(a[10] ?? null, "src/vm/rv64.ts:1362"), this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1362"))), this.path(requireValue(a[12] ?? null, "src/vm/rv64.ts:1362"), this.str(requireValue(a[13] ?? null, "src/vm/rv64.ts:1362")))); return 0n;
+      case 24: return BigInt(this.dup3(arg0, arg1, arg2));
+      case 25: return BigInt(this.fcntl(this.fd(arg0), this.nat(arg1, "fcntl command", 0x7fffffff), arg2));
+      case 29: return this.ioctl(this.fd(arg0), this.nat(arg1, "ioctl request", 0xffffffff), ux(arg2));
+      case 34: this.s.mkdir(this.path(arg0, this.str(arg1)), this.nat(arg2, "mode", 0xffff)); return 0n;
+      case 35: { const p = this.path(arg0, this.str(arg1)); this.s.rm(p, !!(this.nat(arg2, "unlink flags", 0xffff) & 0x200)); return 0n; }
+      case 36: this.s.symlink(this.str(arg0), this.path(arg1, this.str(arg2))); return 0n;
+      case 37: this.s.link(this.path(arg0, this.str(arg1)), this.path(arg2, this.str(arg3))); return 0n;
+      case 38: this.s.mv(this.path(arg0, this.str(arg1)), this.path(arg2, this.str(arg3))); return 0n;
       case 276: {
-        const flags = this.nat(requireValue(a[14] ?? null, "src/vm/rv64.ts:1364"), "renameat2 flags", 0xffffffff);
+        const flags = this.nat(arg4, "renameat2 flags", 0xffffffff);
 
         // Linux RENAME_NOREPLACE is useful to musl and account-management
         // transactions. Exchange and whiteout flags are explicitly unsupported.
@@ -944,8 +804,8 @@ break; }
           bad("EINVAL", "unsupported renameat2 flags");
         }
 
-        const from = this.path(requireValue(a[10] ?? null, "src/vm/rv64.ts:1372"), this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1372")));
-        const to = this.path(requireValue(a[12] ?? null, "src/vm/rv64.ts:1373"), this.str(requireValue(a[13] ?? null, "src/vm/rv64.ts:1373")));
+        const from = this.path(arg0, this.str(arg1));
+        const to = this.path(arg2, this.str(arg3));
 
         if (flags & 1) {
           let exists = true;
@@ -967,36 +827,36 @@ break; }
         this.s.mv(from, to);
         return 0n;
       }
-      case 43: this.s.stat(this.str(requireValue(a[10] ?? null, "src/vm/rv64.ts:1393"))); return this.statfs(ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1393")));
-      case 44: { const fd = this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1394")), f = this.s.p.fds.get(fd) ?? bad("EBADF", String((a[10] ?? null))); if (fd >= 3) this.s.stat(f.path ?? bad("EBADF", String(fd))); return this.statfs(ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1394"))); }
-      case 45: this.trunc(this.str(requireValue(a[10] ?? null, "src/vm/rv64.ts:1395")), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1395"), "file length", this.s.k.fs.cap)); return 0n;
-      case 46: { const f = this.s.p.fds.get(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1396"))) ?? bad("EBADF", String((a[10] ?? null))); this.trunc(f.path ?? bad("EBADF", String((a[10] ?? null))), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1396"), "file length", this.s.k.fs.cap)); return 0n; }
-      case 48: this.s.stat(this.path(requireValue(a[10] ?? null, "src/vm/rv64.ts:1397"), this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1397")))); return 0n;
-      case 49: this.s.cd(this.str(requireValue(a[10] ?? null, "src/vm/rv64.ts:1398"))); return 0n;
-      case 50: { const f = this.s.p.fds.get(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1399"))) ?? bad("EBADF", String((a[10] ?? null))); this.s.cd(f.path ?? bad("EBADF", String((a[10] ?? null)))); return 0n; }
-      case 52: { const f = this.s.p.fds.get(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1400"))) ?? bad("EBADF", String((a[10] ?? null))); this.s.chmod(f.path ?? bad("EBADF", String((a[10] ?? null))), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1400"), "mode", 0xffff)); return 0n; }
-      case 53: this.s.chmod(this.path(requireValue(a[10] ?? null, "src/vm/rv64.ts:1401"), this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1401"))), this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1401"), "mode", 0xffff)); return 0n;
-      case 54: this.s.chown(this.path(requireValue(a[10] ?? null, "src/vm/rv64.ts:1402"), this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1402"))), this.owner(requireValue(a[12] ?? null, "src/vm/rv64.ts:1402"), "uid"), this.owner(requireValue(a[13] ?? null, "src/vm/rv64.ts:1402"), "gid")); return 0n;
-      case 55: { const f = this.s.p.fds.get(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1403"))) ?? bad("EBADF", String((a[10] ?? null))); this.s.chown(f.path ?? bad("EBADF", String((a[10] ?? null))), this.owner(requireValue(a[11] ?? null, "src/vm/rv64.ts:1403"), "uid"), this.owner(requireValue(a[12] ?? null, "src/vm/rv64.ts:1403"), "gid")); return 0n; }
-      case 56: return BigInt(await this.openat(requireValue(a[10] ?? null, "src/vm/rv64.ts:1404"), this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1404")), this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1404"), "open flags", 0xffffffff), this.nat(requireValue(a[13] ?? null, "src/vm/rv64.ts:1404"), "open mode", 0xffff)));
+      case 43: this.s.stat(this.str(arg0)); return this.statfs(ux(arg1));
+      case 44: { const fd = this.fd(arg0); if (fd >= 3) this.s.fdStat(fd); return this.statfs(ux(arg1)); }
+      case 45: await this.s.truncate(this.str(arg0), this.nat(arg1, "file length", this.s.k.fs.cap)); return 0n;
+      case 46: await this.s.fdTruncate(this.fd(arg0), this.nat(arg1, "file length", this.s.k.fs.cap)); return 0n;
+      case 48: this.s.stat(this.path(arg0, this.str(arg1))); return 0n;
+      case 49: this.s.cd(this.str(arg0)); return 0n;
+      case 50: { this.s.fdChdir(this.fd(arg0)); return 0n; }
+      case 52: { this.s.fdChmod(this.fd(arg0), this.nat(arg1, "mode", 0xffff)); return 0n; }
+      case 53: this.s.chmod(this.path(arg0, this.str(arg1)), this.nat(arg2, "mode", 0xffff)); return 0n;
+      case 54: this.s.chown(this.path(arg0, this.str(arg1)), this.owner(arg2, "uid"), this.owner(arg3, "gid")); return 0n;
+      case 55: { this.s.fdChown(this.fd(arg0), this.owner(arg1, "uid"), this.owner(arg2, "gid")); return 0n; }
+      case 56: return BigInt(await this.openat(arg0, this.str(arg1), this.nat(arg2, "open flags", 0xffffffff), this.nat(arg3, "open mode", 0xffff)));
       case 57: {
-        const fd = this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1406"));
+        const fd = this.fd(arg0);
         this.localSockets.delete(fd);
         this.events.close(fd);
         this.s.close(fd);
         return 0n;
       }
       case 59: {
-        const at = ux(requireValue(a[10] ?? null, "src/vm/rv64.ts:1413")), fl = this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1413"), "pipe flags", 0xffffffff); this.mem(at, 8, true);
+        const at = ux(arg0), fl = this.nat(arg1, "pipe flags", 0xffffffff); this.mem(at, 8, true);
         if (fl & ~(O_CLOEXEC | O_NONBLOCK)) bad("EINVAL", "unsupported pipe flags");
         const [rd, wr] = this.s.pipe();
         if (fl & O_CLOEXEC) { requireValue(this.s.p.fds.get(rd) ?? null, "src/vm/rv64.ts:1416").clo = true; requireValue(this.s.p.fds.get(wr) ?? null, "src/vm/rv64.ts:1416").clo = true; }
         this.m.set32(at, rd); this.m.set32(at + 4n, wr); return 0n;
       }
-      case 61: return BigInt(this.getdents(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1419")), ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1419")), this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1419"), "directory buffer length", MAX_IO)));
-      case 62: return BigInt(this.s.seek(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1420")), hostNumber(requireValue(a[11] ?? null, "src/vm/rv64.ts:1420"), "seek offset"), this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1420"), "seek whence", 2)));
+      case 61: return BigInt(this.getdents(this.fd(arg0), ux(arg1), this.nat(arg2, "directory buffer length", MAX_IO)));
+      case 62: return BigInt(this.s.seek(this.fd(arg0), hostNumber(arg1, "seek offset"), this.nat(arg2, "seek whence", 2)));
       case 63: {
-        const fd = this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1422")), at = ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1422")), z = this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1422"), "read length", MAX_IO);
+        const fd = this.fd(arg0), at = ux(arg1), z = this.nat(arg2, "read length", MAX_IO);
         const result = await this.events.read(fd, at, z);
         if (result !== null) return result;
         this.mem(at, z, true);
@@ -1005,64 +865,64 @@ break; }
         return BigInt(b.length);
       }
       case 64: {
-        const fd = this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1431")), at = ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1431")), z = this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1431"), "write length", MAX_IO);
+        const fd = this.fd(arg0), at = ux(arg1), z = this.nat(arg2, "write length", MAX_IO);
         const result = await this.events.write(fd, at, z);
         if (result !== null) return result;
         this.mem(at, z);
         return BigInt(await this.write(fd, this.m.read(at, z)));
       }
-      case 65: return BigInt(await this.readv(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1437")), ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1437")), this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1437"), "iovec count", 1024)));
-      case 66: return BigInt(await this.writev(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1438")), ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1438")), this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1438"), "iovec count", 1024)));
-      case 67: return BigInt(this.pread(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1439")), ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1439")), this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1439"), "read length", MAX_IO), hostNumber(requireValue(a[13] ?? null, "src/vm/rv64.ts:1439"), "read offset")));
-      case 68: return BigInt(this.pwrite(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1440")), ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1440")), this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1440"), "write length", MAX_IO), hostNumber(requireValue(a[13] ?? null, "src/vm/rv64.ts:1440"), "write offset")));
-      case 73: return BigInt(this.ppoll(ux(requireValue(a[10] ?? null, "src/vm/rv64.ts:1441")), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1441"), "poll descriptor count", 1024)));
-      case 78: { const b = enc(this.s.readlink(this.path(requireValue(a[10] ?? null, "src/vm/rv64.ts:1442"), this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1442"))))); return BigInt(this.copy(b, ux(requireValue(a[12] ?? null, "src/vm/rv64.ts:1442")), this.nat(requireValue(a[13] ?? null, "src/vm/rv64.ts:1442"), "readlink length", MAX_IO), true)); }
-      case 79: { const p = this.str(requireValue(a[11] ?? null, "src/vm/rv64.ts:1443")), fl = this.nat(requireValue(a[13] ?? null, "src/vm/rv64.ts:1443"), "stat flags", 0xffff); return this.stat(this.path(requireValue(a[10] ?? null, "src/vm/rv64.ts:1443"), p), ux(requireValue(a[12] ?? null, "src/vm/rv64.ts:1443")), !(fl & 0x100)); }
-      case 80: return this.fstat(this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1444")), ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1444")));
+      case 65: return BigInt(await this.readv(this.fd(arg0), ux(arg1), this.nat(arg2, "iovec count", 1024)));
+      case 66: return BigInt(await this.writev(this.fd(arg0), ux(arg1), this.nat(arg2, "iovec count", 1024)));
+      case 67: return BigInt(await this.pread(this.fd(arg0), ux(arg1), this.nat(arg2, "read length", MAX_IO), hostNumber(arg3, "read offset")));
+      case 68: return BigInt(await this.pwrite(this.fd(arg0), ux(arg1), this.nat(arg2, "write length", MAX_IO), hostNumber(arg3, "write offset")));
+      case 73: return BigInt(this.ppoll(ux(arg0), this.nat(arg1, "poll descriptor count", 1024)));
+      case 78: { const b = enc(this.s.readlink(this.path(arg0, this.str(arg1)))); return BigInt(this.copy(b, ux(arg2), this.nat(arg3, "readlink length", MAX_IO), true)); }
+      case 79: { const p = this.str(arg1), fl = this.nat(arg3, "stat flags", 0xffff); return this.stat(this.path(arg0, p), ux(arg2), !(fl & 0x100)); }
+      case 80: return this.fstat(this.fd(arg0), ux(arg1));
       case 81: case 82: case 83: return 0n;
-      case 88: return this.utimens(requireValue(a[10] ?? null, "src/vm/rv64.ts:1446"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1446"), requireValue(a[12] ?? null, "src/vm/rv64.ts:1446"), requireValue(a[13] ?? null, "src/vm/rv64.ts:1446"));
+      case 88: return this.utimens(arg0, arg1, arg2, arg3);
       case 93:
         if (this.thistleThreads && this.thistleActiveHart !== 0) {
-          this.thistleThreadExit(this.thistleActiveHart, Number(ux(requireValue(a[10] ?? null, "src/vm/rv64.ts:1449")) & 255n));
+          this.thistleThreadExit(this.thistleActiveHart, Number(ux(arg0) & 255n));
           return 0n;
         }
-        return this.vf ? this.vfExit(requireValue(a[10] ?? null, "src/vm/rv64.ts:1452")) : (this.exit(requireValue(a[10] ?? null, "src/vm/rv64.ts:1452")), 0n);
-      case 94: return this.vf ? this.vfExit(requireValue(a[10] ?? null, "src/vm/rv64.ts:1453")) : (this.exit(requireValue(a[10] ?? null, "src/vm/rv64.ts:1453")), 0n);
+        return this.vf ? this.vfExit(arg0) : (this.exit(arg0), 0n);
+      case 94: return this.vf ? this.vfExit(arg0) : (this.exit(arg0), 0n);
       case 96: return this.thistleThreads
-        ? this.thistleSetClearTid(requireValue(a[10] ?? null, "src/vm/rv64.ts:1455")) : BigInt(this.s.pid);
+        ? this.thistleSetClearTid(arg0) : BigInt(this.s.pid);
       case 98: return this.thistleThreads
-        ? this.thistleFutex(requireValue(a[10] ?? null, "src/vm/rv64.ts:1457"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1457"), requireValue(a[12] ?? null, "src/vm/rv64.ts:1457"), requireValue(a[13] ?? null, "src/vm/rv64.ts:1457"))
-        : this.futex(requireValue(a[10] ?? null, "src/vm/rv64.ts:1458"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1458"), requireValue(a[12] ?? null, "src/vm/rv64.ts:1458"), requireValue(a[13] ?? null, "src/vm/rv64.ts:1458"));
+        ? this.thistleFutex(arg0, arg1, arg2, arg3)
+        : this.futex(arg0, arg1, arg2, arg3);
       case 99: return 0n;
-      case 101: await this.sleepTs(ux(requireValue(a[10] ?? null, "src/vm/rv64.ts:1460"))); return 0n;
-      case 113: return this.clock(hostNumber(requireValue(a[10] ?? null, "src/vm/rv64.ts:1461"), "clock id"), ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1461")));
-      case 114: return this.clockRes(hostNumber(requireValue(a[10] ?? null, "src/vm/rv64.ts:1462"), "clock id"), ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1462")));
-      case 115: return this.clockSleep(requireValue(a[10] ?? null, "src/vm/rv64.ts:1463"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1463"), requireValue(a[12] ?? null, "src/vm/rv64.ts:1463"));
-      case 122: return this.setAffinity(requireValue(a[10] ?? null, "src/vm/rv64.ts:1464"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1464"), requireValue(a[12] ?? null, "src/vm/rv64.ts:1464"));
-      case 123: return this.getAffinity(requireValue(a[10] ?? null, "src/vm/rv64.ts:1465"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1465"), requireValue(a[12] ?? null, "src/vm/rv64.ts:1465"));
+      case 101: await this.sleepTs(ux(arg0)); return 0n;
+      case 113: return this.clock(hostNumber(arg0, "clock id"), ux(arg1));
+      case 114: return this.clockRes(hostNumber(arg0, "clock id"), ux(arg1));
+      case 115: return this.clockSleep(arg0, arg1, arg2);
+      case 122: return this.setAffinity(arg0, arg1, arg2);
+      case 123: return this.getAffinity(arg0, arg1, arg2);
       case 124: await this.s.yield(); return 0n;
-      case 129: case 130: case 131: return BigInt(this.s.kill(hostNumber(n === 129 ? requireValue(a[10] ?? null, "src/vm/rv64.ts:1467") : requireValue(a[11] ?? null, "src/vm/rv64.ts:1467"), "pid"), this.nat(n === 129 ? requireValue(a[11] ?? null, "src/vm/rv64.ts:1467") : requireValue(a[12] ?? null, "src/vm/rv64.ts:1467"), "signal", 64) as 0 | 1 | 2 | 9 | 13 | 15));
+      case 129: case 130: case 131: return BigInt(this.s.kill(hostNumber(n === 129 ? arg0 : arg1, "pid"), this.nat(n === 129 ? arg1 : arg2, "signal", 64) as 0 | 1 | 2 | 9 | 13 | 15));
       case 132: case 134: case 135: return 0n;
-      case 160: return this.uname(ux(requireValue(a[10] ?? null, "src/vm/rv64.ts:1469")));
-      case 153: return this.times(ux(requireValue(a[10] ?? null, "src/vm/rv64.ts:1470")));
-      case 163: return this.limit(0n, requireValue(a[10] ?? null, "src/vm/rv64.ts:1471"), 0n, requireValue(a[11] ?? null, "src/vm/rv64.ts:1471"));
-      case 164: return this.limit(0n, requireValue(a[10] ?? null, "src/vm/rv64.ts:1472"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1472"), 0n);
-      case 165: return this.usage(requireValue(a[10] ?? null, "src/vm/rv64.ts:1473"), ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1473")));
-      case 166: { const old = this.s.umask; this.s.umask = this.nat(requireValue(a[10] ?? null, "src/vm/rv64.ts:1474"), "umask", 0o777); return BigInt(old); }
-      case 168: return this.getcpu(requireValue(a[10] ?? null, "src/vm/rv64.ts:1475"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1475"));
-      case 169: return this.timeval(ux(requireValue(a[10] ?? null, "src/vm/rv64.ts:1476")));
-      case 143: this.s.setRegid(this.idOrKeep(requireValue(a[10] ?? null, "src/vm/rv64.ts:1477")), this.idOrKeep(requireValue(a[11] ?? null, "src/vm/rv64.ts:1477"))); return 0n;
-      case 144: this.s.setGid(this.owner(requireValue(a[10] ?? null, "src/vm/rv64.ts:1478"), "gid")); return 0n;
-      case 145: this.s.setReuid(this.idOrKeep(requireValue(a[10] ?? null, "src/vm/rv64.ts:1479")), this.idOrKeep(requireValue(a[11] ?? null, "src/vm/rv64.ts:1479"))); return 0n;
-      case 146: this.s.setUid(this.owner(requireValue(a[10] ?? null, "src/vm/rv64.ts:1480"), "uid")); return 0n;
-      case 147: this.s.setResuid(this.idOrKeep(requireValue(a[10] ?? null, "src/vm/rv64.ts:1481")), this.idOrKeep(requireValue(a[11] ?? null, "src/vm/rv64.ts:1481")), this.idOrKeep(requireValue(a[12] ?? null, "src/vm/rv64.ts:1481"))); return 0n;
-      case 148: return this.getres(this.addrPtr(requireValue(a[10] ?? null, "src/vm/rv64.ts:1482")), this.addrPtr(requireValue(a[11] ?? null, "src/vm/rv64.ts:1482")), this.addrPtr(requireValue(a[12] ?? null, "src/vm/rv64.ts:1482")), false);
-      case 149: this.s.setResgid(this.idOrKeep(requireValue(a[10] ?? null, "src/vm/rv64.ts:1483")), this.idOrKeep(requireValue(a[11] ?? null, "src/vm/rv64.ts:1483")), this.idOrKeep(requireValue(a[12] ?? null, "src/vm/rv64.ts:1483"))); return 0n;
-      case 150: return this.getres(this.addrPtr(requireValue(a[10] ?? null, "src/vm/rv64.ts:1484")), this.addrPtr(requireValue(a[11] ?? null, "src/vm/rv64.ts:1484")), this.addrPtr(requireValue(a[12] ?? null, "src/vm/rv64.ts:1484")), true);
-      case 151: return BigInt(this.s.setFsuid(this.owner(requireValue(a[10] ?? null, "src/vm/rv64.ts:1485"), "uid")));
-      case 152: return BigInt(this.s.setFsgid(this.owner(requireValue(a[10] ?? null, "src/vm/rv64.ts:1486"), "gid")));
-      case 158: return BigInt(this.getgroups(requireValue(a[10] ?? null, "src/vm/rv64.ts:1487"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1487")));
-      case 159: this.setgroups(requireValue(a[10] ?? null, "src/vm/rv64.ts:1488"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1488")); return 0n;
+      case 160: return this.uname(ux(arg0));
+      case 153: return this.times(ux(arg0));
+      case 163: return this.limit(0n, arg0, 0n, arg1);
+      case 164: return this.limit(0n, arg0, arg1, 0n);
+      case 165: return this.usage(arg0, ux(arg1));
+      case 166: { const old = this.s.umask; this.s.umask = this.nat(arg0, "umask", 0o777); return BigInt(old); }
+      case 168: return this.getcpu(arg0, arg1);
+      case 169: return this.timeval(ux(arg0));
+      case 143: this.s.setRegid(this.idOrKeep(arg0), this.idOrKeep(arg1)); return 0n;
+      case 144: this.s.setGid(this.owner(arg0, "gid")); return 0n;
+      case 145: this.s.setReuid(this.idOrKeep(arg0), this.idOrKeep(arg1)); return 0n;
+      case 146: this.s.setUid(this.owner(arg0, "uid")); return 0n;
+      case 147: this.s.setResuid(this.idOrKeep(arg0), this.idOrKeep(arg1), this.idOrKeep(arg2)); return 0n;
+      case 148: return this.getres(this.addrPtr(arg0), this.addrPtr(arg1), this.addrPtr(arg2), false);
+      case 149: this.s.setResgid(this.idOrKeep(arg0), this.idOrKeep(arg1), this.idOrKeep(arg2)); return 0n;
+      case 150: return this.getres(this.addrPtr(arg0), this.addrPtr(arg1), this.addrPtr(arg2), true);
+      case 151: return BigInt(this.s.setFsuid(this.owner(arg0, "uid")));
+      case 152: return BigInt(this.s.setFsgid(this.owner(arg0, "gid")));
+      case 158: return BigInt(this.getgroups(arg0, arg1));
+      case 159: this.setgroups(arg0, arg1); return 0n;
       case 172: return BigInt(this.s.pid);
       case 173: return BigInt(this.s.ppid);
       case 174: return BigInt(this.s.uid);
@@ -1070,51 +930,55 @@ break; }
       case 176: return BigInt(this.s.gid);
       case 177: return BigInt(this.s.egid);
       case 178: return BigInt(withValue(this.thistleThreads, value => value.tids.get(this.thistleActiveHart) ?? null) ?? this.s.pid);
-      case 179: return this.sysinfo(ux(requireValue(a[10] ?? null, "src/vm/rv64.ts:1496")));
+      case 179: return this.sysinfo(ux(arg0));
       case 198: return BigInt(this.socket(
-        this.nat(requireValue(a[10] ?? null, "src/vm/rv64.ts:1498"), "socket domain", 0x7fffffff),
-        this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1499"), "socket type", 0xffffffff),
-        this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1500"), "socket protocol", 0x7fffffff),
+        this.nat(arg0, "socket domain", 0x7fffffff),
+        this.nat(arg1, "socket type", 0xffffffff),
+        this.nat(arg2, "socket protocol", 0x7fffffff),
       ));
       case 203: return this.connect(
-        this.fd(requireValue(a[10] ?? null, "src/vm/rv64.ts:1503")),
-        ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1504")),
-        this.nat(requireValue(a[12] ?? null, "src/vm/rv64.ts:1505"), "socket address length", 4096),
+        this.fd(arg0),
+        ux(arg1),
+        this.nat(arg2, "socket address length", 4096),
       );
-      case 214: return this.doBrk(ux(requireValue(a[10] ?? null, "src/vm/rv64.ts:1507")));
-      case 215: this.unmap(ux(requireValue(a[10] ?? null, "src/vm/rv64.ts:1508")), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1508"), "mapping length", Number.MAX_SAFE_INTEGER)); return 0n;
-      case 216: return this.remap(requireValue(a[10] ?? null, "src/vm/rv64.ts:1509"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1509"), requireValue(a[12] ?? null, "src/vm/rv64.ts:1509"), requireValue(a[13] ?? null, "src/vm/rv64.ts:1509"), requireValue(a[14] ?? null, "src/vm/rv64.ts:1509"));
+      case 215: this.unmap(ux(arg0), this.nat(arg1, "mapping length", Number.MAX_SAFE_INTEGER)); return 0n;
+      case 216: return this.remap(arg0, arg1, arg2);
       case 220: return this.thistleThreads
-        ? this.thistleCloneThread(requireValue(a[10] ?? null, "src/vm/rv64.ts:1511"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1511"), requireValue(a[12] ?? null, "src/vm/rv64.ts:1511"), requireValue(a[13] ?? null, "src/vm/rv64.ts:1511"), requireValue(a[14] ?? null, "src/vm/rv64.ts:1511"))
-        : this.clone(requireValue(a[10] ?? null, "src/vm/rv64.ts:1512"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1512"), requireValue(a[13] ?? null, "src/vm/rv64.ts:1512"));
-      case 221: return this.execve(this.str(requireValue(a[10] ?? null, "src/vm/rv64.ts:1513")), ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1513")), ux(requireValue(a[12] ?? null, "src/vm/rv64.ts:1513")));
-      case 222: return this.mmap(requireValue(a[10] ?? null, "src/vm/rv64.ts:1514"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1514"), requireValue(a[12] ?? null, "src/vm/rv64.ts:1514"), requireValue(a[13] ?? null, "src/vm/rv64.ts:1514"), requireValue(a[14] ?? null, "src/vm/rv64.ts:1514"), requireValue(a[15] ?? null, "src/vm/rv64.ts:1514"));
-      case 227: this.flushShared(ux(requireValue(a[10] ?? null, "src/vm/rv64.ts:1515")), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1515"), "sync length", Number.MAX_SAFE_INTEGER)); return 0n;
+        ? this.thistleCloneThread(arg0, arg1, arg2, arg3, arg4)
+        : this.clone(arg0, arg1, arg3);
+      case 221: return this.execve(this.str(arg0), ux(arg1), ux(arg2));
+      case 222: return this.mmap(arg0, arg1, arg2, arg3, arg4, arg5);
+      case 227: this.flushShared(ux(arg0), this.nat(arg1, "sync length", Number.MAX_SAFE_INTEGER)); return 0n;
       case 226: return 0n;
       case 233: return 0n;
-      case 261: return this.limit(requireValue(a[10] ?? null, "src/vm/rv64.ts:1518"), requireValue(a[11] ?? null, "src/vm/rv64.ts:1518"), requireValue(a[12] ?? null, "src/vm/rv64.ts:1518"), requireValue(a[13] ?? null, "src/vm/rv64.ts:1518"));
-      case 278: return BigInt(this.random(ux(requireValue(a[10] ?? null, "src/vm/rv64.ts:1519")), this.nat(requireValue(a[11] ?? null, "src/vm/rv64.ts:1519"), "random length", MAX_IO)));
-      case 260: return this.wait4(requireValue(a[10] ?? null, "src/vm/rv64.ts:1520"), ux(requireValue(a[11] ?? null, "src/vm/rv64.ts:1520")), requireValue(a[12] ?? null, "src/vm/rv64.ts:1520"), ux(requireValue(a[13] ?? null, "src/vm/rv64.ts:1520")));
+      case 261: return this.limit(arg0, arg1, arg2, arg3);
+      case 278: return BigInt(this.random(ux(arg0), this.nat(arg1, "random length", MAX_IO)));
+      case 260: return this.wait4(arg0, ux(arg1), arg2, ux(arg3));
       default: if (!this.miss.has(n)) { this.miss.add(n); this.s.k.log(`rv64: unsupported syscall ${n}`); } return -38n;
     }
   }
 
   private async read(fd: number, n: number): Promise<Uint8Array> {
     const f = this.s.p.fds.get(fd) ?? bad("EBADF", String(fd));
-    if (!f.input) return this.s.fdr(fd, n);
+    const input = f.input;
+    if (input === null && f.inode !== 0 && n !== 0) await f.materialiseFile();
+    if (input === null) return f.inode === 0 ? this.s.fdr(fd, n) : f.readFile(n);
     let q = (this.ins.get(fd) ?? null);
-    if (!q || q.at >= q.b.length) { q = { b: await f.input.rd(), at: 0 }; this.ins.set(fd, q); }
+    if (!q || q.at >= q.b.length) { q = { b: await input.rd(this.s.p.ac.signal), at: 0 }; this.ins.set(fd, q); }
     const b = q.b.slice(q.at, q.at + n); q.at += b.length; return b;
   }
 
-  private write(fd: number, b: Uint8Array): Promise<number> | number {
+  private async write(fd: number, b: Uint8Array): Promise<number> {
     const f = this.s.p.fds.get(fd) ?? bad("EBADF", String(fd));
-    return f.output ? f.output.wr(b) : this.s.fdw(fd, b);
+    if (f.output !== null) return f.output.wr(b);
+    if (f.inode === 0) return this.s.fdw(fd, b);
+    if (b.length !== 0) await f.materialiseFile();
+    return f.writeFile(b);
   }
 
   private clone(flags: bigint, sp: bigint, tls: bigint): bigint {
     if (this.vf) bad("EAGAIN", "nested RV64 clone");
-    const par = this.copyFds(this.s.p.fds), kid = this.copyFds(this.s.p.fds, true);
+    const par = this.copyFds(this.s.p.fds.entries()), kid = this.copyFds(this.s.p.fds.entries(), true);
     this.vf = { x: this.x.slice(), f: this.f.slice(), pc: this.pc, cwd: this.s.p.cwd, env: new Map(this.s.p.env), fds: par };
     this.s.p.fds.clear(); for (const [n, q] of kid) this.s.p.fds.set(n, q);
     if (sp) this.x[2] = sx(sp, 64);
@@ -1134,25 +998,34 @@ break; }
       }
     }
 
-    if (!this.vf) {
-      this.flushAllShared();
-      await this.s.exec(path, argv.length ? argv : [path], env);
-    }
+    if (!this.vf) return this.execImage(path, argv.length ? argv : [path], env);
 
     const io: StartIo = { sin: null, sout: null, serr: null }, f0 = (this.s.p.fds.get(0) ?? null), f1 = (this.s.p.fds.get(1) ?? null), f2 = (this.s.p.fds.get(2) ?? null);
     if (f0 && f0.input) io.sin = f0.input;
     if (f1 && f1.output) io.sout = f1.output;
     if (f2 && f2.output) io.serr = f2.output;
-    const cwd = this.s.p.cwd, kid = [...this.s.p.fds.values()];
-    const pass = new Map([...this.s.p.fds].filter(([, f]) => !f.clo));
+    const cwd = this.s.p.cwd, kid = this.s.p.fds.values();
+    const pass = new Map(this.s.p.fds.entries().filter(([, f]) => !f.clo));
     const p = this.s.start(path, (argv.length ? argv : [path]).slice(1), {"pgid": null,  io, fds: pass, cwd, env });
     this.restoreVf();
     this.dropFds(kid);
     return BigInt(p.pid);
   }
 
+  private async execImage(path: string, argv: string[], env: Map<string, string>): Promise<never> {
+    this.flushAllShared();
+    try {
+      return await this.s.exec(path, argv, env);
+    } catch (error) {
+      if (!(error instanceof ExecReplace)) throw error instanceof Error ? error : new Error("exec failed");
+      this.s.chk();
+      this.releaseFileMappings();
+      throw error;
+    }
+  }
+
   private vfExit(code: bigint): bigint {
-    const kid = [...this.s.p.fds.values()], n = Number(ux(code) & 255n);
+    const kid = this.s.p.fds.values(), n = Number(ux(code) & 255n);
     const p = this.s.start("thsh", ["-c", `exit ${n}`], {"io": null, "fds": null, "pgid": null,  cwd: this.s.p.cwd, env: new Map(this.s.p.env) });
     this.restoreVf();
     this.dropFds(kid);
@@ -1163,7 +1036,7 @@ break; }
     const pid = hostNumber(pid0, "wait pid"), fl = this.nat(fl0, "wait flags", 0x7fffffff);
     const p = (pid > 0 ? (this.s.k.procs.get(pid) ?? null) : ([...this.s.p.kids].map(n => (this.s.k.procs.get(n) ?? null)).find(q => q !== null) ?? null)) ?? bad("ECHILD", String(pid));
     if (p.ppid !== this.s.pid) bad("ECHILD", String(pid));
-    if ((fl & 1) && p.code === null) return 0n;
+    if ((fl & 1) && !p.completed) return 0n;
     const code = await p.done, sig = p.sig;
     if (st) { this.mem(st, 4, true); this.m.set32(st, sig ? sig & 0x7f : (code & 255) << 8); }
     if (ru) this.putUsage(ru, p.ms());
@@ -1178,7 +1051,7 @@ break; }
     this.vf = null;
   }
 
-  private copyFds(src: Map<number, Fd>, hold = false): Map<number, Fd> {
+  private copyFds(src: Array<[number, Fd]>, hold = false): Map<number, Fd> {
     const out = new Map<number, Fd>();
     for (const [n, f] of src) {
       if (hold) { withValue(withValue(f.input ?? null, value => value.holdR) ?? null, callable => callable.call(f.input)); withValue(withValue(f.output ?? null, value => value.hold) ?? null, callable => callable.call(f.output)); }
@@ -1324,28 +1197,23 @@ break; }
   }
 
   private path(fd0: bigint, p: string): string {
-    if (p.startsWith("/")) return norm(p);
+    if (p.startsWith("/")) return p;
     const fd = hostNumber(fd0, "directory descriptor");
-    if (fd === AT_FDCWD) return norm(p, this.s.cwd);
-    const f = this.s.p.fds.get(fd) ?? bad("EBADF", String(fd)), base = f.path ?? bad("EBADF", String(fd));
-    if (this.s.stat(base).kind !== "dir") bad("ENOTDIR", base);
-    return norm(p, base);
+    if (fd === AT_FDCWD) return this.s.cwd === "/" ? "/" + p : this.s.cwd + "/" + p;
+    const base = this.s.fdPath(fd);
+    if (this.s.fdStat(fd).kind !== "dir") bad("ENOTDIR", base);
+    return base === "/" ? "/" + p : base + "/" + p;
   }
 
   private fcntl(fd: number, cmd: number, arg: bigint): number {
     const f = this.s.p.fds.get(fd) ?? bad("EBADF", String(fd));
     if (cmd === 0 || cmd === 1030) {
       const min = this.nat(arg, "descriptor minimum", 255);
-      // Guest state updates stay inside the selected instruction or syscall path.
-      //@cg-expect-warning
-      for (let n = Math.max(3, min); n < 256; n++) if (!this.s.p.fds.has(n)) {
-        const q = this.s.dup(fd, n);
-        requireValue(this.s.p.fds.get(q) ?? null, "src/vm/rv64.ts:1770").clo = cmd === 1030;
-        (this.localSockets.has(fd)) && (this.localSockets.add(q));
-        this.events.duplicate(fd, q);
-        return q;
-      }
-      return bad("EMFILE", "descriptor table full");
+      const q = this.s.dup(fd, this.s.p.fds.next(Math.max(3, min)));
+      requireValue(this.s.p.fds.get(q) ?? null, "src/vm/rv64.ts:1770").clo = cmd === 1030;
+      (this.localSockets.has(fd)) && (this.localSockets.add(q));
+      this.events.duplicate(fd, q);
+      return q;
     }
     if (cmd === 1) return f.clo ? 1 : 0;
     if (cmd === 2) { f.clo = !!(this.nat(arg, "descriptor flags", 0x7fffffff) & 1); return 0; }
@@ -1471,8 +1339,8 @@ break; }
   }
 
   private getdents(fd: number, at: bigint, n: number): number {
-    const f = this.s.p.fds.get(fd) ?? bad("EBADF", String(fd)), p = f.path ?? bad("EBADF", String(fd));
-    const a = this.s.list(p), out = new Uint8Array(n), v = new DataView(out.buffer); let pos = 0;
+    const f = this.s.p.fds.get(fd) ?? bad("EBADF", String(fd));
+    const a = this.s.fdList(fd), out = new Uint8Array(n), v = new DataView(out.buffer); let pos = 0;
     while (f.pos < a.length) {
       const [name, q] = requireValue(a[f.pos] ?? null, "src/vm/rv64.ts:1900"), b = enc(name + "\0"), z = (19 + b.length + 7) & -8;
       if (pos + z > n) { ensure(pos, () => bad("EINVAL", "directory buffer is too small")); break; }
@@ -1483,14 +1351,18 @@ break; }
     this.mem(at, pos, true); this.m.write(at, out.subarray(0, pos)); return pos;
   }
 
-  private pread(fd: number, at: bigint, n: number, off: number): number {
-    const f = this.s.p.fds.get(fd) ?? bad("EBADF", String(fd)), old = f.pos; f.pos = off;
+  private async pread(fd: number, at: bigint, n: number, off: number): Promise<number> {
+    const f = this.s.p.fds.get(fd) ?? bad("EBADF", String(fd));
+    await f.materialiseFile();
+    const old = f.pos; f.pos = off;
     try { const b = this.s.fdr(fd, n); this.mem(at, b.length, true); this.m.write(at, b); return b.length; }
     finally { f.pos = old; }
   }
 
-  private pwrite(fd: number, at: bigint, n: number, off: number): number {
-    const f = this.s.p.fds.get(fd) ?? bad("EBADF", String(fd)), old = f.pos; f.pos = off;
+  private async pwrite(fd: number, at: bigint, n: number, off: number): Promise<number> {
+    const f = this.s.p.fds.get(fd) ?? bad("EBADF", String(fd));
+    await f.materialiseFile();
+    const old = f.pos; f.pos = off;
     try { this.mem(at, n); return this.s.fdw(fd, this.m.read(at, n)); }
     finally { f.pos = old; }
   }
@@ -1530,8 +1402,9 @@ break; }
       }, at);
       return 0n;
     }
+    if (f.inode !== 0) { this.putStat(this.s.fdStat(fd), at); return 0n; }
     if (fd < 3) this.putStat({ ino: fd + 1, kind: "char", mode: 0o620, uid: this.s.uid, gid: this.s.gid, nlink: 1, size: 0, at: Date.now(), mt: Date.now(), ct: Date.now() }, at);
-    else this.putStat(this.s.stat(f.path ?? bad("EBADF", String(fd))), at);
+    else this.putStat(this.s.fdStat(fd), at);
     return 0n;
   }
 
@@ -1585,7 +1458,7 @@ break; }
     this.mem(at, 120, true); this.m.write(at, new Uint8Array(120));
     this.m.set64(at, 0x54484953); this.m.set64(at + 8n, bs);
     this.m.set64(at + 16n, blocks); this.m.set64(at + 24n, Math.max(0, blocks - hit)); this.m.set64(at + 32n, Math.max(0, blocks - hit));
-    this.m.set64(at + 40n, files); this.m.set64(at + 48n, Math.max(0, files - this.s.k.fs.root.ent.size));
+    this.m.set64(at + 40n, files); this.m.set64(at + 48n, Math.max(0, files - this.s.k.fs.inodeCount()));
     this.m.set32(at + 56n, 0x5448); this.m.set32(at + 60n, 0x4953);
     this.m.set64(at + 64n, 255); this.m.set64(at + 72n, bs); this.m.set64(at + 80n, 0);
     return 0n;
@@ -1777,7 +1650,6 @@ default: { q = [MASK, MASK]; }
     this.mem(at, q.length, true); this.m.write(at, q); return q.length;
   }
 
-  private trunc(p: string, z: number): void { const b = this.s.readb(p), q = new Uint8Array(z); q.set(b.subarray(0, z)); this.s.writeb(p, q); }
 
   private str(at0: bigint): string { return readString(this.m, this.mem.bind(this), at0, "RV64 string"); }
 
@@ -1800,126 +1672,105 @@ default: { q = [MASK, MASK]; }
     return done;
   }
 
-  private doBrk(n: bigint): bigint {
-    if (!n) return this.brk;
-    if (n < this.floor || n + 1024n * 1024n >= this.stackAt) return this.brk;
-    if (n < this.brk) this.m.drop(n, this.nat(this.brk - n, "released break range", Number.MAX_SAFE_INTEGER));
-    this.brk = n; return n;
-  }
-
-  private mmap(addr0: bigint, len0: bigint, prot0: bigint, flags0: bigint, fd0: bigint, off0: bigint): bigint {
-    // Fixed ranges cannot collide with the image; flexible mappings search free space and retain backing-file metadata for shared flushes.
-    const z0 = this.nat(len0, "mapping length", Number.MAX_SAFE_INTEGER), z = al(BigInt(z0));
-    if (!z) bad("EINVAL", "zero-length mapping");
+  private async mmap(addr0: bigint, len0: bigint, prot0: bigint, flags0: bigint, fd0: bigint, off0: bigint): Promise<bigint> {
+    const length = this.nat(len0, "mapping length", Number.MAX_SAFE_INTEGER);
     const prot = this.nat(prot0, "mapping protection", 7), flags = this.nat(flags0, "mapping flags", 0x7fffffff);
-    const at = thistleMapHostFile(requireValue(this.nativeMemory, "native memory"), this.thistleActiveHart,
-      ux(addr0), BigInt(z0), BigInt(prot), BigInt(flags));
-    if (at < 0n) bad("ENOMEM", "RV64 file mapping reservation failed");
-    let path: string | null = null;
-    let off = 0;
-    if (!(flags & 0x20) && fd0 >= 0n) {
-      const fd = this.fd(fd0), f = this.s.p.fds.get(fd) ?? bad("EBADF", String(fd));
-      path = f.path ?? bad("EBADF", String(fd));
-      off = this.nat(off0, "mapping offset", Number.MAX_SAFE_INTEGER);
-      const b = this.s.readb(path).slice(off, off + z0);
-      this.m.write(at, b);
-    }
-    const ent: MapEnt = {"path": null, "off": null, at, end: at + z, prot, shared: !!(flags & 1) };
-    if (path !== null) {
-      ent.path = path;
-      ent.off = off;
-    }
-    this.maps.push(ent);
-    if (at + z > this.mapAt) this.mapAt = al(at + z);
-    return at;
-  }
-
-  private remap(old0: bigint, oz0: bigint, nz0: bigint, fl0: bigint, fixed0: bigint): bigint {
-    const old = ux(old0), on = this.nat(oz0, "old mapping length", Number.MAX_SAFE_INTEGER), nn = this.nat(nz0, "new mapping length", Number.MAX_SAFE_INTEGER);
-    const oz = al(BigInt(on)), nz = al(BigInt(nn)), fl = this.nat(fl0, "remap flags", 3);
-    if (!on || !nn || old & (PAGE - 1n) || fl & ~3 || fl & 2) bad("EINVAL", "invalid mremap arguments");
-    if (fixed0) bad("EINVAL", "fixed mremap is not supported");
-    const q = this.maps.find(x => x.at === old && x.end === old + oz) ?? bad("EINVAL", "mremap range is not one mapping");
-    if (nz === oz) return old;
-    if (nz < oz) { this.flushShared(old + nz, this.nat(oz - nz, "released mapping range", Number.MAX_SAFE_INTEGER)); this.m.drop(old + nz, this.nat(oz - nz, "released mapping range", Number.MAX_SAFE_INTEGER)); q.end = old + nz; return old; }
-
-    const end = old + nz, hit = this.maps.some(x => x !== q && old < x.end && end > x.at);
-    if (!hit && end + 1024n * 1024n < this.stackAt) { q.end = end; (end > this.mapAt) && (this.mapAt = al(end)); return old; }
-    if (!(fl & 1)) bad("ENOMEM", "mapping cannot grow in place");
-
-    const to = this.mmap(0n, nz, BigInt(q.prot), 0x22n, -1n, 0n), copy = on < nn ? on : nn;
+    const hart = this.thistleActiveHart, memory = requireValue(this.nativeMemory, "canonical memory");
+    if (length === 0) return -22n;
+    const fixed = (flags & 0x100010) === 0x10;
+    if ((flags & 0x20) !== 0 && fixed) this.flushShared(ux(addr0), length);
+    if ((flags & 0x20) !== 0) return thistleMapHostAnonymous(memory, hart, ux(addr0), len0, prot0, flags0);
+    const fd = this.fd(fd0), file = this.s.p.fds.get(fd) ?? bad("EBADF", String(fd));
+    if (!file.rd || file.inode === 0) return -9n;
+    if ((flags & 3) === 1 && (prot & 2) !== 0 && !file.wr) return -13n;
+    await file.materialiseFile();
+    this.s.chk();
+    if (!this.executionActive) return -4n;
+    // Access the captured descriptor incarnation again before passing its slot.
+    if (file.inode === 0) return -9n;
+    if (fixed) this.flushShared(ux(addr0), length);
+    const at = thistleMapHostDescriptor(memory, hart, ux(addr0), len0, prot0, flags0, fd, ux(off0));
+    if (at < 0n) return at;
     try {
-      for (let n = 0; n < copy; n += 65536) {
-        const z = Math.min(65536, copy - n); this.m.write(to + BigInt(n), this.m.read(old + BigInt(n), z));
-      }
-    } catch (caughtValue) { const e = caughtValue instanceof Error ? caughtValue : new Error(typeof caughtValue === "undefined" ? "undefined" : String(caughtValue));  this.unmap(to, nn); throw e; }
-    this.unmap(old, on); return to;
+      const range = mappedRanges(this.s.p.native).find(mapping => mapping.at === at)
+        ?? bad("EPROTO", "missing canonical file mapping");
+      this.populateMapping(range);
+      return at;
+    } catch (error) {
+      checkNative(Number(thistleUnmapHostFile(memory, hart, at, al(len0))));
+      throw error instanceof Error ? error : new Error("mapped byte load failed");
+    }
   }
 
-  private unmap(at0: bigint, len: number): void {
-    // Flush shared bytes before releasing frames, then split surviving file ranges with adjusted offsets.
-    const at = at0 & -PAGE, end = al(at0 + BigInt(len));
-    this.flushShared(at, this.nat(end - at, "unmapped range", Number.MAX_SAFE_INTEGER));
-    const result = thistleUnmapHostFile(requireValue(this.nativeMemory, "native memory"), this.thistleActiveHart, at, end - at);
-    if (result < 0n) bad("EINVAL", "RV64 mapping release failed");
-    for (let i = this.maps.length - 1; i >= 0; i--) {
-      const q = requireValue(this.maps[i] ?? null, "src/vm/rv64.ts:2274");
-      const lo = at > q.at ? at : q.at, hi = end < q.end ? end : q.end;
-      if (lo < hi) this.m.drop(lo, this.nat(hi - lo, "unmapped range", Number.MAX_SAFE_INTEGER));
-      switch (true) {
-case !!(at <= q.at && end >= q.end): { this.maps.splice(i, 1);
-break; }
-case !!(at > q.at && end < q.end): {
-        const old = q.end, next: MapEnt = {"path": null, "off": null, at: end, end: old, prot: q.prot, shared: q.shared };
-        if (q.path !== null) next.path = q.path;
-        if (q.off !== null) next.off = q.off + this.nat(end - q.at, "mapping offset", Number.MAX_SAFE_INTEGER);
-        q.end = at;
-        this.maps.push(next);
+  private remap(old0: bigint, oz0: bigint, nz0: bigint): bigint {
+    const old = ux(old0), oldSize = al(ux(oz0)), newSize = al(ux(nz0));
+    if (!mappedRanges(this.s.p.native).some(mapping => mapping.at === old && mapping.end === old + oldSize)) return -22n;
+    this.flushShared(old, this.nat(oldSize, "remapped range", Number.MAX_SAFE_INTEGER));
+    const result = thistleRemapHostFile(requireValue(this.nativeMemory, "canonical memory"), this.thistleActiveHart);
+    if (result < 0n || newSize <= oldSize) return result;
+    const range = mappedRanges(this.s.p.native).find(mapping => mapping.at === ux(result))
+      ?? bad("EPROTO", "missing resized mapping");
+    const start = ux(result) + oldSize;
+    this.m.populate(start, HostBacking.forMapping(this.s.p.native).readMapping(this.s.p.native, range.index, start, this.nat(newSize - oldSize, "mapping growth", Number.MAX_SAFE_INTEGER)));
+    return result;
+  }
 
-break; }
-case !!(at <= q.at && end > q.at): {
-        const old = q.at;
-        q.at = end;
-        if (q.off !== null) q.off += this.nat(end - old, "mapping offset", Number.MAX_SAFE_INTEGER);
+  private unmap(at: bigint, len: number): void {
+    if (len === 0 || (at & (PAGE - 1n)) !== 0n) bad("EINVAL", "invalid unmap range");
+    this.flushShared(at, len);
+    const result = thistleUnmapHostFile(requireValue(this.nativeMemory, "canonical memory"), this.thistleActiveHart, at, BigInt(len));
+    checkNative(Number(result));
+  }
 
-break; }
-case !!(at < q.end && end >= q.end): { q.end = at;
-break; }
-}
-    }
+  private refreshMapping(range: MappedRange): void {
+    HostBacking.forMapping(this.s.p.native).refreshMapping(this.s.p.native, range.index, (address, length, bytes) => {
+      this.m.populate(address, bytes);
+      this.m.drop(address + BigInt(bytes.length), length - bytes.length);
+    });
+  }
+
+  private populateMapping(range: MappedRange): void {
+    if (range.shared) { this.refreshMapping(range); return; }
+    const bytes = HostBacking.forMapping(this.s.p.native).readMapping(this.s.p.native, range.index, range.at, Number(range.end - range.at));
+    this.m.populate(range.at, bytes);
+  }
+
+  private refreshSharedMappings(): void {
+    for (const range of mappedRanges(this.s.p.native, true)) this.refreshMapping(range);
+  }
+
+  private flushRange(range: MappedRange, at: bigint, end: bigint): void {
+    if (!range.writable) return;
+    const lo = at > range.at ? at : range.at, hi = end < range.end ? end : range.end;
+    if (lo >= hi) return;
+    const length = this.nat(hi - lo, "mapping flush length", Number.MAX_SAFE_INTEGER);
+    this.m.flushDirty(lo, length, writes =>
+      HostBacking.forMapping(this.s.p.native).writeMappedSpans(this.s.p.native, range.index, writes));
   }
 
   private flushShared(at0: bigint, len: number): void {
     if (len <= 0) return;
     const at = at0 & -PAGE, end = al(at0 + BigInt(len));
-    for (const q of this.maps) {
-      if (!q.shared || !q.path || q.off === null) continue;
-      const lo = at > q.at ? at : q.at, hi = end < q.end ? end : q.end;
-      if (lo >= hi) continue;
-      const rel = this.nat(lo - q.at, "mapping relative offset", Number.MAX_SAFE_INTEGER);
-      const n = this.nat(hi - lo, "mapping flush length", Number.MAX_SAFE_INTEGER);
-      const dst = q.off + rel, cur = this.s.readb(q.path), out = new Uint8Array(Math.max(cur.length, dst + n));
-      out.set(cur);
-      out.set(this.m.read(lo, n), dst);
-      this.s.writeb(q.path, out);
-    }
+    for (const range of mappedRanges(this.s.p.native, true)) this.flushRange(range, at, end);
   }
 
   private flushAllShared(): void {
-    for (const q of [...this.maps]) this.flushShared(q.at, this.nat(q.end - q.at, "mapping length", Number.MAX_SAFE_INTEGER));
+    for (const range of mappedRanges(this.s.p.native, true)) this.flushRange(range, range.at, range.end);
+  }
+
+  private releaseFileMappings(): void {
+    const memory = requireValue(this.nativeMemory, "canonical memory");
+    for (const range of mappedRanges(this.s.p.native)) {
+      checkNative(Number(thistleUnmapHostFile(memory, this.s.p.native.hart, range.at, range.end - range.at)));
+    }
   }
 
   private random(at: bigint, n: number): number { return randomFill(this.m, this.mem.bind(this), at, n); }
 
   private mem(at: bigint, n: number, wr = false): void {
-    const end = at + BigInt(n);
-    if (at < 0n || !Number.isSafeInteger(n) || n < 0 || end > this.m.top) bad("ERANGE", `RV64 memory at 0x${at.toString(16)}`);
-    if (!n) return;
-    const q = at < this.floor ? (this.seg.find(s => at >= s.at && end <= s.end) ?? null) : null;
-    const mapped = !!q || at >= this.floor && end <= this.brk || at >= this.stackAt || this.maps.some(m => at >= m.at && end <= m.end);
-    if (!mapped) bad("ERANGE", `unmapped RV64 memory at 0x${at.toString(16)} from pc 0x${(this.pc - 2n).toString(16)} (a3=0x${ux(requireValue(this.x[13] ?? null, "src/vm/rv64.ts:2355")).toString(16)}, a7=0x${ux(requireValue(this.x[17] ?? null, "src/vm/rv64.ts:2355")).toString(16)})`);
-    if (wr && q && !q.flg.includes("w")) bad("EACCES", `write to ${q.name}`);
-    if (wr && !q && this.maps.some(m => at >= m.at && end <= m.end && !(m.prot & 2))) bad("EACCES", "write to read-only RV64 mapping");
+    if (!this.executionActive) bad("EINTR", "expired guest image");
+    if (!Number.isSafeInteger(n) || n < 0 || n > 0xffffffff || at < 0n) bad("ERANGE", "invalid guest access range");
+    checkNative(thistleGuestAccess(requireValue(this.nativeMemory, "canonical memory"), this.thistleActiveHart, this.s.pid, at, n, wr ? 2 : 1));
   }
 
 

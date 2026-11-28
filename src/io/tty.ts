@@ -1,5 +1,6 @@
 import { requireValue } from "../core/err.js";
 import { enc, Stream } from "./stream.js";
+import { ReadQueue } from "./read-queue.js";
 import type { In, Out } from "./stream.js";
 
 /*
@@ -100,37 +101,15 @@ function defaultTermios(): Uint8Array {
 
 class TtyIn extends Stream implements In {
 
-  private readonly q: Uint8Array[] = [];
-  private readonly wait: Array<(b: Uint8Array) => void> = [];
+  private readonly reads = new ReadQueue();
 
   constructor(override readonly tty: Tty) { super(); }
 
-  async rd(): Promise<Uint8Array> {
-    const b = this.q.shift() ?? null;
+  rd(signal: AbortSignal | null = null): Promise<Uint8Array> { return this.reads.read(signal); }
 
-    /*
-     * A zero-length array is meaningful: it represents canonical EOF.
-     */
-    if (b !== null) {
-      return b;
-    }
+  push(bytes: Uint8Array): void { this.reads.push(bytes); }
 
-    return new Promise(ok => this.wait.push(ok));
-  }
-
-  push(b: Uint8Array): void {
-    const ok = this.wait.shift() ?? null;
-
-    if (ok) {
-      ok(b);
-    } else {
-      this.q.push(b);
-    }
-  }
-
-  flush(): void {
-    this.q.length = 0;
-  }
+  flush(): void { this.reads.clear(); }
 
   wake(): void {
     this.push(new Uint8Array());

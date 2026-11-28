@@ -1,9 +1,9 @@
 export type Errno =
   | "EACCES" | "EAGAIN" | "EBADF" | "EBUSY" | "ECHILD" | "EEXIST"
-  | "EFAULT" | "EFBIG" | "EINTR" | "EINVAL" | "EIO" | "EISDIR" | "ELOOP" | "EMFILE"
+  | "EXDEV" | "EFAULT" | "EFBIG" | "EINTR" | "EINVAL" | "EIO" | "EISDIR" | "ELOOP" | "EMFILE"
   | "ENAMETOOLONG" | "ENFILE" | "ENOENT" | "ENOEXEC" | "ENOMEM"
   | "ENETUNREACH" | "ENOSPC" | "ENOSYS" | "ENOTDIR" | "ENOTEMPTY" | "ENOTSUP"
-  | "EPERM" | "EPIPE" | "EPROTO" | "ERANGE" | "EROFS" | "ESRCH" | "ETIMEDOUT";
+  | "EPERM" | "EPIPE" | "ESPIPE" | "EPROTO" | "ERANGE" | "EROFS" | "ESRCH" | "ETIMEDOUT";
 
 export class KErr extends Error {
   constructor(public readonly code: Errno, msg: string = code) {
@@ -25,6 +25,16 @@ export const msg = (e: Error | string): string => {
 export function requireValue<T>(value: T | null, expression: string): T {
   if (value === null) throw new KErr("EFAULT", `missing value: ${expression}`);
   return value;
+}
+
+/** Read an optional array slot with an explicit missing-value result. */
+export function indexedValue<T>(values: ArrayLike<T>, index: number): T | null {
+  return values[index] ?? null;
+}
+
+/** Read an optional map entry with an explicit missing-value result. */
+export function mappedValue<K, V>(values: ReadonlyMap<K, V>, key: K): V | null {
+  return values.get(key) ?? null;
 }
 
 /** Apply an operation only when its input is present. */

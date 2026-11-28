@@ -1,6 +1,8 @@
-import { inputContains } from "./image-range.js";
+import { readGroup } from "./credentials.js";
+import { inputContains } from "./arena.js";
 import {
-  C_PROCESS_CAPACITY,
+  C_PROCESS_CAPACITY, C_FLAGS, THISTLE_FLAG_HOST_TRANSPORT, THISTLE_FD_HOST, THISTLE_VFS_KIND_CHARACTER,
+  FD_INODE, FD_KIND, FD_FLAGS, FD_IDENTITY, FD_OFFSET, FD_CURSOR, THISTLE_FD_EMPTY, THISTLE_FD_READ, THISTLE_FD_WRITE, THISTLE_FD_APPEND, THISTLE_FD_CLOEXEC, THISTLE_FD_FILE, THISTLE_FD_DIRECTORY, P_DESCRIPTOR_CAPACITY, P_DESCRIPTOR_TABLE, THISTLE_DESCRIPTOR_STRIDE,
   C_PROCESS_TABLE_BASE,
   C_VFS_DATA_BASE,
   C_VFS_DATA_END,
@@ -25,7 +27,7 @@ import {
   D_PARENT,
   THISTLE_CONTROL_BASE,
   THISTLE_VFS_CAPACITY_ERROR,
-  THISTLE_VFS_CHECKSUM,
+  THISTLE_VFS_CHECKSUM, THISTLE_VFS_BUSY,
   THISTLE_VFS_DENTRY_STRIDE,
   THISTLE_VFS_DUPLICATE,
   THISTLE_VFS_FORMAT,
@@ -41,8 +43,8 @@ import {
   P_FSGID,
   P_FSUID,
   P_CWD_INODE,
+  P_MAP_TABLE, P_MAP_COUNT, THISTLE_MAP_STRIDE, M_INODE,
   P_GROUP_COUNT,
-  P_GROUPS,
   P_STATE,
   THISTLE_PROCESS_EMPTY,
   THISTLE_PROCESS_STRIDE,
@@ -50,7 +52,7 @@ import {
   V_CAPACITY,
   V_CTIME,
   V_DATA,
-  V_FLAGS,
+  V_FLAGS, V_RESIDENT, V_VERSION, V_IDENTITY, C_VFS_QUOTA, THISTLE_VFS_HOST_BACKING,
   V_GID,
   V_KIND,
   V_MODE,
@@ -68,12 +70,13 @@ import {
   loadU32,
   loadU64,
   memorySize as memorySizeOf,
+  storeU8,
   storeU32,
   storeU64,
 } from "./memory.js";
 import type { ThistleMemory } from "./memory.js";
 import type { I32, I64, Ptr, U32, U64 } from "./types.js";
-import { mulU32, ux, word, wordToI32, wordToU32 } from "./word.js";
+import { mulU32, sx, ux, word, wordToI32, wordToU32 } from "./word.js";
 
 const VFS_HEADER_SIZE: U32 = 32;
 const VFS_INODE_IMAGE_SIZE: U32 = 56;
@@ -85,15 +88,66 @@ const memoryContains = (memory: ThistleMemory, at: Ptr, size: U32): boolean => {
   return at <= total && size <= total - at;
 };
 
-const inodeAt = (memory: ThistleMemory, inode: U32): Ptr =>
+export const inodeAt = (memory: ThistleMemory, inode: U32): Ptr =>
   loadU32(memory, THISTLE_CONTROL_BASE + C_VFS_INODE_BASE) + inode * THISTLE_VFS_INODE_STRIDE;
 
-const dentryAt = (memory: ThistleMemory, index: U32): Ptr =>
+export const dentryAt = (memory: ThistleMemory, index: U32): Ptr =>
   loadU32(memory, THISTLE_CONTROL_BASE + C_VFS_DENTRY_BASE) + index * THISTLE_VFS_DENTRY_STRIDE;
+
+/** Locate an already validated descriptor slot in a canonical process record. */
+export const descriptorAt = (memory: ThistleMemory, proc: Ptr, descriptor: U32): Ptr =>
+  loadU32(memory, proc + P_DESCRIPTOR_TABLE) + descriptor * THISTLE_DESCRIPTOR_STRIDE;
+
+/** Caller owns descriptor and VFS locks; release an inode after clearing its reference. */
+export const releaseDescriptor = (memory: ThistleMemory, state: Ptr): void => {
+  const inode = loadU32(memory, state + FD_INODE), identity = loadU32(memory, state + FD_IDENTITY);
+  fill(memory, state, THISTLE_DESCRIPTOR_STRIDE, 0);
+  storeU32(memory, state + FD_IDENTITY, identity);
+  thistleVfsRelease(memory, inode);
+};
+
+/** Return the first reusable slot at or above minimum, under the descriptor lock. */
+export const freeDescriptor = (memory: ThistleMemory, proc: Ptr, minimum: U32): I32 => {
+  const capacity = loadU32(memory, proc + P_DESCRIPTOR_CAPACITY);
+  let descriptor = minimum;
+  while (descriptor < capacity) {
+    const state = descriptorAt(memory, proc, descriptor);
+    if (loadU32(memory, state + FD_KIND) === THISTLE_FD_EMPTY && loadU32(memory, state + FD_IDENTITY) !== 0xffffffff) return wordToI32(word(descriptor));
+    descriptor += 1;
+  }
+  return -24;
+};
+
+/** Install a descriptor incarnation. Caller holds descriptor/VFS locks or owns a new process. */
+export const installDescriptor = (memory: ThistleMemory, state: Ptr, kind: U32, flags: U32, inode: U32): I32 => {
+  const previous = loadU32(memory, state + FD_IDENTITY);
+  if (previous === 0xffffffff) return -23;
+  if (loadU32(memory, state + FD_KIND) !== THISTLE_FD_EMPTY) releaseDescriptor(memory, state);
+  storeU32(memory, state + FD_IDENTITY, previous + 1);
+  storeU32(memory, state + FD_KIND, kind);
+  storeU32(memory, state + FD_FLAGS, flags);
+  storeU32(memory, state + FD_INODE, inode);
+  return 0;
+};
+
+/** Duplicate a live slot without pathname lookup or a second permission check. */
+export const copyDescriptor = (memory: ThistleMemory, source: Ptr, destination: Ptr, cloexec: boolean): I32 => {
+  const kind = loadU32(memory, source + FD_KIND);
+  if (kind === THISTLE_FD_EMPTY) return -9;
+  if (source === destination) return 0;
+  const flags = loadU32(memory, source + FD_FLAGS);
+  const inode = loadU32(memory, source + FD_INODE);
+  const result = installDescriptor(memory, destination, kind,
+    cloexec ? flags | THISTLE_FD_CLOEXEC : flags & ~THISTLE_FD_CLOEXEC, inode);
+  if (result !== 0) return result;
+  storeU64(memory, destination + FD_OFFSET, loadU64(memory, source + FD_OFFSET));
+  storeU32(memory, destination + FD_CURSOR, loadU32(memory, source + FD_CURSOR));
+  return 0;
+};
 
 const align4 = (value: U32): U32 => (value + 3) & -4;
 
-const hashBytes = (memory: ThistleMemory, at: Ptr, size: U32): U32 => {
+export const hashBytes = (memory: ThistleMemory, at: Ptr, size: U32): U32 => {
   let hash: U32 = 0x811c9dc5;
   let index: U32 = 0;
   while (index < size) {
@@ -103,18 +157,73 @@ const hashBytes = (memory: ThistleMemory, at: Ptr, size: U32): U32 => {
   return hash;
 };
 
-const allocateData = (memory: ThistleMemory, size: U32): Ptr => {
+// The arena first extends its high-water mark, then reuses gaps left by
+// replaced payloads and removed entries. Live inode/entry references remain
+// the sole allocation authority, so an open unlinked file keeps its bytes.
+const nextPayloadEnd = (memory: ThistleMemory, at: Ptr, size: U32, excluded: Ptr): Ptr => {
+  let next = at;
+  const inodeCapacity = loadU32(memory, THISTLE_CONTROL_BASE + C_VFS_INODE_CAPACITY);
+  let index: U32 = 1;
+  while (index < inodeCapacity) {
+    const state = inodeAt(memory, index);
+    const start = loadU32(memory, state + V_DATA);
+    const length = loadU32(memory, state + V_CAPACITY);
+    if (state !== excluded && loadU32(memory, state + V_KIND) !== 0 && length !== 0 && at < start + length && start < at + size) {
+      const end = align4(start + length);
+      next = end > next ? end : next;
+    }
+    index += 1;
+  }
+  const count = loadU32(memory, THISTLE_CONTROL_BASE + C_VFS_DENTRY_COUNT);
+  index = 0;
+  while (index < count) {
+    const entry = dentryAt(memory, index);
+    const start = loadU32(memory, entry + D_NAME);
+    const length = loadU32(memory, entry + D_NAME_LENGTH);
+    if (loadU32(memory, entry + D_INODE) !== 0 && length !== 0 && at < start + length && start < at + size) {
+      const end = align4(start + length);
+      next = end > next ? end : next;
+    }
+    index += 1;
+  }
+  return next;
+};
+
+export const allocateData = (memory: ThistleMemory, size: U32): Ptr => {
   if (size === 0) return 0;
   const aligned = align4(size);
   if (aligned < size) return 0xffffffff;
   const next = loadU32(memory, THISTLE_CONTROL_BASE + C_VFS_DATA_NEXT);
   const end = loadU32(memory, THISTLE_CONTROL_BASE + C_VFS_DATA_END);
-  if (next > end || aligned > end - next) return 0xffffffff;
-  storeU32(memory, THISTLE_CONTROL_BASE + C_VFS_DATA_NEXT, next + aligned);
-  return next;
+  if (next <= end && aligned <= end - next) {
+    storeU32(memory, THISTLE_CONTROL_BASE + C_VFS_DATA_NEXT, next + aligned);
+    return next;
+  }
+  let at = loadU32(memory, THISTLE_CONTROL_BASE + C_VFS_DATA_BASE);
+  while (at <= end && aligned <= end - at) {
+    const free = nextPayloadEnd(memory, at, aligned, 0);
+    if (free === at) return at;
+    at = free;
+  }
+  return 0xffffffff;
 };
 
-const validName = (memory: ThistleMemory, at: Ptr, size: U32): boolean => {
+// Extend a payload in place when its following arena range is free. This
+// avoids requiring room for two copies when a file grows near the VFS budget.
+export const growData = (memory: ThistleMemory, inode: U32, size: U32): Ptr => {
+  const state = inodeAt(memory, inode);
+  const at = loadU32(memory, state + V_DATA);
+  const base = loadU32(memory, C_VFS_DATA_BASE);
+  const end = loadU32(memory, C_VFS_DATA_END);
+  const aligned = align4(size);
+  if (at < base || aligned < size || at > end || aligned > end - at) return allocateData(memory, size);
+  if (nextPayloadEnd(memory, at, aligned, state) !== at) return allocateData(memory, size);
+  const next = at + aligned;
+  if (next > loadU32(memory, C_VFS_DATA_NEXT)) storeU32(memory, C_VFS_DATA_NEXT, next);
+  return at;
+};
+
+export const validName = (memory: ThistleMemory, at: Ptr, size: U32): boolean => {
   if (size === 0 || size > 255) return false;
   let index: U32 = 0;
   while (index < size) {
@@ -127,7 +236,7 @@ const validName = (memory: ThistleMemory, at: Ptr, size: U32): boolean => {
   return true;
 };
 
-const sameName = (memory: ThistleMemory, dentry: Ptr, at: Ptr, size: U32, hash: U32): boolean => {
+export const sameName = (memory: ThistleMemory, dentry: Ptr, at: Ptr, size: U32, hash: U32): boolean => {
   if (loadU32(memory, dentry + D_NAME_LENGTH) !== size || loadU32(memory, dentry + D_NAME_HASH) !== hash) return false;
   const stored = loadU32(memory, dentry + D_NAME);
   let index: U32 = 0;
@@ -138,7 +247,7 @@ const sameName = (memory: ThistleMemory, dentry: Ptr, at: Ptr, size: U32, hash: 
   return true;
 };
 
-const findChild = (memory: ThistleMemory, parent: U32, name: Ptr, nameLength: U32): U32 => {
+export const findChild = (memory: ThistleMemory, parent: U32, name: Ptr, nameLength: U32): U32 => {
   if (!validName(memory, name, nameLength)) return 0;
   const hash = hashBytes(memory, name, nameLength);
   const count = loadU32(memory, THISTLE_CONTROL_BASE + C_VFS_DENTRY_COUNT);
@@ -153,30 +262,35 @@ const findChild = (memory: ThistleMemory, parent: U32, name: Ptr, nameLength: U3
   return 0;
 };
 
-const parentOf = (memory: ThistleMemory, inode: U32): U32 => {
-  const root = loadU32(memory, THISTLE_CONTROL_BASE + C_VFS_ROOT);
-  if (inode === root) return root;
+const entryForInode = (memory: ThistleMemory, inode: U32): Ptr => {
   const count = loadU32(memory, THISTLE_CONTROL_BASE + C_VFS_DENTRY_COUNT);
   let index: U32 = 0;
   while (index < count) {
     const dentry = dentryAt(memory, index);
-    if (loadU32(memory, dentry + D_INODE) === inode) return loadU32(memory, dentry + D_PARENT);
+    if (loadU32(memory, dentry + D_INODE) === inode) return dentry;
     index += 1;
   }
   return 0;
+};
+
+export const parentOf = (memory: ThistleMemory, inode: U32): U32 => {
+  const root = loadU32(memory, THISTLE_CONTROL_BASE + C_VFS_ROOT);
+  if (inode === root) return root;
+  const entry = entryForInode(memory, inode);
+  return entry === 0 ? 0 : loadU32(memory, entry + D_PARENT);
 };
 
 const inSupplementaryGroup = (memory: ThistleMemory, proc: Ptr, gid: U32): boolean => {
   const count = loadU32(memory, proc + P_GROUP_COUNT);
   let index: U32 = 0;
   while (index < count) {
-    if (loadU32(memory, proc + P_GROUPS + index * 4) === gid) return true;
+    if (readGroup(memory, proc, index) === gid) return true;
     index += 1;
   }
   return false;
 };
 
-const allowed = (memory: ThistleMemory, proc: Ptr, inode: U32, bits: U32): boolean => {
+export const allowed = (memory: ThistleMemory, proc: Ptr, inode: U32, bits: U32): boolean => {
   const state = inodeAt(memory, inode);
   const uid = loadU32(memory, proc + P_FSUID);
   if (uid === 0) return true;
@@ -232,13 +346,13 @@ const resolveRange = (
     const length = cursor - component;
     if (length > 255) return -36;
     const final = !moreComponents(memory, cursor, end);
+    if (thistleVfsKind(memory, current) !== THISTLE_VFS_KIND_DIRECTORY) return -20;
+    if (!allowed(memory, proc, current, 1)) return -13;
     if (length === 1 && loadU8(memory, component) === 46) continue;
     const dotdot = length === 2 && loadU8(memory, component) === 46 && loadU8(memory, component + 1) === 46;
     const parent = dotdot ? parentOf(memory, current) : current;
     if (dotdot && parent === 0) return -2;
     if (dotdot) { current = parent; continue; }
-    if (thistleVfsKind(memory, current) !== THISTLE_VFS_KIND_DIRECTORY) return -20;
-    if (!allowed(memory, proc, current, 1)) return -13;
     const child = findChild(memory, current, component, length);
     if (child === 0) return -2;
     const follow = thistleVfsKind(memory, child) === THISTLE_VFS_KIND_LINK && (!final || followFinal || cursor < end);
@@ -266,6 +380,10 @@ export const thistleVfsKind = (memory: ThistleMemory, inode: U32): U32 => {
   if (!thistleVfsLoaded(memory) || inode === 0 || inode >= loadU32(memory, THISTLE_CONTROL_BASE + C_VFS_INODE_CAPACITY)) return 0;
   return loadU32(memory, inodeAt(memory, inode) + V_KIND);
 };
+
+/** Inode incarnation stays fixed across edits and changes on slot reuse or remount. */
+export const thistleVfsIdentity = (memory: ThistleMemory, inode: U32): U64 =>
+  thistleVfsKind(memory, inode) === THISTLE_VFS_KIND_EMPTY ? 0n : loadU64(memory, inodeAt(memory, inode) + V_IDENTITY);
 
 export const thistleVfsFileSize = (memory: ThistleMemory, inode: U32): U64 =>
   thistleVfsKind(memory, inode) === THISTLE_VFS_KIND_EMPTY ? 0n : loadU64(memory, inodeAt(memory, inode) + V_SIZE);
@@ -303,9 +421,111 @@ export const thistleVfsResolve = (
 export const thistleVfsAccess = (memory: ThistleMemory, proc: Ptr, inode: U32, bits: U32): boolean =>
   thistleVfsKind(memory, inode) !== THISTLE_VFS_KIND_EMPTY && bits <= 7 && allowed(memory, proc, inode, bits);
 
-const readData = (memory: ThistleMemory, inode: U32, offset: U64, output: Ptr, length: U32): I32 => {
+/** Open a canonical inode under the process descriptor, credential and VFS locks. */
+export const thistleVfsOpenInode = (memory: ThistleMemory, proc: Ptr, inode: U32, flags: U32, minimum: U32): I32 => {
+  if ((flags & ~(THISTLE_FD_READ | THISTLE_FD_WRITE | THISTLE_FD_APPEND | THISTLE_FD_CLOEXEC)) !== 0 ||
+      (flags & (THISTLE_FD_READ | THISTLE_FD_WRITE)) === 0 ||
+      ((flags & THISTLE_FD_APPEND) !== 0 && (flags & THISTLE_FD_WRITE) === 0)) return -22;
+  const kind = thistleVfsKind(memory, inode);
+  if (kind === THISTLE_VFS_KIND_EMPTY) return -2;
+  if (kind !== THISTLE_VFS_KIND_DIRECTORY && kind !== THISTLE_VFS_KIND_FILE && kind !== THISTLE_VFS_KIND_CHARACTER) return -22;
+  if (kind === THISTLE_VFS_KIND_DIRECTORY && (flags & THISTLE_FD_WRITE) !== 0) return -21;
+  const bits: U32 = kind === THISTLE_VFS_KIND_DIRECTORY ? 5 :
+    ((flags & THISTLE_FD_READ) !== 0 ? 4 : 0) | ((flags & THISTLE_FD_WRITE) !== 0 ? 2 : 0);
+  if (!allowed(memory, proc, inode, bits)) return -13;
+  if (kind === THISTLE_VFS_KIND_CHARACTER && (loadU32(memory, C_FLAGS) & THISTLE_FLAG_HOST_TRANSPORT) === 0) return -18;
+  return allocateInodeDescriptor(memory, proc, inode, flags, minimum);
+};
+
+/** Bind an inode whose type and open authority have already been validated. */
+export const allocateInodeDescriptor = (memory: ThistleMemory, proc: Ptr, inode: U32, flags: U32, minimum: U32): I32 => {
+  const kind = thistleVfsKind(memory, inode);
+  const descriptor = freeDescriptor(memory, proc, minimum);
+  if (descriptor < 0) return descriptor;
+  const state = descriptorAt(memory, proc, wordToU32(word(descriptor)));
+  const result = installDescriptor(memory, state, kind === THISTLE_VFS_KIND_DIRECTORY ? THISTLE_FD_DIRECTORY : kind === THISTLE_VFS_KIND_CHARACTER ? THISTLE_FD_HOST : THISTLE_FD_FILE, flags, inode);
+  if (result !== 0) return result;
+  if ((flags & THISTLE_FD_APPEND) !== 0) storeU64(memory, state + FD_OFFSET, thistleVfsFileSize(memory, inode));
+  return descriptor;
+};
+
+/** Change cwd using the same traversal and search policy as native open. Caller holds VFS lock. */
+export const thistleVfsChdir = (memory: ThistleMemory, proc: Ptr, path: Ptr, length: U32): I32 => {
+  const result = thistleVfsResolve(memory, proc, loadU32(memory, proc + P_CWD_INODE), path, length, true);
+  if (result < 0) return result;
+  return thistleVfsChdirInode(memory, proc, wordToU32(word(result)));
+};
+
+/** Select an existing directory inode with the live process search permission. */
+export const thistleVfsChdirInode = (memory: ThistleMemory, proc: Ptr, inode: U32): I32 => {
+  if (thistleVfsKind(memory, inode) !== THISTLE_VFS_KIND_DIRECTORY) return -20;
+  if (!allowed(memory, proc, inode, 1)) return -13;
+  storeU32(memory, proc + P_CWD_INODE, inode);
+  return 0;
+};
+
+/** Inherit an existing process cwd reference during trusted process construction. */
+export const thistleVfsInheritCwd = (memory: ThistleMemory, parent: Ptr, child: Ptr): I32 => {
+  const inode = loadU32(memory, parent + P_CWD_INODE);
+  if (thistleVfsKind(memory, inode) !== THISTLE_VFS_KIND_DIRECTORY) return -20;
+  storeU32(memory, child + P_CWD_INODE, inode);
+  return 0;
+};
+
+/** A directory used as cwd must not be deleted or replaced. Caller holds VFS lock. */
+export const thistleVfsCwdHeld = (memory: ThistleMemory, inode: U32): boolean => {
+  const base = loadU32(memory, C_PROCESS_TABLE_BASE), count = loadU32(memory, C_PROCESS_CAPACITY);
+  let index: U32 = 0;
+  while (index < count) {
+    const proc = base + index * THISTLE_PROCESS_STRIDE;
+    if (loadU32(memory, proc + P_STATE) !== 0 && loadU32(memory, proc + P_CWD_INODE) === inode) return true;
+    index += 1;
+  }
+  return false;
+};
+
+/** Write the current canonical directory path, including NUL, into a reserved image. */
+export const thistleVfsCwdPath = (memory: ThistleMemory, proc: Ptr, output: Ptr, capacity: U32): I32 =>
+  thistleVfsDirectoryPath(memory, loadU32(memory, proc + P_CWD_INODE), output, capacity);
+
+/** Reconstruct the unique live directory path from canonical dentries. */
+export const thistleVfsDirectoryPath = (memory: ThistleMemory, directory: U32, output: Ptr, capacity: U32): I32 => {
+  if (capacity < 2 || !inputContains(memory, output, capacity)) return -34;
+  const root = thistleVfsRoot(memory);
+  let inode = directory;
+  if (root === 0 || thistleVfsKind(memory, inode) !== THISTLE_VFS_KIND_DIRECTORY) return -2;
+  let cursor = capacity - 1;
+  storeU8(memory, output + cursor, 0);
+  let remaining = loadU32(memory, C_VFS_INODE_CAPACITY);
+  while (inode !== root && remaining !== 0) {
+    const entry = entryForInode(memory, inode);
+    if (entry === 0) return -2;
+    const length = loadU32(memory, entry + D_NAME_LENGTH);
+    if (length >= cursor) return -34;
+    cursor -= length;
+    copyMemory(memory, output + cursor, loadU32(memory, entry + D_NAME), length);
+    cursor -= 1;
+    storeU8(memory, output + cursor, 47);
+    inode = loadU32(memory, entry + D_PARENT);
+    remaining -= 1;
+  }
+  if (inode !== root) return -40;
+  if (cursor === capacity - 1) { cursor -= 1; storeU8(memory, output + cursor, 47); }
+  const length = capacity - cursor;
+  copyMemory(memory, output, output + cursor, length);
+  return wordToI32(word(length));
+};
+
+/** Validate a regular or link inode for arena-backed payload access. */
+export const arenaInodeStatus = (memory: ThistleMemory, inode: U32): I32 => {
   const kind = thistleVfsKind(memory, inode);
   if (kind !== THISTLE_VFS_KIND_FILE && kind !== THISTLE_VFS_KIND_LINK) return -22;
+  return (loadU32(memory, inodeAt(memory, inode) + V_FLAGS) & THISTLE_VFS_HOST_BACKING) !== 0 ? -18 : 0;
+};
+
+const readData = (memory: ThistleMemory, inode: U32, offset: U64, output: Ptr, length: U32): I32 => {
+  const status = arenaInodeStatus(memory, inode);
+  if (status !== 0) return status;
   const state = inodeAt(memory, inode);
   const size = loadU64(memory, state + V_SIZE);
   if (offset >= size) return 0;
@@ -318,6 +538,54 @@ const readData = (memory: ThistleMemory, inode: U32, offset: U64, output: Ptr, l
 export const thistleVfsReadData = (memory: ThistleMemory, inode: U32, offset: U64, output: Ptr, length: U32): I32 => {
   if (!inputContains(memory, output, length)) return -22;
   return readData(memory, inode, offset, output, length);
+};
+
+/** Descriptor read policy is independent of the output transport. */
+export const descriptorAccessStatus = (memory: ThistleMemory, state: Ptr, rights: U32): I32 => {
+  const kind = loadU32(memory, state + FD_KIND);
+  if (kind === THISTLE_FD_DIRECTORY) return -21;
+  if (kind !== THISTLE_FD_FILE || (loadU32(memory, state + FD_FLAGS) & rights) === 0) return -9;
+  return 0;
+};
+
+export const descriptorReadStatus = (memory: ThistleMemory, state: Ptr): I32 =>
+  descriptorAccessStatus(memory, state, THISTLE_FD_READ);
+
+/** Bound the transfer by the file's current size, independent of byte storage. */
+export const descriptorReadCount = (memory: ThistleMemory, state: Ptr, requested: U32): U32 => {
+  const offset = loadU64(memory, state + FD_OFFSET);
+  const size = thistleVfsFileSize(memory, loadU32(memory, state + FD_INODE));
+  if (offset >= size) return 0;
+  const available = size - offset;
+  return available < ux(word(requested)) ? wordToU32(available) : requested;
+};
+
+/** Append selects EOF at the time of the write. Caller holds the VFS lock. */
+export const descriptorWriteOffset = (memory: ThistleMemory, state: Ptr): U64 =>
+  (loadU32(memory, state + FD_FLAGS) & THISTLE_FD_APPEND) !== 0
+    ? thistleVfsFileSize(memory, loadU32(memory, state + FD_INODE)) : loadU64(memory, state + FD_OFFSET);
+
+/** Read arena bytes through a live descriptor and advance only on success. */
+export const thistleVfsReadDescriptor = (memory: ThistleMemory, state: Ptr, output: Ptr, length: U32): I32 => {
+  const status = descriptorReadStatus(memory, state);
+  if (status !== 0 || length === 0) return status;
+  const offset = loadU64(memory, state + FD_OFFSET);
+  const amount = thistleVfsReadData(memory, loadU32(memory, state + FD_INODE), offset, output, length);
+  if (amount > 0) storeU64(memory, state + FD_OFFSET, offset + ux(word(amount)));
+  return amount;
+};
+
+export const thistleVfsSeekDescriptor = (memory: ThistleMemory, state: Ptr, offset: I64, whence: U32): I64 => {
+  const kind = loadU32(memory, state + FD_KIND);
+  if (kind === THISTLE_FD_HOST) return -29n;
+  if (kind !== THISTLE_FD_FILE && kind !== THISTLE_FD_DIRECTORY) return -9n;
+  if (whence > 2) return -22n;
+  const base: I64 = whence === 1 ? sx(loadU64(memory, state + FD_OFFSET), 64) :
+    whence === 2 ? sx(thistleVfsFileSize(memory, loadU32(memory, state + FD_INODE)), 64) : 0n;
+  const next = base + offset;
+  if (next < 0n || next > 0x7fffffffffffffffn || (offset > 0n && next < base)) return -22n;
+  storeU64(memory, state + FD_OFFSET, ux(next));
+  return next;
 };
 
 // The caller holds the VFS lock. The destination is the fixed kernel scratch arena.
@@ -422,10 +690,48 @@ function loadDentries(memory: ThistleMemory, start: Ptr, end: Ptr, dentryCount: 
   return word(cursor);
 }
 
+const processHoldsFile = (memory: ThistleMemory, proc: Ptr): boolean => {
+  const table = loadU32(memory, proc + P_DESCRIPTOR_TABLE), capacity = loadU32(memory, proc + P_DESCRIPTOR_CAPACITY);
+  let descriptor: U32 = 0;
+  while (descriptor < capacity) {
+    const at = table + descriptor * THISTLE_DESCRIPTOR_STRIDE;
+    if (loadU32(memory, at + FD_KIND) !== 0 && loadU32(memory, at + FD_INODE) !== 0) return true;
+    descriptor += 1;
+  }
+  return false;
+};
+
+const processHoldsMapping = (memory: ThistleMemory, proc: Ptr, inode: U32): boolean => {
+  const table = loadU32(memory, proc + P_MAP_TABLE), count = loadU32(memory, proc + P_MAP_COUNT);
+  let index: U32 = 0;
+  while (index < count) {
+    const retained = loadU32(memory, table + index * THISTLE_MAP_STRIDE + M_INODE);
+    if (retained !== 0 && (inode === 0 || retained === inode)) return true;
+    index += 1;
+  }
+  return false;
+};
+
+// A root remount must not reinterpret open files, mapped inodes or a process's non-root working directory.
+const hasMountReferences = (memory: ThistleMemory): boolean => {
+  if (!thistleVfsLoaded(memory)) return false;
+  const root = thistleVfsRoot(memory), capacity = loadU32(memory, C_PROCESS_CAPACITY);
+  const base = loadU32(memory, C_PROCESS_TABLE_BASE);
+  let index: U32 = 0;
+  while (index < capacity) {
+    const proc = base + index * THISTLE_PROCESS_STRIDE;
+    const cwd = loadU32(memory, proc + P_CWD_INODE);
+    if (loadU32(memory, proc + P_STATE) !== 0 && (cwd !== 0 && cwd !== root || processHoldsFile(memory, proc) || processHoldsMapping(memory, proc, 0))) return true;
+    index += 1;
+  }
+  return false;
+};
+
 // Publish the mounted filesystem only when both record tables are validated.
 function publishVfs(memory: ThistleMemory, inodeCount: U32, dentryCount: U32, root: U32): void {
   storeU32(memory, THISTLE_CONTROL_BASE + C_VFS_INODE_COUNT, inodeCount);
   storeU32(memory, THISTLE_CONTROL_BASE + C_VFS_DENTRY_COUNT, dentryCount);
+  const previousRoot = loadU32(memory, THISTLE_CONTROL_BASE + C_VFS_ROOT);
   storeU32(memory, THISTLE_CONTROL_BASE + C_VFS_ROOT, root);
   const processBase = loadU32(memory, THISTLE_CONTROL_BASE + C_PROCESS_TABLE_BASE);
   const processCapacity = loadU32(memory, THISTLE_CONTROL_BASE + C_PROCESS_CAPACITY);
@@ -433,7 +739,7 @@ function publishVfs(memory: ThistleMemory, inodeCount: U32, dentryCount: U32, ro
   while (processIndex < processCapacity) {
     const proc = processBase + processIndex * THISTLE_PROCESS_STRIDE;
     if (loadU32(memory, proc + P_STATE) !== wordToU32(word(THISTLE_PROCESS_EMPTY)) &&
-        loadU32(memory, proc + P_CWD_INODE) === 0) storeU32(memory, proc + P_CWD_INODE, root);
+        (loadU32(memory, proc + P_CWD_INODE) === 0 || loadU32(memory, proc + P_CWD_INODE) === previousRoot)) storeU32(memory, proc + P_CWD_INODE, root);
     processIndex += 1;
   }
   storeU32(memory, THISTLE_CONTROL_BASE + C_VFS_DIRTY, 0);
@@ -458,6 +764,7 @@ export const thistleLoadVfs = (memory: ThistleMemory, image: Ptr, imageLength: U
   if (hashBytes(memory, image + VFS_HEADER_SIZE, imageLength - VFS_HEADER_SIZE) !== loadU32(memory, image + 24)) {
     return THISTLE_VFS_CHECKSUM;
   }
+  if (hasMountReferences(memory)) return THISTLE_VFS_BUSY;
   resetVfs(memory, inodeCapacity, dentryCapacity);
   const end = image + imageLength;
   const inodeResult = loadInodes(memory, image + VFS_HEADER_SIZE, end, inodeCount, inodeCapacity, dataCapacity);
@@ -467,5 +774,119 @@ export const thistleLoadVfs = (memory: ThistleMemory, image: Ptr, imageLength: U
   if (dentryResult < 0n) return wordToI32(-dentryResult);
   if (dentryResult !== word(end)) return THISTLE_VFS_FORMAT;
   publishVfs(memory, inodeCount, dentryCount, root);
+  let versioned: U32 = 1;
+  while (versioned < inodeCapacity) {
+    const state = inodeAt(memory, versioned);
+    if (loadU32(memory, state + V_KIND) !== 0) {
+      const generation = atomicLoadU64(memory, C_VFS_GENERATION);
+      storeU64(memory, state + V_VERSION, generation);
+      storeU64(memory, state + V_IDENTITY, generation);
+    }
+    versioned += 1;
+  }
   return THISTLE_VFS_OK;
+};
+
+export const thistleVfsRelease = (memory: ThistleMemory, inode: U32): void => {
+  if (thistleVfsKind(memory, inode) === 0) return;
+  const state = inodeAt(memory, inode);
+  if (loadU32(memory, state + V_NLINK) !== 0) return;
+  const base = loadU32(memory, C_PROCESS_TABLE_BASE);
+  const count = loadU32(memory, C_PROCESS_CAPACITY);
+  let index: U32 = 0;
+  while (index < count) {
+    const proc = base + index * THISTLE_PROCESS_STRIDE;
+    const descriptors = loadU32(memory, proc + P_DESCRIPTOR_TABLE);
+    const capacity = loadU32(memory, proc + P_DESCRIPTOR_CAPACITY);
+    let fd: U32 = 0;
+    while (loadU32(memory, proc + P_STATE) !== 0 && fd < capacity) {
+      const at = descriptors + fd * THISTLE_DESCRIPTOR_STRIDE;
+      if (loadU32(memory, at + FD_KIND) !== 0 && loadU32(memory, at + FD_INODE) === inode) return;
+      fd += 1;
+    }
+    if (loadU32(memory, proc + P_STATE) !== 0 && processHoldsMapping(memory, proc, inode)) return;
+    index += 1;
+  }
+  fill(memory, state, THISTLE_VFS_INODE_STRIDE, 0);
+  storeU32(memory, C_VFS_INODE_COUNT, loadU32(memory, C_VFS_INODE_COUNT) - 1);
+};
+
+
+/** Caller holds the VFS lock. Open unlinked inodes remain charged until close. */
+export const thistleVfsResidentUsage = (memory: ThistleMemory): U64 => {
+  const capacity = loadU32(memory, C_VFS_INODE_CAPACITY);
+  let inode: U32 = 1;
+  let total: U64 = 0n;
+  while (inode < capacity) {
+    const state = inodeAt(memory, inode);
+    const kind = loadU32(memory, state + V_KIND);
+    if (kind !== 0) total += 128n;
+    if (kind === THISTLE_VFS_KIND_FILE) total += (loadU32(memory, state + V_FLAGS) & THISTLE_VFS_HOST_BACKING) !== 0
+      ? loadU64(memory, state + V_RESIDENT) : loadU64(memory, state + V_SIZE);
+    inode += 1;
+  }
+  return total;
+};
+
+/** Check a resident-byte replacement against the canonical quota. */
+export const residentFits = (memory: ThistleMemory, previous: U64, replacement: U64): boolean => {
+  const limit = loadU64(memory, C_VFS_QUOTA);
+  if (limit === 0n) return true;
+  const used = thistleVfsResidentUsage(memory);
+  return previous <= used && replacement <= limit && used - previous <= limit - replacement;
+};
+
+const copyDirectoryEntry = (memory: ThistleMemory, index: U32, output: Ptr, capacity: U32): I32 => {
+  const entry = dentryAt(memory, index);
+  const inode = loadU32(memory, entry + D_INODE), length = loadU32(memory, entry + D_NAME_LENGTH);
+  if (length === 0 || length > 255) return -5;
+  if (capacity < 16 + length) return -34;
+  storeU32(memory, output, inode);
+  storeU32(memory, output + 4, thistleVfsKind(memory, inode));
+  storeU32(memory, output + 8, index + 1);
+  storeU32(memory, output + 12, length);
+  copyMemory(memory, output + 16, loadU32(memory, entry + D_NAME), length);
+  return wordToI32(word(16 + length));
+};
+
+/** Read one live entry. Caller owns VFS lock and advances the returned cursor. */
+export const thistleVfsReadEntry = (
+  memory: ThistleMemory, proc: Ptr, parent: U32, cursor: U32, output: Ptr, capacity: U32,
+): I32 => {
+  if (thistleVfsKind(memory, parent) !== THISTLE_VFS_KIND_DIRECTORY) return -20;
+  if (!allowed(memory, proc, parent, 4)) return -13;
+  return readEntryAt(memory, parent, cursor, output, capacity);
+};
+
+/** Enumerate a directory using the rights granted when its descriptor was opened. */
+export const thistleVfsReadDescriptorEntry = (memory: ThistleMemory, state: Ptr, cursor: U32, output: Ptr, capacity: U32): I32 => {
+  if (loadU32(memory, state + FD_KIND) !== THISTLE_FD_DIRECTORY) return -20;
+  if ((loadU32(memory, state + FD_FLAGS) & THISTLE_FD_READ) === 0) return -9;
+  return readEntryAt(memory, loadU32(memory, state + FD_INODE), cursor, output, capacity);
+};
+
+const readEntryAt = (memory: ThistleMemory, parent: U32, cursor: U32, output: Ptr, capacity: U32): I32 => {
+  if (!inputContains(memory, output, capacity)) return -14;
+  const count = loadU32(memory, C_VFS_DENTRY_COUNT);
+  let index = cursor;
+  while (index < count) {
+    const entry = dentryAt(memory, index);
+    if (loadU32(memory, entry + D_INODE) !== 0 && loadU32(memory, entry + D_PARENT) === parent)
+      return copyDirectoryEntry(memory, index, output, capacity);
+    index += 1;
+  }
+  return 0;
+};
+
+/** Reap mapping references before recycling a process's address space. Caller owns the VFS lock. */
+export const releaseProcessMappings = (memory: ThistleMemory, proc: Ptr): void => {
+  const table = loadU32(memory, proc + P_MAP_TABLE), count = loadU32(memory, proc + P_MAP_COUNT);
+  let index: U32 = 0;
+  while (index < count) {
+    const at = table + index * THISTLE_MAP_STRIDE + M_INODE;
+    const inode = loadU32(memory, at);
+    storeU32(memory, at, 0);
+    thistleVfsRelease(memory, inode);
+    index += 1;
+  }
 };

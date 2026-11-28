@@ -1,4 +1,5 @@
 import { KErr } from "../core/err.js";
+import { ReadQueue } from "./read-queue.js";
 
 const te = new TextEncoder();
 const td = new TextDecoder();
@@ -26,6 +27,7 @@ export abstract class Stream {
 
 export interface In extends Stream {
   rd(): Promise<Uint8Array>;
+  rd(signal: AbortSignal): Promise<Uint8Array>;
 }
 
 export interface Out extends Stream {
@@ -78,14 +80,13 @@ export class FnOut extends Stream implements Out {
 
 export class Pipe extends Stream implements In, Out {
 
-  private readonly q: Uint8Array[] = [];
-  private readonly w: Array<(b: Uint8Array) => void> = [];
+  private readonly reads = new ReadQueue();
   private shut = false;
   private refs = 0;
   private rrefs = 0;
   private readonly subscribers = new Set<() => void>();
 
-  get readable(): boolean { return this.q.length > 0 || this.shut; }
+  get readable(): boolean { return this.reads.readable; }
   get writable(): boolean { return !this.shut && this.rrefs > 0; }
 
   onChange(callback: () => void): () => void {
@@ -104,18 +105,15 @@ export class Pipe extends Stream implements In, Out {
     if (this.shut) throw new KErr("EPIPE", "pipe is closed");
     if (!b.length) return 0;
     const x = b.slice();
-    const fn = (this.w.shift() ?? null);
-    if (fn) fn(x);
-    else this.q.push(x);
+    this.reads.push(x);
     this.notify();
     return x.length;
   }
 
-  async rd(): Promise<Uint8Array> {
-    const b = (this.q.shift() ?? null);
-    if (b) { this.notify(); return b; }
-    if (this.shut) return new Uint8Array();
-    return new Promise<Uint8Array>(ok => this.w.push(ok));
+  async rd(signal: AbortSignal | null = null): Promise<Uint8Array> {
+    const bytes = await this.reads.read(signal);
+    this.notify();
+    return bytes;
   }
 
   override close(): void {
@@ -134,7 +132,7 @@ export class Pipe extends Stream implements In, Out {
     if (this.shut) return;
     this.shut = true;
     this.notify();
-    for (const ok of this.w.splice(0)) ok(new Uint8Array());
+    this.reads.close();
   }
 }
 

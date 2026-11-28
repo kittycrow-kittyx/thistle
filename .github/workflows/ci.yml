@@ -17,10 +17,13 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v5
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           submodules: recursive
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.5
 
       - name: Install dependencies
         run: bun install
@@ -43,6 +46,10 @@ jobs:
       - name: Test native VFS syscalls
         if: ${{ success() || failure() }}
         run: bun run test:vfs
+
+      - name: Test canonical process state and lifetime
+        if: ${{ success() || failure() }}
+        run: bun run test:process
 
       - name: Test host capability boundaries
         if: ${{ success() || failure() }}

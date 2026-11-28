@@ -1,0 +1,53 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { createHostKernel } from "../core/host-kernel.js";
+import { Sys } from "../core/sys.js";
+import { MemIn, MemOut } from "../io/stream.js";
+import { HostInode } from "../host/inode.js";
+import { thistleVfsLoaded } from "../native/vfs.js";
+import { HostDescriptor } from "../host/descriptor.js";
+
+test("hosted Sys and the native ABI observe one mounted root", () => {
+  const kernel = createHostKernel(), output = new MemOut();
+  const parent = kernel.session({ sin: new MemIn(), sout: output, serr: output });
+  const sys = new Sys(kernel, parent), memory = parent.native.memory;
+  assert.equal(thistleVfsLoaded(memory), true);
+  sys.mkdir("/work");
+  sys.cd("/work");
+  sys.mkfile("file", "abc");
+  const inode = HostInode.resolve(parent.native, "file");
+  const descriptor = HostDescriptor.openPath(parent.native, "file", 2);
+  assert.equal(descriptor.inode, inode.ino);
+  descriptor.seekFile(1, 0);
+  descriptor.writeFile(Uint8Array.of(90));
+  assert.equal(sys.read("file"), "aZc");
+  sys.link("file", "alias");
+  sys.rm("file");
+  assert.equal(sys.stat("alias").ino, inode.ino);
+  sys.mv("/work", "/renamed");
+  assert.equal(parent.cwd, "/renamed");
+  descriptor.close();
+  assert.equal(sys.read("alias"), "aZc");
+  const tree = kernel.fs.dump();
+  assert.ok(tree.some(entry => entry.p === "/renamed/alias" && entry.data !== null && entry.data.length === 3));
+});
+
+test("truncate preserves the opened inode, cursor and write-only authority", async () => {
+  const kernel = createHostKernel(), output = new MemOut();
+  const parent = kernel.session({ sin: new MemIn(), sout: output, serr: output });
+  const sys = new Sys(kernel, parent);
+  sys.mkfile("/file", "abcd");
+  const descriptor = HostDescriptor.openPath(parent.native, "/file", 1);
+  descriptor.seekFile(2, 0);
+  sys.mv("/file", "/renamed");
+  await descriptor.resizeFile(6);
+  assert.deepEqual([...sys.readb("/renamed")], [97, 98, 99, 100, 0, 0]);
+  assert.equal(descriptor.offset, 2);
+  sys.rm("/renamed");
+  await descriptor.resizeFile(1);
+  const inode = descriptor.inodeView();
+  assert.ok(inode);
+  assert.equal(inode.metadata().size, 1n);
+  assert.equal(descriptor.offset, 2);
+  descriptor.close();
+});

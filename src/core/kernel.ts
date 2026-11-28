@@ -1,17 +1,16 @@
+import { HostContext } from "../host/context.js";
 import { App } from "../apps/base.js";
 import { bad, KErr, msg, requireValue } from "./err.js";
 import { MemIn, MemOut, enc } from "../io/stream.js";
 import type { In, Out } from "../io/stream.js";
 import { Reg, Vfs } from "../fs/vfs.js";
-import { credGid, credUid, fullCred } from "../fs/vfs.js";
-import type { Cred, ProcCred, SessionCred } from "../fs/vfs.js";
-import { ExecReplace, Fd, Proc } from "./proc.js";
-import type { Io, Sig } from "./proc.js";
+import { credUid, fullCred } from "../fs/vfs.js";
+import type { ProcCred } from "../fs/vfs.js";
+import { ExecReplace, Proc } from "./proc.js";
+import type { Fd, Io, Sig } from "./proc.js";
 import { Sched } from "./sched.js";
-import { rootCred } from "./config.js";
-import type { AccountConfig } from "./config.js";
-import { defaultKernelOptions } from "./host-options.js";
-import type { KernelOptions } from "./host-options.js";
+import { accountIdentity } from "./host-options.js";
+import type { HostAccount, KernelOptions } from "./host-options.js";
 import { executeImage, validateExecutable } from "./guest.js";
 export type { KernelOptions } from "./host-options.js";
 
@@ -43,39 +42,17 @@ export interface PInfo {
 
 export interface Mnt { src: string; at: string; kind: string; opt: string; }
 
-const root = rootCred();
-
-const accountCred = (account: AccountConfig | SessionCred): { cred: ProcCred; name: string; home: string } => {
-  if ("cred" in account) {
-    return {
-      cred: fullCred(account.cred),
-      name: account.name,
-      home: account.home,
-    };
-  }
-  const cred = fullCred(account);
-  return {
-    cred,
-    name: credUid(cred) === 0 ? "root" : "guest",
-    home: credUid(cred) === 0 ? "/root" : "/home/guest",
-  };
-};
-
-const procFsCred = (p: Proc): Cred => ({
-  uid: p.fsuid,
-  gid: p.fsgid,
-  groups: [...p.cred.groups],
-});
+const root = accountIdentity().cred;
 
 function closeDistinctError(p: Proc): void {
-  const output = p.output(2);
-  if (output !== null && output !== p.output(1)) output.close();
+  const error = p.fds.attachment(2), output = p.fds.attachment(1);
+  if (error !== null && error.output !== null && (output === null || error.output !== output.output)) error.output.close();
 }
 
 function releaseStandardIo(p: Proc): void {
-  const input = p.input(0), output = p.output(1);
-  if (input !== null) input.releaseR();
-  if (output !== null) output.close();
+  const input = p.fds.attachment(0), output = p.fds.attachment(1);
+  if (input !== null && input.input !== null) input.input.releaseR();
+  if (output !== null && output.output !== null) output.output.close();
   closeDistinctError(p);
 }
 
@@ -86,7 +63,7 @@ function holdStandardIo(io: Io): void {
 }
 
 function replaceProcessImage(p: Proc, error: ExecReplace): void {
-  for (const [fd, descriptor] of [...p.fds]) {
+  for (const [fd, descriptor] of p.fds.entries()) {
     if (!descriptor.clo) continue;
 
     descriptor.release();
@@ -96,18 +73,17 @@ function replaceProcessImage(p: Proc, error: ExecReplace): void {
   p.cmd = error.path;
   p.argv = [...error.argv];
   p.env = new Map(error.env);
-  p.cred = fullCred(error.cred);
-  p.fsuid = credUid(p.cred);
-  p.fsgid = credGid(p.cred);
+  p.native.installIdentity(fullCred(error.cred));
 
 }
 
 export class Kern {
+  readonly canonical = new HostContext();
   readonly fs: Vfs;
   readonly apps = new Map<string, App>();
   readonly procs = new Map<number, Proc>();
   readonly logs: string[] = [];
-  readonly sched = new Sched();
+  readonly sched = new Sched(this.canonical);
   readonly born = Date.now();
   name: string;
   readonly release: string;
@@ -115,7 +91,6 @@ export class Kern {
   executionCore = "Thistle TypeScript";
   disk = false;
   ttyFn: (s: string, err: boolean) => void = () => {};
-  private seq = 1;
   private haltFn: (() => void) | null = null;
 
   readonly net: KernelOptions["net"];
@@ -124,14 +99,14 @@ export class Kern {
   readonly setId: boolean;
   readonly wasiGuest: KernelOptions["wasiGuest"];
 
-  constructor(options: KernelOptions = defaultKernelOptions()) {
+  constructor(options: KernelOptions) {
     const { net, lim, config, setId, wasiGuest } = options;
     this.net = net; this.lim = lim; this.config = config; this.setId = setId; this.wasiGuest = wasiGuest;
-    this.fs = new Vfs(lim.fs);
     this.name = config.kernel.name;
     this.release = config.kernel.version;
     this.host = config.hostName;
     net.log = s => this.log(s);
+    this.fs = new Vfs(this.init().native, lim.fs);
   }
 
   setHalt(fn: () => void): void { this.haltFn = fn; }
@@ -145,26 +120,30 @@ export class Kern {
   init(): Proc {
     if (this.procs.has(1)) return requireValue(this.procs.get(1) ?? null, "this.procs.get(1)");
     const z = new MemOut();
-    const p = new Proc({ pid: 1, ppid: 0, pgid: 1, cmd: "init", argv: ["init"], cwd: "/", env: this.baseEnv(), cred: root, io: { sin: new MemIn(), sout: z, serr: z } });
+    const p = new Proc({ pgid: 1, cmd: "init", argv: ["init"], cwd: "/", env: this.baseEnv(), io: { sin: new MemIn(), sout: z, serr: z } }, this.canonical.create(1, 0, root));
+    p.mask = 0;
     p.state = "sleep";
     this.procs.set(1, p);
-    this.seq = 2;
     this.log("init: process 1 entered service loop");
     return p;
   }
 
-  session(io: Io, account: AccountConfig | SessionCred = root): Proc {
+  session(io: Io, account: HostAccount | null = null): Proc {
     this.init();
-    const { cred, name, home } = accountCred(account);
-    const pid = this.seq++;
+    const { cred, name, home } = accountIdentity(account);
+    const pid = this.canonical.nextPid();
     const env = this.baseEnv();
     env.set("HOME", home);
     env.set("USER", name);
-    env.set("PWD", home);
-    const p = new Proc({ pid, ppid: 1, pgid: pid, cmd: "thsh", argv: ["thsh"], cwd: home, env, cred: fullCred(cred), io });
+    const p = new Proc({ pgid: pid, cmd: "thsh", argv: ["thsh"], cwd: "/", env, io }, this.canonical.create(pid, 1, cred));
+    try { p.cwd = home; }
+    catch (error) {
+      if (!(error instanceof KErr) || error.code !== "ENOENT") throw error instanceof Error ? error : new Error("session cwd failed");
+    }
+    env.set("PWD", p.cwd);
+    holdStandardIo(io);
     p.state = "run";
     this.procs.set(pid, p);
-    requireValue(this.procs.get(1) ?? null, "this.procs.get(1)").kids.add(pid);
     this.log(`tty: session pid=${pid} uid=${credUid(cred)}`);
     return p;
   }
@@ -182,24 +161,21 @@ export class Kern {
   install(a: App): void {
     this.reg(a);
     const p = `/bin/${a.name}`;
-    const c = root;
-    try { this.fs.mkfile(p, `#!thistle:${a.name}\n`, "/", c, 0o755); }
+    try { this.fs.mkfile(p, `#!thistle:${a.name}\n`, this.init().native, 0o755); }
     catch (e) { if (!(e instanceof KErr) || e.code !== "EEXIST") throw e instanceof Error ? e : new Error(typeof e === "string" ? e : "non-Error kernel exception"); }
   }
 
   which(name: string, p: Proc): string {
     if (name.includes("/")) {
-      const c = procFsCred(p);
-      const q = this.fs.at(name, p.cwd, c).path;
-      this.fs.need(this.fs.at(q, "/", c).node, c, 1, q);
-      return q;
+      const hit = this.fs.at(name, p.native);
+      this.fs.need(hit.node, p.native, 1);
+      return hit.path;
     }
     for (const d of (p.env.get("PATH") ?? "/bin").split(":")) {
       const q = `${d.replace(/\/$/, "")}/${name}`;
       try {
-        const c = procFsCred(p);
-        const h = this.fs.at(q, p.cwd, c);
-        this.fs.need(h.node, c, 1, q);
+        const h = this.fs.at(q, p.native);
+        this.fs.need(h.node, p.native, 1);
         if (h.node instanceof Reg) return h.path;
       } catch (error) {
         if (!(error instanceof KErr) || !["ENOENT", "ENOTDIR", "EACCES"].includes(error.code)) throw error instanceof Error ? error : new Error(typeof error === "string" ? error : "non-Error kernel exception");
@@ -236,9 +212,8 @@ export class Kern {
   start(name: string, argv: string[], par: Proc, opt: Start = emptyStart()): Proc {
     // Retain shared pipe endpoints before the child starts; explicit descriptor tables own their own references.
     const path = this.which(name, par);
-    const h = this.fs.at(path, par.cwd, procFsCred(par));
-    const node = h.node instanceof Reg ? h.node : bad("ENOEXEC", path);
-    const pid = this.seq++;
+    const node = this.fs.executable(path, par.native);
+    const pid = this.canonical.nextPid();
     const streams = opt.io;
     const io: Io = {
       sin: (streams === null ? null : streams.sin) ?? par.input(0) ?? new MemIn(),
@@ -247,17 +222,15 @@ export class Kern {
     };
     if (!opt.fds) holdStandardIo(io);
     const cred = this.executableCred(path, node, par.cred);
-    const p = new Proc({ pid, ppid: par.pid, pgid: opt.pgid ?? pid, cmd: path, argv: [name, ...argv], cwd: opt.cwd ?? par.cwd, env: new Map(opt.env ?? par.env), cred, io });
+    const p = new Proc({ pgid: opt.pgid ?? pid, cmd: path, argv: [name, ...argv], cwd: "/", env: new Map(opt.env ?? par.env), io }, this.canonical.create(pid, par.pid, cred));
+    if (opt.cwd === null) p.inheritCwd(par);
+    else p.cwd = opt.cwd;
     if (opt.fds) {
       p.fds.clear(); p.allHeld = true;
-      for (const [n, f] of opt.fds) {
-        f.hold();
-        const q = new Fd(f.input, f.output, f.path, { rd: f.rd, wr: f.wr, add: f.add, clo: f.clo }); q.pos = f.pos; p.fds.set(n, q);
-      }
+      for (const [n, f] of opt.fds) p.fds.inherit(n, f);
     }
     p.mask = par.mask;
     this.procs.set(pid, p);
-    par.kids.add(pid);
     this.sched.add(p, () => this.runMaterialised(p, path, node, argv));
     return p;
   }
@@ -273,14 +246,8 @@ export class Kern {
   }
 
   async exec(name: string, argv: string[], env: Map<string, string>, p: Proc): Promise<never> {
-    const credential = procFsCred(p);
-    const handle = this.fs.at(name, p.cwd, credential);
-
-    this.fs.need(handle.node, credential, 1, handle.path);
-
-    const node = handle.node instanceof Reg
-      ? handle.node
-      : bad("ENOEXEC", handle.path);
+    const handle = this.fs.at(name, p.native);
+    const node = this.fs.executable(handle.path, p.native);
 
     const image = (await node.materialise()).slice();
 
@@ -337,7 +304,7 @@ export class Kern {
       code = await this.processFailure(p, e instanceof Error ? e : typeof e === "string" ? e : "non-Error process failure");
     } finally {
       if (p.allHeld) {
-        for (const f of p.fds.values()) f.release();
+        for (const f of p.fds.attachments()) f.release();
       } else {
         releaseStandardIo(p);
       }
@@ -348,7 +315,7 @@ export class Kern {
 
   async wait(pid: number, par: Proc): Promise<number> {
     const p = this.procs.get(pid) ?? bad("ESRCH", String(pid));
-    if (p.ppid !== par.pid && par.cred.euid !== 0) bad("ECHILD", String(pid));
+    if (p.ppid !== par.pid && par.native.id("euid") !== 0) bad("ECHILD", String(pid));
     const n = await p.done;
     this.reap(pid, par);
     return n;
@@ -357,10 +324,12 @@ export class Kern {
   reap(pid: number, par: Proc | null = null): void {
     if (pid <= 2) return;
     const p = this.procs.get(pid) ?? null;
-    if (!p || p.code === null) return;
+    if (!p || !p.completed) return;
+    const owner = this.procs.get(p.ppid) ?? null;
+    const init = this.procs.get(1) ?? null;
+    const parent = requireValue(par ?? owner ?? init, "canonical reaper");
+    this.canonical.reap(parent.native, pid);
     this.procs.delete(pid);
-    const parent = par ?? (this.procs.get(p.ppid) ?? null);
-    if (parent !== null) parent.kids.delete(pid);
   }
 
   kill(id: number, sig: Sig, by: Proc): number {
@@ -369,9 +338,9 @@ export class Kern {
     let n = 0;
     for (const p of q) {
       if (p.pid === 1) continue;
-      if (by.cred.euid !== 0 && by.cred.ruid !== p.cred.ruid) bad("EPERM", String(p.pid));
-      if (sig !== 0) p.signal(sig);
-      if (sig !== 0 && (sig === 9 || p.state === "sleep")) p.end(128 + sig);
+      if (by.native.id("euid") !== 0 && by.native.id("ruid") !== p.native.id("ruid")) bad("EPERM", String(p.pid));
+      const delivered = p.signal(sig);
+      if (delivered && sig !== 0 && (sig === 9 || p.state === "sleep")) p.end(128 + sig);
       n++;
     }
     this.log(`signal: sig=${sig} target=${id} sender=${by.pid}`);
@@ -380,7 +349,7 @@ export class Kern {
 
   ps(): PInfo[] {
     return [...this.procs.values()].sort((a, b) => a.pid - b.pid).map(p => ({
-      pid: p.pid, ppid: p.ppid, pgid: p.pgid, uid: p.cred.euid,
+      pid: p.pid, ppid: p.ppid, pgid: p.pgid, uid: p.native.id("euid"),
       state: p.state, ms: p.ms(), cmd: p.argv.join(" "),
     }));
   }
@@ -395,25 +364,22 @@ export class Kern {
   }
 
   stop(by: Proc): void {
-    if (by.cred.euid !== 0) bad("EPERM", "reboot");
+    if (by.native.id("euid") !== 0) bad("EPERM", "reboot");
     for (const p of this.procs.values()) if (p.pid !== 1 && p.pid !== by.pid) p.signal(15);
     this.log("system: reboot requested");
     if (this.haltFn !== null) this.haltFn();
   }
 
   fd(p: Proc): number {
-    for (let n = 3; n < 256; n++) if (!p.fds.has(n)) return n;
-    return bad("EMFILE", "descriptor table full");
+    if (p.native.memory !== this.canonical.memory) bad("ESRCH", "descriptor process instance mismatch");
+    return p.fds.next();
   }
 
   cloneFd(p: Proc, old: number, nu: number | null = null): number {
     const f = p.fds.get(old) ?? bad("EBADF", String(old));
     const n = nu ?? this.fd(p);
     if (n === old) return n;
-    const q = p.fds.get(n) ?? null;
-    if (q !== null) q.release();
-    f.hold();
-    p.fds.set(n, new Fd(f.input, f.output, f.path, { rd: f.rd, wr: f.wr, add: f.add, clo: false }));
+    p.fds.inherit(n, f, false);
     return n;
   }
 }

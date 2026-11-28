@@ -1,0 +1,33 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { createHostKernel } from "../core/host-kernel.js";
+import { Sys } from "../core/sys.js";
+import { MemIn, MemOut } from "../io/stream.js";
+import { FD_FLAGS, FD_IDENTITY, FD_OFFSET, THISTLE_FD_CLOEXEC, THISTLE_FD_READ } from "../native/abi.js";
+import { descriptorAt } from "../native/vfs.js";
+import { loadU32, loadU64, storeU64 } from "../native/memory.js";
+import { thistleDescriptorKind } from "../native/kernel.js";
+
+test("hosted file descriptor allocation and live metadata use canonical records", () => {
+  const kernel = createHostKernel(), output = new MemOut();
+  const process = kernel.session({ sin: new MemIn(), sout: output, serr: output });
+  const sys = new Sys(kernel, process), memory = process.native.memory;
+  sys.mkfile("/file", "abcdef");
+  const fd = sys.open("/file"), view = process.fds.get(fd);
+  assert.ok(view);
+  const slot = process.native.withDescriptors(record => descriptorAt(memory, record, fd));
+  const identity = loadU32(memory, slot + FD_IDENTITY);
+  assert.ok(identity > 0);
+  assert.equal(loadU32(memory, slot + FD_FLAGS), THISTLE_FD_READ);
+  assert.equal(sys.fdr(fd, 2).length, 2);
+  assert.equal(loadU64(memory, slot + FD_OFFSET), 2n);
+  storeU64(memory, slot + FD_OFFSET, 4n);
+  assert.equal(view.pos, 4);
+  view.clo = true;
+  assert.equal(loadU32(memory, slot + FD_FLAGS), THISTLE_FD_READ | THISTLE_FD_CLOEXEC);
+  sys.close(fd);
+  assert.equal(thistleDescriptorKind(memory, process.native.hart, fd), 0);
+  assert.equal(sys.open("/file"), fd);
+  assert.equal(loadU32(memory, slot + FD_IDENTITY), identity + 1);
+  assert.throws(() => view.pos, { code: "EBADF" });
+});

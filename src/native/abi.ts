@@ -2,7 +2,7 @@ import type { I32, U32 } from "./types.js";
 
 // Retain the existing wire magic and ABI version so the binary memory layout does not change.
 export const THISTLE_MAGIC: U32 = 0x4f544554;
-export const THISTLE_ABI_VERSION: U32 = 10;
+export const THISTLE_ABI_VERSION: U32 = 11;
 
 export const THISTLE_CONTROL_BASE: U32 = 0;
 export const THISTLE_CONTROL_SIZE: U32 = 4096;
@@ -23,6 +23,7 @@ export const C_MEMORY_LOCK: U32 = 40;
 export const C_PAGE_TABLE_BASE: U32 = 44;
 export const C_PAGE_CAPACITY: U32 = 48;
 export const C_PHYSICAL_NEXT: U32 = 52;
+export const C_PHYSICAL_FREE: U32 = 3360;
 export const C_PHYSICAL_END: U32 = 56;
 export const C_PROCESS_TABLE_BASE: U32 = 60;
 export const C_PROCESS_CAPACITY: U32 = 64;
@@ -66,6 +67,7 @@ export const W_IDLE: U32 = 16;
 
 export const THISTLE_FLAG_THREADED: U32 = 1;
 export const THISTLE_FLAG_HOST_STDIN: U32 = 2;
+export const THISTLE_FLAG_HOST_TRANSPORT: U32 = 4;
 
 export const H_LOCK: U32 = 0;
 export const H_STATUS: U32 = 4;
@@ -119,6 +121,7 @@ export const H_STACK_POINTER: U32 = 904;
 export const H_STARTUP_LOADS: U32 = 912;
 // Eight bytes of private conversion scratch, protected by H_LOCK.
 export const H_FLOAT_SCRATCH: U32 = 920;
+export const H_SHARED_WRITE: U32 = 928;
 
 export const THISTLE_PROCESS_STRIDE: U32 = 352;
 export const P_LOCK: U32 = 0;
@@ -135,11 +138,14 @@ export const P_RGID: U32 = 40;
 export const P_EGID: U32 = 44;
 export const P_SGID: U32 = 48;
 export const P_FSGID: U32 = 52;
+export const P_GROUP_DATA: U32 = 344;
 export const P_GROUP_COUNT: U32 = 56;
+export const P_VFORK_CHILD: U32 = 60;
 export const P_GROUPS: U32 = 64;
 export const P_PAGE_TABLE: U32 = 192;
 export const P_PAGE_CAPACITY: U32 = 196;
 export const P_PAGE_COUNT: U32 = 200;
+export const P_VFORK_PARENT: U32 = 204;
 export const P_VIRTUAL_TOP: U32 = 208;
 export const P_SEGMENT_TABLE: U32 = 216;
 export const P_SEGMENT_COUNT: U32 = 220;
@@ -153,6 +159,7 @@ export const P_STACK_POINTER: U32 = 264;
 export const P_MAP_TABLE: U32 = 272;
 export const P_MAP_COUNT: U32 = 276;
 export const P_MAP_CAPACITY: U32 = 280;
+export const P_SHARED_FILE_MAPS: U32 = 284;
 export const P_BRK_BASE: U32 = 288;
 export const P_BRK: U32 = 296;
 export const P_MAP_NEXT: U32 = 304;
@@ -160,12 +167,16 @@ export const P_CWD_INODE: U32 = 312;
 export const P_UMASK: U32 = 316;
 export const P_DESCRIPTOR_TABLE: U32 = 320;
 export const P_DESCRIPTOR_CAPACITY: U32 = 324;
+export const P_SIGNAL_PENDING: U32 = 328;
+export const P_SIGNAL_LAST: U32 = 332;
+export const P_SIGNAL_MASK: U32 = 336;
 
 export const THISTLE_DESCRIPTOR_STRIDE: U32 = 32;
-export const THISTLE_DESCRIPTOR_CAPACITY: U32 = 64;
+export const THISTLE_DESCRIPTOR_CAPACITY: U32 = 256;
 export const FD_KIND: U32 = 0;
 export const FD_FLAGS: U32 = 4;
 export const FD_INODE: U32 = 8;
+export const FD_IDENTITY: U32 = 12;
 export const FD_OFFSET: U32 = 16;
 export const FD_CURSOR: U32 = 24;
 export const THISTLE_FD_EMPTY: U32 = 0;
@@ -189,22 +200,25 @@ export const THISTLE_SEGMENT_READ: U32 = 1;
 export const THISTLE_SEGMENT_WRITE: U32 = 2;
 export const THISTLE_SEGMENT_EXECUTE: U32 = 4;
 
-export const THISTLE_MAP_STRIDE: U32 = 48;
+export const THISTLE_MAP_STRIDE: U32 = 56;
 export const THISTLE_MAP_CAPACITY: U32 = 256;
 export const M_ADDRESS: U32 = 0;
 export const M_END: U32 = 8;
 export const M_PROTECTION: U32 = 16;
 export const M_FLAGS: U32 = 20;
 export const M_FILE_DESCRIPTOR: U32 = 24;
+export const M_FILE_RIGHTS: U32 = 28;
 export const M_FILE_OFFSET: U32 = 32;
 export const M_BACKING: U32 = 40;
+export const M_INODE: U32 = 44;
+export const M_VIEW_VERSION: U32 = 48;
 export const THISTLE_MAP_BACKING_ANONYMOUS: U32 = 0;
 export const THISTLE_MAP_BACKING_HOST_FILE: U32 = 1;
 
-export const THISTLE_VFS_INODE_STRIDE: U32 = 64;
-export const THISTLE_VFS_INODE_CAPACITY: U32 = 4096;
+export const THISTLE_VFS_INODE_STRIDE: U32 = 88;
+export const THISTLE_VFS_INODE_CAPACITY: U32 = 8192;
 export const THISTLE_VFS_DENTRY_STRIDE: U32 = 24;
-export const THISTLE_VFS_DENTRY_CAPACITY: U32 = 8192;
+export const THISTLE_VFS_DENTRY_CAPACITY: U32 = 16384;
 export const THISTLE_VFS_DATA_CAPACITY: U32 = 16 * 1024 * 1024;
 export const THISTLE_VFS_MAX_INODE_CAPACITY: U32 = 16384;
 export const THISTLE_VFS_MAX_DENTRY_CAPACITY: U32 = 32768;
@@ -241,6 +255,7 @@ export const THISTLE_VFS_FORMAT: I32 = 2;
 export const THISTLE_VFS_CHECKSUM: I32 = 3;
 export const THISTLE_VFS_CAPACITY_ERROR: I32 = 4;
 export const THISTLE_VFS_DUPLICATE: I32 = 5;
+export const THISTLE_VFS_BUSY: I32 = 6;
 
 export const THISTLE_PARSER_BASE: U32 = 3328;
 export const THISTLE_PARSER_STRING: U32 = 0;
@@ -252,9 +267,12 @@ export const THISTLE_PROCESS_EMPTY: I32 = 0;
 export const THISTLE_PROCESS_RUNNABLE: I32 = 1;
 export const THISTLE_PROCESS_WAITING: I32 = 2;
 export const THISTLE_PROCESS_ZOMBIE: I32 = 3;
+export const THISTLE_PROCESS_RUNNING: I32 = 4;
+export const THISTLE_PROCESS_STOPPED: I32 = 5;
 
 export const THISTLE_GUEST_PAGE_SIZE: U32 = 65536;
 export const THISTLE_PAGE_ENTRY_SIZE: U32 = 16;
+export const PAGE_DIRTY_FRAME: U32 = 12;
 export const THISTLE_PAGE_CAPACITY: U32 = 8192;
 
 export const THISTLE_HART_EMPTY: I32 = 0;
@@ -301,3 +319,12 @@ export const THISTLE_START_OK: I32 = 0;
 export const THISTLE_START_RANGE: I32 = 1;
 export const THISTLE_START_FORMAT: I32 = 2;
 export const THISTLE_START_MEMORY: I32 = 3;
+
+// ABI 11 backing metadata. Host handles identify byte carriers, not VFS nodes.
+export const C_VFS_QUOTA: U32 = 3368;
+export const V_RESIDENT: U32 = 64;
+export const V_VERSION: U32 = 72;
+export const V_IDENTITY: U32 = 80;
+export const THISTLE_VFS_HOST_BACKING: U32 = 1;
+
+export const P_LEADER_HART: U32 = 348;
